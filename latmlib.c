@@ -141,7 +141,6 @@ static const luaL_Reg atmlib[] = {
   {"dofile", atm_dofile},
   {"test", atm_test},
   {"searcher", atm_searcher},
-  {"rt", NULL},
   {NULL, NULL}
 };
 
@@ -166,14 +165,9 @@ static void install_searcher (lua_State *L) {
 
 LUAMOD_API int luaopen_atmos_core (lua_State *L) {
   luaL_newlib(L, atmlib);
-  /* runtime table (shared with generated code through the registry) */
-  if (lua_getfield(L, LUA_REGISTRYINDEX, ATMOS_RT) != LUA_TTABLE) {
-    lua_pop(L, 1);
-    lua_newtable(L);
-    lua_pushvalue(L, -1);
-    lua_setfield(L, LUA_REGISTRYINDEX, ATMOS_RT);
-  }
-  lua_setfield(L, -2, "rt");
+  luaA_openrun(L);  /* adds the runtime; pushes X and RT tables */
+  lua_setfield(L, -3, "rt");  /* runtime table for generated code */
+  lua_pop(L, 1);  /* X (already in core.x) */
   install_searcher(L);
   return 1;
 }

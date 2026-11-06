@@ -277,9 +277,6 @@ static int pmain (lua_State *L) {
   lua_getglobal(L, "require");
   lua_pushstring(L, "atmos");
   lua_call(L, 1, 1);  /* atmos module */
-  lua_getglobal(L, "require");
-  lua_pushstring(L, "atmos.lang.rt");
-  lua_call(L, 1, 0);
   {
     const char *fname = argv[script];
     size_t len = strlen(fname);

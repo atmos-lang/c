@@ -57,6 +57,7 @@ LUAMOD_API int (luaopen_utf8) (lua_State *L);
 
 #define LUA_ATMLIBNAME	"atmos.core"
 LUAMOD_API int (luaopen_atmos_core) (lua_State *L);
+LUAMOD_API void (luaA_openrun) (lua_State *L);
 
 
 /* open selected libraries */

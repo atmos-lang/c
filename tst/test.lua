@@ -6,7 +6,6 @@
 
 local core = require "atmos.core"
 atmos = require "atmos"
-require "atmos.lang.rt"
 X = require "atmos.x"
 
 function assertfx (cur, exp)

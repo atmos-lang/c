@@ -373,7 +373,6 @@ do
     local out = atm_test(src)
     assertx(out, "2\n")
 
-    -- TODO: error message contains runtime file
     local src = [[
         spawn {
             defer {
@@ -387,7 +386,7 @@ do
     assertfx(trim(out), trim [[
         ==> ERROR:
          |  %[C%]:%-1 %(loop%)
-         v  .*/atmos/run.lua:%d+ %(throw%)
+         v  anon.atm:3 %(throw%)
         ==> anon.atm:3: ok
     ]])
 end

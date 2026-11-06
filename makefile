@@ -101,7 +101,7 @@ CORE_O=	lapi.o lcode.o lctype.o ldebug.o ldo.o ldump.o lfunc.o lgc.o llex.o \
 	latmlex.o latmparser.o latmcoder.o
 AUX_O=	lauxlib.o
 LIB_O=	lbaselib.o ldblib.o liolib.o lmathlib.o loslib.o ltablib.o lstrlib.o \
-	lutf8lib.o loadlib.o lcorolib.o linit.o latmlib.o
+	lutf8lib.o loadlib.o lcorolib.o linit.o latmlib.o latmrun.o
 
 LUA_T=	lua
 LUA_O=	lua.o
@@ -240,6 +240,7 @@ latmcoder.o: latmcoder.c lprefix.h lua.h luaconf.h latmos.h llex.h \
  lobject.h llimits.h lzio.h lmem.h lparser.h lcode.h lopcodes.h ldebug.h \
  lstate.h ltm.h ldo.h lfunc.h lgc.h lstring.h ltable.h
 latmlib.o: latmlib.c lprefix.h lua.h luaconf.h lauxlib.h lualib.h llimits.h
+latmrun.o: latmrun.c lprefix.h lua.h luaconf.h lauxlib.h lualib.h llimits.h
 atmos.o: atmos.c lprefix.h lua.h luaconf.h lauxlib.h lualib.h llimits.h
 
 # (end of Makefile)
