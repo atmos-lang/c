@@ -47,19 +47,30 @@ static const char *const luaX_tokens [] = {
     "end", "false", "for", "function", "global", "goto", "if",
     "in", "local", "nil", "not", "or", "repeat",
     "return", "then", "true", "until", "while",
+    "await", "catch", "defer", "emit", "func", "ifs", "loop",
+    "match", "on", "par", "pin", "set", "spawn", "task", "tasks",
+    "test", "thread", "toggle", "val", "var", "watching", "where",
+    "with",
     "//", "..", "...", "==", ">=", "<=", "~=",
-    "<<", ">>", "::", "<eof>",
-    "<number>", "<integer>", "<name>", "<string>"
+    "<<", ">>", "::",
+    "**", "++", "??", "!?", "?>", "!>",
+    "===", "=!=", "=>=", "=<=", "=>",
+    "<-", "<--", "->", "-->",
+    "||", "&&", "!", "!=",
+    "<eof>",
+    "<number>", "<integer>", "<name>", "<string>",
+    "<tag>", "<clock>", "<native>"
 };
 
 
 #define save_and_next(ls) (save(ls, ls->current), next(ls))
 
 
-static l_noret lexerror (LexState *ls, const char *msg, int token);
+#define save(ls,c)	luaX_save(ls,c)
+#define lexerror(ls,m,t)	luaX_lexerror(ls,m,t)
 
 
-static void save (LexState *ls, int c) {
+void luaX_save (LexState *ls, int c) {
   Mbuffer *b = ls->buff;
   if (luaZ_bufflen(b) + 1 > luaZ_sizebuffer(b)) {
     size_t newsize = luaZ_sizebuffer(b);  /* get old size */;
@@ -105,6 +116,9 @@ static const char *txtToken (LexState *ls, int token) {
   switch (token) {
     case TK_NAME: case TK_STRING:
     case TK_FLT: case TK_INT:
+    case TK_TAG: case TK_CLK: case TK_NAT:
+      if (ls->atmos && token == ls->t.token)
+        return luaX_atmtoktext(ls, &ls->t);
       save(ls, '\0');
       return luaO_pushfstring(ls->L, "'%s'", luaZ_buffer(ls->buff));
     default:
@@ -113,10 +127,30 @@ static const char *txtToken (LexState *ls, int token) {
 }
 
 
-static l_noret lexerror (LexState *ls, const char *msg, int token) {
+l_noret luaX_lexerror (LexState *ls, const char *msg, int token) {
+  if (ls->atmos)  /* Atmos-style message */
+    luaX_atmerror(ls, ls->linenumber, (token ? txtToken(ls, token) : NULL), msg);
   msg = luaG_addinfo(ls->L, msg, ls->source, ls->linenumber);
   if (token)
     luaO_pushfstring(ls->L, "%s near %s", msg, txtToken(ls, token));
+  luaD_throw(ls->L, LUA_ERRSYNTAX);
+}
+
+
+/*
+** Atmos-style error message: "source : line N : near 'tok' : msg".
+** 'near' must already be quoted (or NULL for no "near" part).
+*/
+l_noret luaX_atmerror (LexState *ls, int line, const char *near,
+                       const char *msg) {
+  char buff[LUA_IDSIZE];
+  size_t idlen;
+  const char *id = getlstr(ls->source, idlen);
+  luaO_chunkid(buff, id, idlen);
+  if (near)
+    luaO_pushfstring(ls->L, "%s : line %d : near %s : %s", buff, line, near, msg);
+  else
+    luaO_pushfstring(ls->L, "%s : line %d : %s", buff, line, msg);
   luaD_throw(ls->L, LUA_ERRSYNTAX);
 }
 
@@ -178,6 +212,18 @@ void luaX_setinput (lua_State *L, LexState *ls, ZIO *z, TString *source,
   ls->t.token = 0;
   ls->L = L;
   ls->current = firstchar;
+  ls->atmos = 0;  /* Lua mode by default */
+  ls->sep = 1;
+  ls->tokline = 1;
+  ls->toksep = 1;
+  ls->npback = 0;
+  ls->prev.token = 0;
+  ls->prev.line = 1;
+  ls->prev.sep = 1;
+  ls->prev.text = NULL;
+  ls->t.text = ls->lookahead.text = NULL;
+  ls->ast = NULL;
+  ls->atmn = luaS_newliteral(L, "(atmos)");  /* hidden runtime upvalue */
   ls->lookahead.token = TK_EOS;  /* no look-ahead token */
   ls->z = z;
   ls->fs = NULL;
@@ -567,7 +613,7 @@ static int llex (LexState *ls, SemInfo *seminfo) {
           /* find or create string */
           ts = luaS_newlstr(ls->L, luaZ_buffer(ls->buff),
                                    luaZ_bufflen(ls->buff));
-          if (isreserved(ts))   /* reserved word? */
+          if (isreserved(ts) && ts->extra <= NUM_LUA_RESERVED)  /* reserved? */
             return ts->extra - 1 + FIRST_RESERVED;
           else {
             seminfo->ts = anchorstr(ls, ts);
@@ -585,20 +631,32 @@ static int llex (LexState *ls, SemInfo *seminfo) {
 }
 
 
+static void readtoken (LexState *ls, Token *t) {
+  t->text = NULL;
+  if (ls->atmos)
+    t->token = luaX_atmlex(ls, t);
+  else
+    t->token = llex(ls, &t->seminfo);
+  t->line = ls->atmos ? ls->tokline : ls->linenumber;
+  t->sep = ls->atmos ? ls->toksep : ls->sep;
+}
+
+
 void luaX_next (LexState *ls) {
   ls->lastline = ls->linenumber;
+  ls->prev = ls->t;  /* save previous token */
   if (ls->lookahead.token != TK_EOS) {  /* is there a look-ahead token? */
     ls->t = ls->lookahead;  /* use this one */
     ls->lookahead.token = TK_EOS;  /* and discharge it */
   }
   else
-    ls->t.token = llex(ls, &ls->t.seminfo);  /* read next token */
+    readtoken(ls, &ls->t);  /* read next token */
 }
 
 
 int luaX_lookahead (LexState *ls) {
   lua_assert(ls->lookahead.token == TK_EOS);
-  ls->lookahead.token = llex(ls, &ls->lookahead.seminfo);
+  readtoken(ls, &ls->lookahead);
   return ls->lookahead.token;
 }
 

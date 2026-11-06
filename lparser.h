@@ -158,8 +158,28 @@ typedef struct Dyndata {
 } Dyndata;
 
 
-/* control of blocks */
-struct BlockCnt;  /* defined in lparser.c */
+/*
+** nodes for block list (list of active blocks)
+*/
+typedef struct BlockCnt {
+  struct BlockCnt *previous;  /* chain */
+  int firstlabel;  /* index of first label in this block */
+  int firstgoto;  /* index of first pending goto in this block */
+  short nactvar;  /* number of active declarations at block entry */
+  lu_byte upval;  /* true if some variable in the block is an upvalue */
+  lu_byte isloop;  /* 1 if 'block' is a loop; 2 if it has pending breaks */
+  lu_byte insidetbc;  /* true if inside the scope of a to-be-closed var. */
+} BlockCnt;
+
+
+/*
+** structure to chain all variables in the left-hand side of an
+** assignment
+*/
+struct LHS_assign {
+  struct LHS_assign *prev;
+  expdesc v;  /* variable (global, local, upvalue, or indexed) */
+};
 
 
 /* state needed to generate code for a given function */
@@ -192,6 +212,43 @@ LUAI_FUNC void luaY_checklimit (FuncState *fs, int v, int l,
 LUAI_FUNC LClosure *luaY_parser (lua_State *L, ZIO *z, Table *anchor,
                                  Mbuffer *buff, Dyndata *dyd,
                                  const char *name, int firstchar);
+
+/*
+** Parser internals shared with the Atmos front end (latmcoder.c)
+*/
+LUAI_FUNC int luaY_new_varkind (struct LexState *ls, TString *name,
+                                lu_byte kind);
+LUAI_FUNC int luaY_new_localvar (struct LexState *ls, TString *name);
+LUAI_FUNC void luaY_adjustlocalvars (struct LexState *ls, int nvars);
+LUAI_FUNC Vardesc *luaY_getlocalvardesc (FuncState *fs, int vidx);
+LUAI_FUNC LocVar *luaY_localdebuginfo (FuncState *fs, int vidx);
+LUAI_FUNC lu_byte luaY_reglevel (FuncState *fs, int nvar);
+LUAI_FUNC void luaY_removevars (FuncState *fs, int tolevel);
+LUAI_FUNC void luaY_check_readonly (struct LexState *ls, expdesc *e);
+LUAI_FUNC void luaY_adjust_assign (struct LexState *ls, int nvars, int nexps,
+                                   expdesc *e);
+LUAI_FUNC void luaY_enterblock (FuncState *fs, BlockCnt *bl, lu_byte isloop);
+LUAI_FUNC void luaY_leaveblock (FuncState *fs);
+LUAI_FUNC void luaY_marktobeclosed (FuncState *fs);
+LUAI_FUNC void luaY_checktoclose (FuncState *fs, int level);
+LUAI_FUNC Proto *luaY_addprototype (struct LexState *ls);
+LUAI_FUNC void luaY_open_func (struct LexState *ls, FuncState *fs,
+                               BlockCnt *bl);
+LUAI_FUNC void luaY_close_func (struct LexState *ls);
+LUAI_FUNC void luaY_codeclosure (struct LexState *ls, expdesc *v);
+LUAI_FUNC void luaY_setvararg (FuncState *fs);
+LUAI_FUNC void luaY_buildvar (struct LexState *ls, TString *varname,
+                              expdesc *var);
+LUAI_FUNC void luaY_singlevaraux (FuncState *fs, TString *n, expdesc *var,
+                                  int base);
+LUAI_FUNC Upvaldesc *luaY_allocupvalue (FuncState *fs);
+LUAI_FUNC void luaY_expr (struct LexState *ls, expdesc *v);
+LUAI_FUNC void luaY_statlist (struct LexState *ls);
+LUAI_FUNC void luaY_check_conflict (struct LexState *ls,
+                                    struct LHS_assign *lh, expdesc *v);
+LUAI_FUNC void luaY_storevartop (FuncState *fs, expdesc *var);
+LUAI_FUNC void luaY_init_exp (expdesc *e, expkind k, int i);
+LUAI_FUNC void luaY_codestring (expdesc *e, TString *s);
 
 
 #endif

@@ -25,6 +25,7 @@
 #include "lobject.h"
 #include "lopcodes.h"
 #include "lparser.h"
+#include "latmos.h"
 #include "lstate.h"
 #include "lstring.h"
 #include "ltable.h"
@@ -1144,6 +1145,9 @@ static void f_parser (lua_State *L, void *ud) {
     else
       checkmode(L, mode, "binary");
     cl = luaU_undump(L, p->z, anchor, p->name, fixed);
+  }
+  else if (strchr(mode, 'a') != NULL) {  /* Atmos source */
+    cl = luaY_atmparser(L, p->z, anchor, &p->buff, &p->dyd, p->name, c);
   }
   else {
     checkmode(L, mode, "text");

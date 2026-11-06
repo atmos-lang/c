@@ -1136,6 +1136,14 @@ LUA_API int lua_load (lua_State *L, lua_Reader reader, void *data,
       setobj(L, f->upvals[0]->v.p, &gt);
       luaC_barrier(L, f->upvals[0], &gt);
     }
+    if (f->nupvalues >= 2) {  /* Atmos chunk: set runtime table upvalue */
+      TValue rt;
+      if (!tagisempty(luaH_getshortstr(hvalue(&G(L)->l_registry),
+                                       luaS_newliteral(L, "ATMOS"), &rt))) {
+        setobj(L, f->upvals[1]->v.p, &rt);
+        luaC_barrier(L, f->upvals[1], &rt);
+      }
+    }
   }
   lua_unlock(L);
   return APIstatus(status);

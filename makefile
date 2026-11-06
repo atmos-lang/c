@@ -97,17 +97,21 @@ LIBS = -lm
 CORE_T=	liblua.a
 CORE_O=	lapi.o lcode.o lctype.o ldebug.o ldo.o ldump.o lfunc.o lgc.o llex.o \
 	lmem.o lobject.o lopcodes.o lparser.o lstate.o lstring.o ltable.o \
-	ltm.o lundump.o lvm.o lzio.o ltests.o
+	ltm.o lundump.o lvm.o lzio.o ltests.o \
+	latmlex.o latmparser.o latmcoder.o
 AUX_O=	lauxlib.o
 LIB_O=	lbaselib.o ldblib.o liolib.o lmathlib.o loslib.o ltablib.o lstrlib.o \
-	lutf8lib.o loadlib.o lcorolib.o linit.o
+	lutf8lib.o loadlib.o lcorolib.o linit.o latmlib.o
 
 LUA_T=	lua
 LUA_O=	lua.o
 
+ATMOS_T=	atmos
+ATMOS_O=	atmos.o
 
-ALL_T= $(CORE_T) $(LUA_T)
-ALL_O= $(CORE_O) $(LUA_O) $(AUX_O) $(LIB_O)
+
+ALL_T= $(CORE_T) $(LUA_T) $(ATMOS_T)
+ALL_O= $(CORE_O) $(LUA_O) $(ATMOS_O) $(AUX_O) $(LIB_O)
 ALL_A= $(CORE_T)
 
 all:	$(ALL_T)
@@ -123,6 +127,12 @@ $(CORE_T): $(CORE_O) $(AUX_O) $(LIB_O)
 
 $(LUA_T): $(LUA_O) $(CORE_T)
 	$(CC) -o $@ $(MYLDFLAGS) $(LUA_O) $(CORE_T) $(LIBS) $(MYLIBS) $(DL)
+
+$(ATMOS_T): $(ATMOS_O) $(CORE_T)
+	$(CC) -o $@ $(MYLDFLAGS) $(ATMOS_O) $(CORE_T) $(LIBS) $(MYLIBS) $(DL)
+
+test: $(ATMOS_T)
+	cd tst && ../$(ATMOS_T) all.lua
 
 
 clean:
@@ -220,5 +230,16 @@ lvm.o: lvm.c lprefix.h lua.h luaconf.h lapi.h llimits.h lstate.h \
  lstring.h ltable.h lvm.h ljumptab.h
 lzio.o: lzio.c lprefix.h lua.h luaconf.h lapi.h llimits.h lstate.h \
  lobject.h ltm.h lzio.h lmem.h
+latmlex.o: latmlex.c lprefix.h lua.h luaconf.h lctype.h llimits.h ldebug.h \
+ lstate.h lobject.h ltm.h lzio.h lmem.h ldo.h lgc.h llex.h lparser.h \
+ lstring.h ltable.h
+latmparser.o: latmparser.c lprefix.h lua.h luaconf.h latmos.h llex.h \
+ lobject.h llimits.h lzio.h lmem.h lparser.h ldebug.h lstate.h ltm.h \
+ ldo.h lgc.h lstring.h ltable.h
+latmcoder.o: latmcoder.c lprefix.h lua.h luaconf.h latmos.h llex.h \
+ lobject.h llimits.h lzio.h lmem.h lparser.h lcode.h lopcodes.h ldebug.h \
+ lstate.h ltm.h ldo.h lfunc.h lgc.h lstring.h ltable.h
+latmlib.o: latmlib.c lprefix.h lua.h luaconf.h lauxlib.h lualib.h llimits.h
+atmos.o: atmos.c lprefix.h lua.h luaconf.h lauxlib.h lualib.h llimits.h
 
 # (end of Makefile)
