@@ -1,8 +1,7 @@
-;; coroutine.error (raise an error at the pending yield of a suspended
-;; coroutine) and coroutine.close of a normal coroutine.
-;; See .claude/plans/coroutine.md, items a and b.
+;; coroutine.error: raise an error at the pending yield of a suspended
+;; coroutine. See .claude/plans/coroutine.md, item a.
 
-print("testing coroutine.error and close of normal coroutines")
+print("testing coroutine.error")
 
 val func count (...) { select("#", ...) }
 
@@ -154,78 +153,6 @@ do {
   })
   assert(string.find(select(2, coroutine.resume(outer)), "normal coroutine"))
   assert(string.find(err(coroutine.error, 1), "coroutine expected"))
-}
-
-;; ---- close of a normal coroutine
-
-do {
-  val log = []
-  var inner = nil
-  val outer = coroutine.create(\{
-    defer { table.insert(log, "outer-defer") }
-    set inner = coroutine.create(\{
-      assert(coroutine.status(outer) == "normal")
-      assert(coroutine.close(outer))  ;; marks it; closed when it regains control
-      assert(coroutine.status(outer) == "normal")
-      coroutine.yield(1)
-      table.insert(log, "inner-after")
-    })
-    val st, v = coroutine.resume(inner)
-    table.insert(log, "outer-after")  ;; unreachable
-  })
-  val st, v = coroutine.resume(outer)
-  assert(st && (v == nil) && (count(coroutine.resume(outer)) == 2))  ;; dead now
-  assert(coroutine.status(outer) == "dead")
-  assert(coroutine.status(inner) == "suspended")
-  assert(table.concat(log, ",") == "outer-defer")
-  ;; the inner coroutine is intact
-  assert(coroutine.resume(inner))
-  assert(table.concat(log, ",") == "outer-defer,inner-after")
-  ;; grandparent closed from a grandchild: closed when control reaches it
-  val log = []
-  var mid = nil
-  val top = coroutine.create(\{
-    defer { table.insert(log, "top") }
-    set mid = coroutine.create(\{
-      defer { table.insert(log, "mid") }
-      val child = coroutine.create(\{
-        coroutine.close(top)
-        coroutine.yield()
-      })
-      coroutine.resume(child)
-      table.insert(log, "mid-after")  ;; mid keeps running
-      coroutine.yield()
-      table.insert(log, "unreachable")
-    })
-    coroutine.resume(mid)
-    table.insert(log, "unreachable")
-  })
-  assert(coroutine.resume(top))
-  assert((coroutine.status(top) == "dead") && (coroutine.status(mid) == "suspended"))
-  assert(table.concat(log, ",") == "mid-after,top")
-  ;; child dying with an error does not change the close
-  val log = []
-  val outer = coroutine.create(\{
-    defer { table.insert(log, "d") }
-    val child = coroutine.wrap(\{ coroutine.close(outer); error("x", 0) })
-    val ok, e = pcall(child)
-    table.insert(log, "unreachable")
-  })
-  assert(coroutine.resume(outer))
-  assert(table.concat(log, ",") == "d")
-  ;; close pending plus error inside the normal coroutine's __close
-  val outer = coroutine.create(\{
-    pin p = setmetatable([], [__close = \{ error("in close", 0) }])
-    val child = coroutine.create(\{ coroutine.close(outer); coroutine.yield() })
-    coroutine.resume(child)
-  })
-  val st, e = coroutine.resume(outer)
-  assert(!st && (e == "in close"))
-  ;; still an error to close the main thread; closing a running coroutine
-  ;; (itself) keeps working
-  assert(!pcall(coroutine.close, coroutine.running()))
-  val co = coroutine.create(\{ defer { table.insert(log, "self") }; coroutine.close() ; print("unreachable") })
-  assert(coroutine.resume(co) && (coroutine.status(co) == "dead") && (log@2 == "self"))
 }
 
 print("OK")

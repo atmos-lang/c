@@ -5,7 +5,7 @@
 See [coroutine.md](coroutine.md) for the full items and discussion.
 
 - a. `coroutine.error(co)`: raise an error inside a suspended coroutine.
-- b. Close a running (normal) coroutine.
+- b. Close a normal coroutine: not needed (see coroutine.md).
 - c. Bounded stacks; "stackless" coroutines and tasks (yield only at the
   prototype level, shallow frame kept while suspended).
 

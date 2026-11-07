@@ -14,13 +14,27 @@ Today the only ways to wake a suspended coroutine are `resume` (with
 values) and `close` (kills it, running `__close` handlers with no error
 object from the caller's point of view).
 
-## b. Close a running (normal) coroutine
+## b. Close a running (normal) coroutine (not needed)
 
 Lua 5.5 already allows `coroutine.close()` with no argument: the running
 coroutine closes itself. Closing a *normal* coroutine (one that resumed
 another one and is waiting for it) is still an error:
-"cannot close a normal coroutine". For tasks this is needed when a task
-aborts an ancestor (or the whole program) from inside a nested task.
+"cannot close a normal coroutine", because its `lua_resume` C frame is
+live below the running coroutine.
+
+Decision: not done. The only Atmos case that goes against the resume
+chain is `abort(t)` of an ancestor (directly or through an `emit`);
+throws, `escape`/`break`/`return` across `spawn`/`par`/`watching`
+blocks all travel upward as errors returned by `resume` and need
+nothing new. For the ancestor case the task layer uses the reference's
+scheme: after an `emit`/`abort`, a task checks whether it or an ancestor
+was aborted and yields, so control climbs back up until the aborted
+task is suspended and its resumer closes it (`yield_if_aborted`,
+`task_result`, `'aborted'` status in `run.lua`). A core "close when
+control returns" (mark the normal coroutine, run `lua_closethread(from,
+from)` at the end of `lua_resume`) would remove that cooperation, but
+it is a convenience, not a requirement; revisit with the task layer if
+the scheme proves too costly.
 
 ## c. Bounded stacks and "stackless" coroutines
 
@@ -128,10 +142,10 @@ keeps calls from the body working without giving each coroutine a big stack.
 
 ### Status
 
-Idea stage; nothing implemented for (c). Items (a) and (b) have a
-design and tests (below).
+Idea stage; nothing implemented for (c). Item (a) has a design and
+tests (below); (b) is not needed (see above).
 
-## Design for (a) and (b)
+## Design for (a)
 
 ### a. `coroutine.error(co, e1, ..., en)`
 
@@ -152,20 +166,6 @@ A coroutine that is not suspended by a yield (not started, running,
 normal, dead) is an error: "cannot raise error in a <status> coroutine".
 A yield inside a hook (`CIST_HOOKYIELD`) raises in the Lua frame at
 the hook point.
-
-### b. closing a normal coroutine
-
-A normal coroutine `co` is suspended inside its own call to
-`lua_resume` (a C frame of `co` is live on the C stack below the
-running coroutine), so it cannot be unwound right away.
-`coroutine.close(co)` marks it (`co->closing`) and returns `true`; the
-close happens when `co` regains control: at the end of `lua_resume`,
-if `from` is marked, `lua_closethread(from, from)` runs, which closes
-its pending to-be-closed variables (status OK, no error object) and
-unwinds `from` to its base level (`luaD_throwbaselevel`), so that the
-resumer of `from` sees `resume` return `true` with no values and `from`
-dead. Grandparents are closed when control reaches them. The child
-that was being resumed keeps its own state (suspended or dead).
 
 Tests: `testes/coerror.atm`.
 
