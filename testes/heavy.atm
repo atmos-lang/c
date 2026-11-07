@@ -1,0 +1,148 @@
+;; $Id: testes/heavy.lua,v $
+;; See Copyright Notice in file lua.h
+
+;; (global *)
+
+val func teststring () {
+  print("creating a string too long")
+  do {
+    var a = "x"
+    val st, msg = pcall(func () {
+      loop {
+        while(true)
+        set a = a ++ (a ++ (a ++ (a ++ (a ++ (a ++ (a ++ (a ++ (a ++ (a ++ (a ++ (a ++ (a ++ (a ++ (a ++ (a ++ (a ++ (a ++ (a ++ (a ++ (a ++ (a ++ (a ++ (a ++ (a ++ (a ++ (a ++ (a ++ (a ++ (a ++ (a ++ (a ++ (a ++ (a ++ (a ++ (a ++ (a ++ (a ++ (a ++ (a ++ (a ++ (a ++ (a ++ (a ++ (a ++ (a ++ (a ++ (a ++ (a ++ (a ++ (a ++ (a ++ (a ++ (a ++ (a ++ (a ++ (a ++ (a ++ (a ++ (a ++ (a ++ (a ++ (a ++ (a ++ (a ++ (a ++ (a ++ (a ++ (a ++ (a ++ (a ++ (a ++ (a ++ (a ++ (a ++ (a ++ (a ++ (a ++ (a ++ (a ++ (a ++ (a ++ (a ++ (a ++ (a ++ (a ++ (a ++ (a ++ (a ++ (a ++ (a ++ (a ++ (a ++ (a ++ (a ++ (a ++ (a ++ (a ++ (a ++ a))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))
+        print(string.format("string with %d bytes", #a))
+      }
+    })
+    assert(!st && (string.find(msg, "string length overflow") || string.find(msg, "not enough memory")))
+    print("string length overflow with " ++ (#a * 100))
+  }
+  print('+')
+}
+
+val func loadrep (x, what) {
+  val p = 0x100000
+  val s = string.rep(x, p)
+  var count = 0
+  val func f () {
+    set count = count + p
+    if (count % (0x80 * p)) == 0 {
+      io.stderr::write("(", count // (2 ** 20), " M)")
+    }
+    return(s)
+  }
+  var st, msg = load(f, "=big")
+  print("\nmemory: ", collectgarbage('count') * 1024)
+  set msg = string.match(msg, "^[^\n]+")  ;; get only first line
+  print(string.format("total: 0x%x %s ('%s')", count, what, msg))
+  return(st, msg)
+}
+
+val func controlstruct () {
+  print("control structure too long")
+  var lim = (0x1000000 - 2) // 4
+  var s = string.rep("set a = a + 1\n", lim)
+  set s = "loop { while(true)\n" ++ (s ++ "}")
+  assert(load(s))
+  print("ok with " ++ (lim ++ " lines"))
+  set lim = lim + 3
+  set s = string.rep("set a = a + 1\n", lim)
+  set s = "loop { while(true)\n" ++ (s ++ "}")
+  val st, msg = load(s)
+  assert(!st && string.find(msg, "too long"))
+  print(msg)
+}
+
+val func manylines () {
+  print("loading chunk with too many lines")
+  val st, msg = loadrep("\n", "lines")
+  assert(!st && string.find(msg, "too many lines"))
+  print('+')
+}
+
+val func hugeid () {
+  print("loading chunk with huge identifier")
+  val st, msg = loadrep("a", "chars")
+  assert(!st && (string.find(msg, "lexical element too long") || string.find(msg, "not enough memory")))
+  print('+')
+}
+
+val func toomanyinst () {
+  print("loading chunk with too many instructions")
+  val st, msg = loadrep("set a = 10; ", "instructions")
+  print('+')
+}
+
+val func loadrepfunc (prefix, f) {
+  var count = -1
+  val func aux () {
+    set count = count + 1
+    if count == 0 {
+      return(prefix)
+    } else {
+      if (count % (0x100000)) == 0 {
+        io.stderr::write("(", count // (2 ** 20), " M)")
+      }
+      return(f(count))
+    }
+  }
+  var st, msg = load(aux, "k")
+  print("\nmemory: ", collectgarbage('count') * 1024)
+  set msg = string.match(msg, "^[^\n]+")  ;; get only first line
+  print("expected error: ", msg)
+}
+
+val func toomanyconst () {
+  print("loading function with too many constants")
+  loadrepfunc("func foo () { [0,", func (n) {
+
+    ;; convert 'n' to a string in the format [["...",]],
+    ;; where '...' is a kind of number in base 128
+    ;; (in a range that does not include either the double quote
+    ;; and the escape.)
+    return(string.char(34, ((n // (128 ** 0)) % 128) + 128, ((n // (128 ** 1)) % 128) + 128, ((n // (128 ** 2)) % 128) + 128, ((n // (128 ** 3)) % 128) + 128, ((n // (128 ** 4)) % 128) + 128, 34, 44))
+  })
+}
+
+val func toomanystr () {
+  var a = []
+  val st, msg = pcall(func () {
+    loop i in (1, math.huge) {
+      if (i % (0x100000)) == 0 {
+        io.stderr::write("(", i // (2 ** 20), " M)")
+      }
+      set a@(i) = string.pack("I", i)
+    }
+  })
+  val size = #a
+  set a = collectgarbage('count')
+  print("\nmemory:", a * 1024)
+  print("expected error:", msg)
+  print("size:", size)
+}
+
+val func toomanyidx () {
+  val a = []
+  val st, msg = pcall(func () {
+    loop i in (1, math.huge) {
+      if (i % (0x100000)) == 0 {
+        io.stderr::write("(", i // (2 ** 20), " M)")
+      }
+      set a@(i) = i
+    }
+  })
+  print("\nmemory: ", collectgarbage('count') * 1024)
+  print("expected error: ", msg)
+  print("size:", #a)
+}
+
+;; teststring()
+;; controlstruct()
+;; manylines()
+;; hugeid()
+;; toomanyinst()
+;; toomanyconst()
+;; toomanystr()
+toomanyidx()
+
+print("OK")
