@@ -370,7 +370,6 @@ check(AA)
 
 table.sort(AA, func (x, y) {
   load(string.format("set AA@(%q) = ''", x), "")()
-
   collectgarbage()
   return(x < y)
 })

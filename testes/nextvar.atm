@@ -891,7 +891,6 @@ do {  ;; attempt to change the control variable
 
   val st, msg = load("loop v, k in [] { set v = 10 }")
   assert(!st && string.find(msg, "assign to const variable 'v'"))
-
 }
 
 ;; conversion

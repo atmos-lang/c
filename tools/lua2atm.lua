@@ -775,7 +775,14 @@ local function pstat (s, indent, stats, idx)
     local str = kind .. " " .. table.concat(names, ", ")
     if s.es then
       if #s.es == 1 and s.es[1].tag == "function" and #s.names == 1 then
-        local head, f = pfunction(s.es[1], kind .. " func " .. pname(s.names[1]))
+        local head, f
+        if kind == "var" then
+          -- reassigned later: 'var f' + 'set f = func'
+          emit(indent .. "var " .. pname(s.names[1]))
+          head, f = pfunction(s.es[1], "set " .. pname(s.names[1]) .. " = func")
+        else
+          head, f = pfunction(s.es[1], kind .. " func " .. pname(s.names[1]))
+        end
         open(head)
         pblock(f.body, indent .. "  ")
         close()

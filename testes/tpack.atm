@@ -141,7 +141,6 @@ loop i in (1, sizeLI - 1) {
   val umax = math.tointeger(2 ** (i * 8)) - 1
   val max = umax // 2
   val min = -max - 1
-
   checkerror("overflow", pack, "<I" ++ i, -1)
   checkerror("overflow", pack, "<I" ++ i, min)
   checkerror("overflow", pack, ">I" ++ i, umax + 1)
@@ -282,13 +281,9 @@ do {
 
 do {  ;; testing initial position
   val x = pack("i4i4i4i4", 1, 2, 3, 4)
-  var pos_ = 1  ;; for pos = 1, 16, 4
-  loop {
-    while(pos_ <= 16)
-    val pos = pos_
+  loop pos in (1, 16, 4) {
     val i, p = unpack("i4", x, pos)
     assert((i == ((pos // 4) + 1)) && (p == (pos + 4)))
-    set pos_ = pos_ + 4
   }
 
   ;; with alignment

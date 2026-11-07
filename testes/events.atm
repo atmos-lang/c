@@ -524,7 +524,6 @@ val tt = [__call=func (t, ...) {
   }
 }]
 
-
 var a = setmetatable([], tt)
 val b = setmetatable([f=a], tt)
 val c = setmetatable([f=b], tt)

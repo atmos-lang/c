@@ -3,7 +3,7 @@
 
 ;; ISO Latin encoding
 
-;; (global <const> *)
+;; (global *)
 
 print('testing strings and string library')
 
@@ -324,7 +324,7 @@ do {
     assert(string.find(s, "^%-?0X[1-9A-F]%.?[0-9A-F]*P[-+]?%d+$"))
     assert(tonumber(s) == n)
   }
-  loop _, n in [0.1, -0.1, 1 / 3, -1 / 3, 1e30, -1e30, -45 / 247, 1, -1, 2, -2, 3e-20, -3e-20] {
+  loop _, n in ipairs([0.1, -0.1, 1 / 3, -1 / 3, 1e30, -1e30, -45 / 247, 1, -1, 2, -2, 3e-20, -3e-20]) {
 
     matchhexa(n)
   }
@@ -502,10 +502,8 @@ if T == nil {
 
   loop l in (12, 14) {
     val str1 = string.rep("a", l)
-    loop i in (0, 500 // 13) {  ;; for i = 0, 500, 13
-      val i = i * 13
-      loop j in (0, 500 // 13) {  ;; for j = 0, 500, 13
-        val j = j * 13
+    loop i in (0, 500, 13) {
+      loop j in (0, 500, 13) {
         set str = string.rep("a", i) ++ ("%s" ++ string.rep("d", j))
         testpfs("S", str, str1)
         testpfs("S", str, str)

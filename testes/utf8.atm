@@ -3,7 +3,7 @@
 
 ;; UTF-8 file
 
-;; (global <const> *)
+;; (global *)
 
 print("testing UTF-8 library")
 
@@ -24,7 +24,6 @@ val justone = "^" ++ (utf8.charpattern ++ "$")
 val func checksyntax (s, t) {
   ;; creates a string "return '\u{t[1]}...\u{t[n]}'"
   var ts = ["'"]
-
   loop i in (1, #t) {
     set ts@(i + 1) = string.format("\\u{%x}", t@(i))
   }

@@ -144,10 +144,10 @@ assert((maxint * maxint * maxint) == maxint)
 
 ;; testing floor division and conversions
 
-loop _, i in [-16, -15, -3, -2, -1, 0, 1, 2, 3, 15] {
-  loop _, j in [-16, -15, -3, -2, -1, 1, 2, 3, 15] {
-    loop _, ti in [0, 0.0] {  ;; try 'i' as integer and as float
-      loop _, tj in [0, 0.0] {  ;; try 'j' as integer and as float
+loop _, i in pairs([-16, -15, -3, -2, -1, 0, 1, 2, 3, 15]) {
+  loop _, j in pairs([-16, -15, -3, -2, -1, 1, 2, 3, 15]) {
+    loop _, ti in pairs([0, 0.0]) {  ;; try 'i' as integer and as float
+      loop _, tj in pairs([0, 0.0]) {  ;; try 'j' as integer and as float
         val x = i + ti
         val y = j + tj
         assert((i // j) == math.floor(i / j))
@@ -691,7 +691,7 @@ assert(eq(math.sin(10), math.sin(10 % (2 * math.pi))))
 do {
   print("testing ldexp/frexp")
   ;; (global ipairs)
-  loop _, x in [0, 10, 32, -math.pi, 1e10, 1e-10, math.huge, -math.huge] {
+  loop _, x in ipairs([0, 10, 32, -math.pi, 1e10, 1e-10, math.huge, -math.huge]) {
     val m, p = math.frexp(x)
     assert(math.ldexp(m, p) == x)
     val am = math.abs(m)
@@ -723,7 +723,7 @@ do {  ;; testing floor & ceil
   assert(math.ceil(1e50) == 1e50)
   assert(math.floor(-1e50) == -1e50)
   assert(math.ceil(-1e50) == -1e50)
-  loop _, p in [31, 32, 63, 64] {
+  loop _, p in pairs([31, 32, 63, 64]) {
     assert(math.floor(2 ** p) == (2 ** p))
     assert(math.floor((2 ** p) + 0.5) == (2 ** p))
     assert(math.ceil(2 ** p) == (2 ** p))
@@ -1107,7 +1107,7 @@ do {
   val p = floatbits - 1
   ;; (global ipairs)
   loop i in (1, maxexp - 1) {
-    loop _, i in [-i, i] {
+    loop _, i in ipairs([-i, i]) {
       val x = 2 ** i
       val diff = 2 ** (i - p)  ;; least significant bit for 'x'
       val y = x + diff

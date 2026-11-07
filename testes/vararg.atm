@@ -154,7 +154,6 @@ do {  ;; vararg expressions using unpack
     assert(!st && string.find(msg, emsg))
   }
   ;; (Lua: checks for a proper 'n' in the vararg table; not applicable)
-
 }
 
 ;; varargs for main chunks
