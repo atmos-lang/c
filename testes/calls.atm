@@ -1,0 +1,702 @@
+;; $Id: testes/calls.lua $
+;; See Copyright Notice in file lua.h
+
+;; (global *)
+
+print("testing functions and calls")
+
+val debug = require("debug")
+
+;; get the opportunity to test 'type' too ;)
+
+assert(type(1 < 2) == 'boolean')
+assert((type(true) == 'boolean') && (type(false) == 'boolean'))
+assert((type(nil) == 'nil') && (type(-3) == 'number') && (type('x') == 'string') && (type([]) == 'table') && (type(type) == 'function'))
+
+assert(type(assert) == type(print))
+var f
+set f = func (x) {
+  return(a::x(x))
+}
+assert(type(f) == 'function')
+assert(!pcall(type))
+
+;; testing local-function recursion
+set fact = false  ;; (global fact)
+do {
+  val res = 1
+  var fact
+  set fact = func (n) {
+    if n == 0 {
+      return(res)
+    } else {
+      return(n * fact(n - 1))
+    }
+  }
+  assert(fact(5) == 120)
+}
+assert(fact == false)
+set fact = nil
+
+;; testing declarations
+var a = [i=10]
+val self = 20
+func a::x (x) {
+  return(x + self.i)
+}
+func a.y (x) {
+  return(x + self)
+}
+
+assert((a::x(1) + 10) == a.y(1))
+
+set a.t = [i=-100]
+set a.t.x = func (self, a, b) {
+  return(self.i + a + b)
+}
+
+assert(a.t::x(2, 3) == -95)
+
+do {
+  val a = [x=0]
+  func a::add (x) {
+    set self.x, a.y = (self.x + x, 20)
+    return(self)
+  }
+  assert((a::add(10)::add(20)::add(30).x == 60) && (a.y == 20))
+}
+
+var a = [b=[c=[]]]
+
+func a.b.c.f1 (x) {
+  return(x + 1)
+}
+func a.b.c::f2 (x, y) {
+  set self@(x) = y
+}
+assert(a.b.c.f1(4) == 5)
+a.b.c::f2('k', 12)
+assert(a.b.c.k == 12)
+
+print('+')
+
+set t = nil  ;; (global t)  ;; 'declare' t
+func f (a, b, c) {
+  val d = 'a'
+  set t = [a, b, c, d]
+}
+
+f(1, 2)
+;; this line change must be valid
+
+assert((t@(1) == 1) && (t@(2) == 2) && (t@(3) == nil) && (t@(4) == 'a'))
+f(1, 2, 3, 4)
+;; this one too
+
+assert((t@(1) == 1) && (t@(2) == 2) && (t@(3) == 3) && (t@(4) == 'a'))
+
+set t = nil  ;; delete 't'
+
+func fat (x) {
+  if x <= 1 {
+    return(1)
+  } else {
+    return(x * load("fat(" ++ ((x - 1) ++ ")"), "")())
+  }
+}
+
+assert(load("load 'assert(fat(6)==720)' () "))()
+set a = load('(fat(5), 3)')
+var a, b = a()
+assert((a == 120) && (b == 3))
+set fat = nil
+print('+')
+
+var err_on_n
+set err_on_n = func (n) {
+  if n == 0 {
+    error()
+    exit(1)
+  } else {
+    err_on_n(n - 1)
+    exit(1)
+  }
+}
+
+do {
+  var dummy
+  set dummy = func (n) {
+    if n > 0 {
+      assert(!pcall(err_on_n, n))
+      dummy(n - 1)
+    }
+  }
+
+  dummy(10)
+}
+
+set _G.deep = nil  ;; "declaration"  (used by 'all.lua')
+
+func deep (n) {
+  if n > 0 {
+    deep(n - 1)
+  }
+}
+deep(10)
+deep(180)
+
+print("testing tail calls")
+
+func deep (n) {
+  if n > 0 {
+    return(deep(n - 1))
+  } else {
+    return(101)
+  }
+}
+assert(deep(30000) == 101)
+set a = []
+func a::deep (n) {
+  if n > 0 {
+    return(self::deep(n - 1))
+  } else {
+    return(101)
+  }
+}
+assert(a::deep(30000) == 101)
+
+do {  ;; tail calls x varargs
+  val func foo (x, ...) {
+    val a = [...]
+    return(x, a@(1), a@(2))
+  }
+
+  val func foo1 (x) {
+    return(foo(10, x, x + 1))
+  }
+
+  var a, b, c = foo1(-2)
+  assert((a == 10) && (b == -2) && (c == -1))
+
+  ;; tail calls x metamethods
+  val t = setmetatable([], [__call=foo])
+  val func foo2 (x) {
+    return(t(10, x))
+  }
+  set a, b, c = foo2(100)
+  assert((a == t) && (b == 10) && (c == 100))
+
+  set a, b = (func () {
+    return(foo())
+  })()
+  assert((a == nil) && (b == nil))
+
+  var X, Y, A
+  val func foo (x, y, ...) {
+    set X = x
+    set Y = y
+    set A = [...]
+  }
+  val func foo1 (...) {
+    return(foo(...))
+  }
+
+  var a, b, c = foo1()
+  assert((X == nil) && (Y == nil) && (#A == 0))
+
+  set a, b, c = foo1(10)
+  assert((X == 10) && (Y == nil) && (#A == 0))
+
+  set a, b, c = foo1(10, 20)
+  assert((X == 10) && (Y == 20) && (#A == 0))
+
+  set a, b, c = foo1(10, 20, 30)
+  assert((X == 10) && (Y == 20) && (#A == 1) && (A@(1) == 30))
+}
+
+do {  ;; C-stack overflow while handling C-stack overflow
+  var loop_
+  set loop_ = func () {
+    assert(pcall(loop_))
+  }
+
+  val err, msg = xpcall(loop_, loop_)
+  assert(!err && string.find(msg, "error"))
+}
+
+do {  ;; tail calls x chain of __call
+  var n = 10000  ;; depth
+
+  var foo
+  set foo = func () {
+    if n == 0 {
+      return(1023)
+    } else {
+      set n = n - 1
+      return(foo())
+    }
+  }
+
+  ;; build a chain of __call metamethods ending in function 'foo'
+  loop i in (1, 15) {
+    set foo = setmetatable([], [__call=foo])
+  }
+
+  ;; call the first one as a tail call in a new coroutine
+  ;; (to ensure stack is not preallocated)
+  assert(coroutine.wrap(func () {
+    return(foo())
+  })() == 1023)
+}
+
+print('+')
+
+do {
+  print("testing chains of '__call'")
+  val N = 15
+  var u = table.pack
+  loop i in (1, N) {
+    set u = setmetatable([i], [__call=u])
+  }
+
+  val Res = u("a", "b", "c")
+
+  assert(Res.n == (N + 3))
+  loop i in (1, N) {
+    assert(Res@(i)@(1) == i)
+  }
+  assert((Res@(N + 1) == "a") && (Res@(N + 2) == "b") && (Res@(N + 3) == "c"))
+
+  var u
+  set u = func (...) {
+    val n = debug.getinfo(1, 't').extraargs
+    assert(select("#", ...) == n)
+    return(n)
+  }
+
+  loop i in (0, N) {
+    assert(u() == i)
+    set u = setmetatable([], [__call=u])
+  }
+}
+
+do {  ;; testing chains too long
+  var a = []
+  loop i in (1, 16) {  ;; one too many
+    set a = setmetatable([], [__call=a])
+  }
+  val status, msg = pcall(a)
+  assert(!status && string.find(msg, "too long"))
+
+  setmetatable(a, [__call=a])  ;; infinite chain
+  val status, msg = pcall(a)
+  assert(!status && string.find(msg, "too long"))
+
+  ;; again, with a tail call
+  val status, msg = pcall(func () {
+    return(a())
+  })
+  assert(!status && string.find(msg, "too long"))
+}
+
+set a = nil
+(func (x) {
+  set a = x
+})(23)
+assert((a == 23) && ((func (x) {
+  return(x * 2)
+})(20) == 40))
+
+;; testing closures
+
+;; fixed-point operator
+val func Z (le) {
+  val func a (f) {
+    return(le(func (x) {
+      return(f(f)(x))
+    }))
+  }
+  return(a(a))
+}
+
+;; non-recursive factorial
+
+val func F (f) {
+  return(func (n) {
+    if n == 0 {
+      return(1)
+    } else {
+      return(n * f(n - 1))
+    }
+  })
+}
+
+val fat = Z(F)
+
+assert((fat(0) == 1) && (fat(4) == 24) && (Z(F)(5) == (5 * Z(F)(4))))
+
+val func g (z) {
+  val func f (a, b, c, d) {
+    return(func (x, y) {
+      return(a + b + c + d + a + x + y + z)
+    })
+  }
+  return(f(z, z + 1, z + 2, z + 3))
+}
+
+var f = g(10)
+assert(f(9, 16) == (10 + 11 + 12 + 13 + 10 + 9 + 16 + 10))
+
+print('+')
+
+;; testing multiple returns
+
+var unlpack
+set unlpack = func (t, i) {
+  set i = i || 1
+  if (i <= #t) {
+    return(t@(i), unlpack(t, i + 1))
+  }
+}
+
+val func equaltab (t1, t2) {
+  assert(#t1 == #t2)
+  loop i in (1, #t1) {
+    assert(t1@(i) == t2@(i))
+  }
+}
+
+val func pack (...) {
+  return((table.pack(...)))
+}
+
+var f
+set f = func () {
+  return(1, 2, 30, 4)
+}
+val func ret2 (a, b) {
+  return(a, b)
+}
+
+var a, b, c, d = unlpack([1, 2, 3])
+assert((a == 1) && (b == 2) && (c == 3) && (d == nil))
+set a = [1, 2, 3, 4, false, 10, 'alo', false, assert]
+equaltab(pack(unlpack(a)), a)
+equaltab(pack(unlpack(a), -1), [1, -1])
+set a, b, c, d = (ret2(f()), ret2(f()))
+assert((a == 1) && (b == 1) && (c == 2) && (d == nil))
+set a, b, c, d = unlpack(pack(ret2(f()), ret2(f())))
+assert((a == 1) && (b == 1) && (c == 2) && (d == nil))
+set a, b, c, d = unlpack(pack(ret2(f()), (ret2(f()))))
+assert((a == 1) && (b == 1) && (c == nil) && (d == nil))
+
+set a = ret2([unlpack([1, 2, 3]), unlpack([3, 2, 1]), unlpack(["a", "b"])])
+assert((a@(1) == 1) && (a@(2) == 3) && (a@(3) == "a") && (a@(4) == "b"))
+
+;; testing calls with 'incorrect' arguments
+rawget([], "x", 1)
+rawset([], "x", 1, 2)
+assert(math.sin(1, 2) == math.sin(1))
+table.sort([10, 9, 8, 4, 19, 23, 0, 0], func (a, b) {
+  return(a < b)
+}, "extra arg")
+
+;; test for generic load
+var x = ";; a comment\0\0\0\n  set x = 10 + \n23; \
+     val a = func () { set x = 'hi' }; \
+     '\0'"
+
+val func read1 (x) {
+  var i = 0
+  return(func () {
+    collectgarbage()
+    set i = i + 1
+    return(string.sub(x, i, i))
+  })
+}
+
+val func cannotload (msg, a, b) {
+  assert(!a && string.find(b, msg))
+}
+
+set a = assert(load(read1(x), "modname", "t", _G))
+assert((a() == "\0") && (_G.x == 33))
+assert(debug.getinfo(a).source == "modname")
+;; cannot read text in binary mode
+cannotload("attempt to load a text chunk", load(read1(x), "modname", "b", []))
+cannotload("attempt to load a text chunk", load(x, "modname", "b"))
+
+set a = assert(load(func () {
+  return(nil)
+}))
+a()  ;; empty chunk
+
+assert(!load(func () {
+  return(true)
+}))
+
+;; small bug
+val t = [nil, "(", "3)"]
+var f, msg = load(func () {
+  return(table.remove(t, 1))
+})
+assert(f() == nil)  ;; should read the empty chunk
+
+;; another small bug (in 5.2.1)
+set f = load(string.dump(func () {
+  return(1)
+}), nil, "b", [])
+assert((type(f) == "function") && (f() == 1))
+
+do {  ;; another bug (in 5.4.0)
+  ;; loading a binary long string interrupted by GC cycles
+  var f = string.dump(func () {
+    return('01234567890123456789012345678901234567890123456789')
+  })
+  set f = load(read1(f))
+  assert(f() == '01234567890123456789012345678901234567890123456789')
+}
+
+if T {
+  ;; check stack level when calling reader function
+  val func get (str) {
+    var pos = 0
+    var level = nil
+    return(func () {
+      set pos = pos + 1
+      val c = string.sub(str, pos, pos)
+      val newlevel = T.stacklevel()
+      if !level {
+        set level = newlevel
+      } else {
+        assert(level == newlevel)
+      }
+      return(((#c > 0) && c) || nil)
+    })
+  }
+
+  var str = "val func foo () {}; 121"
+  assert(assert(load(get(str)))() == 121)
+
+  set str = string.dump(load(str))
+  assert(assert(load(get(str)))() == 121)
+}
+
+set x = string.dump(load("set x = 1; x"))
+set a = assert(load(read1(x), nil, "b"))
+assert((a() == 1) && (_G.x == 1))
+cannotload("attempt to load a binary chunk", load(read1(x), nil, "t"))
+cannotload("attempt to load a binary chunk", load(x, nil, "t"))
+set _G.x = nil
+
+assert(!pcall(string.dump, print))  ;; no dump of C functions
+
+cannotload("expected expression", load(read1("*a = 123")))
+cannotload("expected expression", load("*a = 123"))
+cannotload("hhi", load(func () {
+  error("hhi")
+}))
+
+;; any value is valid for _ENV
+assert(load("_ENV", nil, nil, 123)() == 123)
+
+;; load when _ENV is not first upvalue
+;; (global XX)
+var x
+set XX = 123
+val func h () {
+  val y = x  ;; use 'x', so that it becomes 1st upvalue
+  return(XX)  ;; global name
+}
+val d = string.dump(h)
+set x = load(d, "", "b")
+assert(debug.getupvalue(x, 2) == '_ENV')
+debug.setupvalue(x, 2, _G)
+assert(x() == 123)
+
+assert(assert(load("XX + ...", nil, nil, [XX=13]))(4) == 17)
+set XX = nil
+
+;; test generic load with nested functions
+set x = """  func (x) {
+    func (y) {
+      func (z) {
+        x + y + z
+      }
+    }
+  }
+"""
+
+set a = assert(load(read1(x), "read", "t"))
+assert(a()(2)(3)(10) == 15)
+
+;; repeat the test loading a binary chunk
+set x = string.dump(a)
+set a = assert(load(read1(x), "read", "b"))
+assert(a()(2)(3)(10) == 15)
+
+;; test for dump/undump with upvalues
+var a, b = (20, 30)
+set x = load(string.dump(func (x) {
+  if x == "set" {
+    set a = 10 + b
+    set b = b + 1
+  } else {
+    return(a)
+  }
+}), "", "b", nil)
+assert(x() == nil)
+assert(debug.setupvalue(x, 1, "hi") == "a")
+assert(x() == "hi")
+assert(debug.setupvalue(x, 2, 13) == "b")
+assert(!debug.setupvalue(x, 3, 10))  ;; only 2 upvalues
+x("set")
+assert(x() == 23)
+x("set")
+assert(x() == 24)
+
+;; test for dump/undump with many upvalues
+do {
+  val nup = 200  ;; maximum number of local variables
+  var prog = ["val a1"]
+  loop i in (2, nup) {
+    set prog@(#prog + 1) = ", a" ++ i
+  }
+  set prog@(#prog + 1) = " = (1"
+  loop i in (2, nup) {
+    set prog@(#prog + 1) = ", " ++ i
+  }
+  var sum = 1
+  set prog@(#prog + 1) = "); func () { a1"
+  loop i in (2, nup) {
+    set prog@(#prog + 1) = " + a" ++ i
+    set sum = sum + i
+  }
+  set prog@(#prog + 1) = " }"
+  set prog = table.concat(prog)
+  var f = assert(load(prog))()
+  assert(f() == sum)
+
+  set f = load(string.dump(f))  ;; main chunk now has many upvalues
+  val a = 10
+  val func h () {
+    return(a)
+  }
+  loop i in (1, nup) {
+    debug.upvaluejoin(f, i, h, 1)
+  }
+  assert(f() == (10 * nup))
+}
+
+;; test for long method names
+do {
+  val t = [x=1]
+  func t::_012345678901234567890123456789012345678901234567890123456789 () {
+    return(self.x)
+  }
+  assert(t::_012345678901234567890123456789012345678901234567890123456789() == 1)
+}
+
+;; test for bug in parameter adjustment
+assert((func () {
+  return(nil)
+})(4) == nil)
+assert((func () {
+  val a
+  return(a)
+})(4) == nil)
+assert((func (a) {
+  return(a)
+})() == nil)
+
+print("testing binary chunks")
+do {
+  val headformat = "c4BBc6BiBI4BjBn"
+  val header = [  ;; header components
+    "\27Lua",                                  ;; signature
+    0x55,                                      ;; version 5.5 (0x55)
+    0,                                         ;; format
+    "\x19\x93\r\n\x1a\n",                      ;; a binary string
+    string.packsize("i"),                      ;; size of an int
+    -0x5678,                                   ;; an int
+    4,                                         ;; size of an instruction
+    0x12345678,                                ;; an instruction (4 bytes)
+    string.packsize("j"),                      ;; size of a Lua integer
+    -0x5678,                                   ;; a Lua integer
+    string.packsize("n"),                      ;; size of a Lua float
+    -370.5,                                    ;; a Lua float
+  ]
+
+  val c = string.dump(func () {
+    val a = 1
+    val b = 3
+    val func f () {  ;; upvalues
+      return(a + b + _ENV.c)
+    }
+    val s1 = "a constant"
+    val s2 = "another constant"
+    return(a + (b * 3))
+  })
+
+  assert(assert(load(c))() == 10)
+
+  ;; check header
+  val t = [string.unpack(headformat, c)]
+  loop i in (1, #header) {
+    assert(t@(i) == header@(i))
+  }
+
+  ;; Testing corrupted header.
+  ;; A single wrong byte in the head invalidates the chunk,
+  ;; except for the Lua float check. (If numbers are long double,
+  ;; the representation may need padding, and changing that padding
+  ;; will not invalidate the chunk.)
+  var headlen = string.packsize(headformat)
+  set headlen = headlen - string.packsize("n")  ;; remove float check
+  loop i in (1, headlen) {
+    val s = string.sub(c, 1, i - 1) ++ (string.char((string.byte(string.sub(c, i, i)) + 1) % 256) ++ string.sub(c, i + 1, -1))
+    assert((#s == #c) && (s != c))
+    assert(!load(s))
+  }
+
+  ;; loading truncated binary chunks
+  loop i in (1, #c - 1) {
+    val st, msg = load(string.sub(c, 1, i))
+    assert(!st && string.find(msg, "truncated"))
+  }
+}
+
+do {  ;; check reuse of strings in dumps
+  val str = "|" ++ (string.rep("X", 50) ++ "|")
+  val foo = load(string.format("""    val str = "%s"
+    [
+      func () { str },
+      func () { str },
+      func () { str }
+    ]
+  """, str))
+  ;; count occurrences of 'str' inside the dump
+  val dump = string.dump(foo)
+  val _, count = string.gsub(dump, str, [])
+  ;; there should be only two occurrences:
+  ;; one inside the source, other the string itself.
+  assert(count == 2)
+
+  if T {  ;; check reuse of strings in undump
+    val funcs = load(dump)()
+    assert(string.format("%p", T.listk(funcs@(1))@(1)) == string.format("%p", T.listk(funcs@(3))@(1)))
+  }
+}
+
+do {  ;; test limit of multiple returns (254 values)
+  var code = "10" ++ string.rep(",10", 253)
+  val res = [assert(load("(" ++ code ++ ")"))()]
+  assert((#res == 254) && (res@(254) == 10))
+
+  set code = code ++ ",10"
+  val status, msg = load("(" ++ code ++ ")")
+  assert(!status && string.find(msg, "too many returns"))
+}
+
+print('OK')
+return(deep)
