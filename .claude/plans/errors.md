@@ -165,7 +165,8 @@ suite should pass unchanged: every existing error carries one value.
   re-throw with the current count (not 1). Unhandled errors in a thread
   without handler copy the n values to the main thread.
 - API: `lua_errorn(L, n)`; `lua_error` = `lua_errorn(L, 1)`. Base
-  `throw(...)`; `pcall`'s continuation reserves a slot before pushing
+  `throw(...)` and `errorn(level, ...)` (`error` with the level first,
+  position prefix on value 1 when it is a string); `pcall`'s continuation reserves a slot before pushing
   (`lua_pcallk` raises the frame top only to the results);
   `coroutine.resume/wrap/close` move n values with stack checks.
 - Invariant for a thread dead by error: `L->nerr` is the number of

@@ -71,4 +71,6 @@ Semantics assumed for the Atmos implementation (the tests rely on them):
 - errors carry several values: `throw(e1, ..., en)` raises them all (no
   position prefix), `pcall` returns `false, e1, ..., en`, `xpcall`
   handlers receive them all and their results replace them, `__close`
-  receives `e1` only; `error(v, level)` is unchanged (`testes/throw.atm`)
+  receives `e1` only; `error(v, level)` is unchanged and
+  `errorn(level, e1, ..., en)` is `error` with the level first and n
+  values (`testes/throw.atm`)

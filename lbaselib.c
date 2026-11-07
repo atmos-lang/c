@@ -134,6 +134,24 @@ static int luaB_throw (lua_State *L) {
 }
 
 
+/*
+** 'errorn(level, ...)': like 'error' with the level first, raising all
+** the other arguments as error values; the position information goes
+** in the first value, when it is a string.
+*/
+static int luaB_errorn (lua_State *L) {
+  int level = (int)luaL_checkinteger(L, 1);
+  int n = lua_gettop(L) - 1;  /* number of error values */
+  if (lua_type(L, 2) == LUA_TSTRING && level > 0) {
+    luaL_where(L, level);   /* add extra information */
+    lua_pushvalue(L, 2);
+    lua_concat(L, 2);
+    lua_replace(L, 2);
+  }
+  return lua_errorn(L, n);
+}
+
+
 static int luaB_getmetatable (lua_State *L) {
   luaL_checkany(L, 1);
   if (!lua_getmetatable(L, 1)) {
@@ -522,6 +540,7 @@ static const luaL_Reg base_funcs[] = {
   {"collectgarbage", luaB_collectgarbage},
   {"dofile", luaB_dofile},
   {"error", luaB_error},
+  {"errorn", luaB_errorn},
   {"throw", luaB_throw},
   {"getmetatable", luaB_getmetatable},
   {"ipairs", luaB_ipairs},
