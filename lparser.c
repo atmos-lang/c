@@ -1900,7 +1900,7 @@ static void breakjump (LexState *ls, BlockCnt *bl, int line) {
 
 
 /*
-** Parse the arguments of 'break'/'until'/'while'/'escape' after the
+** when there is none) into the block's value register.
 ** first one: ',' explist ')'. Stores the first extra value (or 'def'
 ** when there is none) into the loop's hidden variable.
 */
