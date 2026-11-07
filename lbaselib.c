@@ -135,6 +135,108 @@ static int luaB_throw (lua_State *L) {
 
 
 /*
+** Atmos tag matching ('e ?? x'): equal values, 'x' is the type name of
+** 'e', 'e' is a string tag and 'x' is the tag or a prefix of it at a
+** '.' boundary ('X' matches 'X.Y'), or 'e' is a table whose 'tag'
+** field matches that way.
+*/
+static int tagmatch (lua_State *L, int e, int x) {
+  if (lua_compare(L, e, x, LUA_OPEQ))
+    return 1;
+  if (lua_type(L, x) != LUA_TSTRING)
+    return 0;
+  else {
+    size_t lx, le;
+    const char *sx = lua_tolstring(L, x, &lx);
+    const char *se;
+    int res;
+    if (strcmp(sx, luaL_typename(L, e)) == 0)
+      return 1;
+    if (lua_type(L, e) == LUA_TTABLE) {  /* tagged table? */
+      lua_pushliteral(L, "tag");
+      if (lua_rawget(L, e) != LUA_TSTRING) {
+        lua_pop(L, 1);
+        return 0;
+      }
+      e = -1;
+    }
+    else if (lua_type(L, e) != LUA_TSTRING)
+      return 0;
+    se = lua_tolstring(L, e, &le);
+    res = (le >= lx && memcmp(se, sx, lx) == 0 &&
+           (le == lx || se[lx] == '.'));
+    if (e == -1) lua_pop(L, 1);
+    return res;
+  }
+}
+
+
+/*
+** 'catch(cnd, f)': calls 'f' in protected mode. Returns 'true' plus
+** the results of 'f', or 'false' plus the error values when 'cnd'
+** matches them: 'true' matches anything; 'false' nothing; a function
+** receives the error values and matches if its first result is true,
+** its other results replacing the error values; any other value is
+** matched against the first error value with 'tagmatch'. An error that
+** does not match is re-raised with all its values.
+** Stack after the call: cnd, true, (results or error values).
+*/
+static int catchcont (lua_State *L, int status, lua_KContext extra) {
+  int n;  /* number of error values */
+  (void)extra;
+  if (status == LUA_OK || status == LUA_YIELD)
+    return lua_gettop(L) - 1;  /* true + results */
+  n = lua_gettop(L) - 2;
+  switch (lua_type(L, 1)) {
+    case LUA_TBOOLEAN: {
+      if (!lua_toboolean(L, 1))
+        return lua_errorn(L, n);  /* 'false' catches nothing */
+      break;  /* 'true' catches anything */
+    }
+    case LUA_TFUNCTION: {
+      int i, m;
+      luaL_checkstack(L, n + 2, "too many error values");
+      lua_pushvalue(L, 1);  /* the function */
+      for (i = 0; i < n; i++)
+        lua_pushvalue(L, 3 + i);  /* the error values */
+      lua_call(L, n, LUA_MULTRET);
+      m = lua_gettop(L) - (2 + n);  /* number of results */
+      if (!(m >= 1 && lua_type(L, 3 + n) == LUA_TBOOLEAN &&
+            lua_toboolean(L, 3 + n))) {  /* first result is not 'true'? */
+        lua_settop(L, 2 + n);  /* remove results */
+        return lua_errorn(L, n);  /* re-raise */
+      }
+      lua_rotate(L, 3, m);  /* results below the error values */
+      lua_settop(L, 2 + m);  /* remove the error values */
+      lua_remove(L, 3);  /* remove the 'true' */
+      n = m - 1;
+      break;
+    }
+    default: {
+      if (!tagmatch(L, 3, 1))
+        return lua_errorn(L, n);  /* re-raise */
+      break;
+    }
+  }
+  lua_pushboolean(L, 0);
+  lua_replace(L, 2);  /* 'false' in place of 'true' */
+  return n + 1;  /* false + error values */
+}
+
+
+static int luaB_catch (lua_State *L) {
+  int status;
+  luaL_checkany(L, 1);
+  luaL_checktype(L, 2, LUA_TFUNCTION);
+  lua_settop(L, 2);
+  lua_pushboolean(L, 1);  /* first result if no errors */
+  lua_insert(L, 2);  /* cnd, true, f */
+  status = lua_pcallk(L, 0, LUA_MULTRET, 0, 0, catchcont);
+  return catchcont(L, status, 0);
+}
+
+
+/*
 ** 'errorn(level, ...)': like 'error' with the level first, raising all
 ** the other arguments as error values; the position information goes
 ** in the first value, when it is a string.
@@ -541,6 +643,7 @@ static const luaL_Reg base_funcs[] = {
   {"dofile", luaB_dofile},
   {"error", luaB_error},
   {"errorn", luaB_errorn},
+  {"catch", luaB_catch},
   {"throw", luaB_throw},
   {"getmetatable", luaB_getmetatable},
   {"ipairs", luaB_ipairs},

@@ -1641,7 +1641,9 @@ void luaV_execute (lua_State *L, CallInfo *ci) {
       vmcase(OP_CLOSE) {
         StkId ra = RA(i);
         lua_assert(!GETARG_B(i));  /* 'close must be alive */
-        Protect(luaF_close(L, ra, LUA_OK, 1));
+        /* close "at top" (as OP_RETURN does): the value of a block may
+           be in a temporary register above the closed level */
+        Protect(luaF_close(L, ra, CLOSEKTOP, 1));
         vmbreak;
       }
       vmcase(OP_TBC) {

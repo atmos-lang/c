@@ -431,7 +431,8 @@ static void store_value (LexState *ls, int reg, expdesc *e) {
 static void value_result (LexState *ls, int reg, expdesc *v) {
   FuncState *fs = ls->fs;
   init_exp(v, VNONRELOC, reg);
-  fs->freereg = cast_byte(reg + 1);
+  fs->freereg = cast_byte(reg);
+  luaK_reserveregs(fs, 1);  /* the value register (checks frame size) */
 }
 
 
@@ -853,6 +854,7 @@ static void open_func (LexState *ls, FuncState *fs, BlockCnt *bl) {
   fs->ndebugvars = 0;
   fs->nactvar = 0;
   fs->needclose = 0;
+  fs->iscatch = 0;
   fs->firstlocal = ls->dyd->actvar.n;
   fs->firstlabel = ls->dyd->label.n;
   fs->bl = NULL;
@@ -1194,6 +1196,7 @@ static void tagconstructor (LexState *ls, expdesc *t, TString *tag) {
   luaK_indexed(fs, &tab, &key);
   codestring(&val, tag);
   luaK_storevar(fs, &tab, &val);
+  fs->freereg = cast_byte(t->u.info + 1);  /* free key register (if any) */
 }
 
 /* }====================================================================== */
@@ -1332,6 +1335,52 @@ static void lambda (LexState *ls, expdesc *e, int line) {
   codeclosure(ls, e);
   close_func(ls);
   leavelevel(ls);
+}
+
+
+/*
+** Body of a 'catch' or 'defer': a closure with no parameters.
+** ('catch' bodies cannot 'return': that would return from the closure
+** instead of from the enclosing function.)
+*/
+static void closurebody (LexState *ls, expdesc *e, int line, int iscatch) {
+  FuncState new_fs;
+  BlockCnt bl;
+  enterlevel(ls);  /* control recursion depth of nested functions */
+  new_fs.f = addprototype(ls);
+  new_fs.f->linedefined = line;
+  open_func(ls, &new_fs, &bl);
+  new_fs.iscatch = cast_byte(iscatch);
+  funcblock(ls, line);
+  codeclosure(ls, e);
+  close_func(ls);
+  leavelevel(ls);
+}
+
+
+/*
+** catch -> 'catch' expr funcblock
+** Compiled as a call 'catch(expr, function () body end)' of the base
+** function 'catch', which does the protected call and the matching.
+** (See .claude/plans/catch.md.)
+*/
+static void catchexp (LexState *ls, expdesc *v, int line) {
+  FuncState *fs = ls->fs;
+  expdesc cnd, f;
+  int base;
+  luaX_next(ls);  /* skip 'catch' */
+  buildvar(ls, luaX_newstring(ls, "catch", 5), v);  /* base function */
+  luaK_exp2nextreg(fs, v);
+  base = v->u.info;
+  expr(ls, &cnd);  /* condition, evaluated before the body */
+  luaK_exp2nextreg(fs, &cnd);
+  check(ls, '{');
+  closurebody(ls, &f, line, 1);
+  luaK_exp2nextreg(fs, &f);
+  init_exp(v, VCALL, luaK_codeABC(fs, OP_CALL, base, 3, 2));
+  luaK_fixline(fs, line);
+  fs->freereg = cast_byte(base + 1);  /* call removes function and arguments
+                                         and leaves one result (unless changed later) */
 }
 
 
@@ -1509,6 +1558,10 @@ static void primaryexp (LexState *ls, expdesc *v) {
         tagconstructor(ls, v, tag);
       else
         codestring(v, tag);
+      return;
+    }
+    case TK_CATCH: {
+      catchexp(ls, v, line);
       return;
     }
     case TK_NIL: {
@@ -2318,15 +2371,13 @@ static void localstat (LexState *ls, int line) {
     localfunc(ls, line);
     return;
   }
+  TString *names[MAXVARS];
+  int i;
   do {  /* for each variable */
-    TString *vname = str_checkname(ls);  /* get its name */
-    new_varkind(ls, vname, kind);  /* predeclare it */
-    if (kind == RDKTOCLOSE) {  /* to-be-closed? */
-      if (toclose != -1)  /* one already present? */
-        luaK_semerror(ls, "multiple to-be-closed variables in local list");
-      toclose = fs->nactvar + nvars;
-    }
-    nvars++;
+    luaY_checklimit(fs, nvars + 1, MAXVARS, "local variables");
+    names[nvars++] = str_checkname(ls);  /* get its name */
+    if (kind == RDKTOCLOSE && nvars > 1)  /* to-be-closed list? */
+      luaK_semerror(ls, "multiple to-be-closed variables in local list");
   } while (testnext(ls, ','));
   if (testnext(ls, '='))  /* initialization? */
     nexps = exprlist(ls, &e);
@@ -2334,8 +2385,35 @@ static void localstat (LexState *ls, int line) {
     e.k = VVOID;
     nexps = 0;
   }
+  /* declare the variables only now: the expressions may be blocks
+     declaring locals of their own in this function */
+  for (i = 0; i < nvars; i++)
+    new_varkind(ls, names[i], kind);
+  if (kind == RDKTOCLOSE)
+    toclose = fs->nactvar;
   adjust_assign(ls, nvars, nexps, &e);
   adjustlocalvars(ls, nvars);
+  checktoclose(fs, toclose);
+}
+
+
+/*
+** deferstat -> 'defer' funcblock
+** The body becomes a closure stored in a hidden to-be-closed local;
+** a function as a to-be-closed value is called when the variable goes
+** out of scope ('lfunc.c').
+*/
+static void deferstat (LexState *ls, int line) {
+  FuncState *fs = ls->fs;
+  expdesc f;
+  int toclose;
+  luaX_next(ls);  /* skip 'defer' */
+  check(ls, '{');
+  new_varkind(ls, luaX_newstring(ls, "(defer)", 7), RDKTOCLOSE);
+  toclose = fs->nactvar;
+  closurebody(ls, &f, line, 0);
+  adjust_assign(ls, 1, 1, &f);
+  adjustlocalvars(ls, 1);
   checktoclose(fs, toclose);
 }
 
@@ -2377,6 +2455,8 @@ static void retstat (LexState *ls) {
   int nret;  /* number of values being returned */
   int first = luaY_nvarstack(fs);  /* first slot to be returned */
   int line = ls->linenumber;
+  if (fs->iscatch)
+    luaK_semerror(ls, "cannot use 'return' inside 'catch'");
   luaX_next(ls);  /* skip 'return' */
   checknext(ls, '(');
   if (ls->t.token == ')')
@@ -2451,7 +2531,11 @@ static int statement (LexState *ls, expdesc *v) {
       escapestat(ls, line);
       break;
     }
-    case TK_DEFER: case TK_CATCH: case TK_AWAIT:
+    case TK_DEFER: {
+      deferstat(ls, line);
+      break;
+    }
+    case TK_AWAIT:
     case TK_EMIT: case TK_SPAWN: case TK_TOGGLE: case TK_PAR:
     case TK_WATCHING: case TK_THREAD: case TK_TASK: case TK_TASKS:
     case TK_TEST: case TK_MATCH: case TK_PUB: {

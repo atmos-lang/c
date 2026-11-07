@@ -43,13 +43,29 @@ value; `match`/`where`/`catch`/pipes pending).
 
 ## 4. Errors with multiple values
 
-Done: see [errors.md](errors.md). Errors carry n values on the stack
+Done: see [errors.md](errors.md) and [catch.md](catch.md) (`catch`,
+`throw`, `defer`, option (A): closure + protected call; VM try regions
+planned as option (B)). Errors carry n values on the stack
 (`throw(...)`, `lua_errorn`); `pcall`/`xpcall`/`coroutine.resume`/
 `coroutine.close` return them, handlers receive and return n values,
 `__close` gets value 1. Tests: `testes/throw.atm`. Next: `catch`/`throw`
 syntax and `defer` in the parser on top of it.
 
-## 5. Tail calls
+## 5. Compound expressions with live temporaries (bug)
+
+`do`/`if`/`loop` used as expressions take their value register at the
+level of the active locals (`luaY_nvarstack`), as if no temporaries
+were live. Inside call arguments or after an operand in a register
+(`print(do { 1 })`, `f() + do { ... }`) the block value overwrites the
+temporary (`print` becomes `1`: "attempt to call a number value").
+Locals declared inside such a block would also get registers below the
+temporaries. Fix idea: at the entry of a value block, when
+`freereg > nvarstack`, declare hidden locals covering the temporaries
+(as `(for state)` does) so that the invariant `freereg == nvarstack`
+holds inside; they disappear with the block. See catch.md for the
+related fixes already made.
+
+## 6. Tail calls
 
 - Tail call optimization is bad for error messages / tracebacks
   (`(...tail calls...)`). Could it be disabled? Or made explicit

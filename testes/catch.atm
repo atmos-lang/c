@@ -252,63 +252,26 @@ do {
     throw(:X)
   }
   assert(v == 1)
-  ;; break out of a loop from inside a catch
-  var i = 0
-  val r = loop {
-    set i = i + 1
-    catch :X {
-      if i == 3 { break(i * 10) }
-      throw(:X)
-    }
+  ;; 'break', 'escape' and 'return' cannot cross a 'catch' (the body is
+  ;; a closure): compile-time errors (see .claude/plans/catch.md)
+  val func err (src, msg) {
+    val f, m = load(src)
+    assert(!f && string.find(m, msg, 1, true), m)
   }
-  assert((r == 30) && (i == 3))
-  ;; escape through a catch
-  val r = do :T {
-    catch :X {
-      escape(:T, 1, 2)
-    }
-    99
+  err("loop { catch :X { break() } }", "break outside loop")
+  err("loop { catch :X { until(true) } }", "until outside loop")
+  err("do :T { catch :X { escape(:T) } }", "no enclosing block ':T' for <escape>")
+  err("func f () { catch :X { return(1) } }", "cannot use 'return' inside 'catch'")
+  err("func f (...) { catch :X { (...) } }", "cannot use '...' outside a vararg function")
+  ;; (loops and blocks inside the body are fine)
+  val ok, v = catch :X {
+    val r = loop { break(1) }
+    do :T { escape(:T, r + 1) }
   }
-  assert(r == 1)
-  val r = do :T {
-    catch :X {
-      catch true {
-        escape(:T, 7)
-      }
-    }
-    99
-  }
-  assert(r == 7)
-  ;; return from inside a catch
-  val func f (x) {
-    catch :X {
-      if x { return(x, 2) }
-      throw(:X)
-    }
-    0
-  }
-  val a, b = f(1)
-  assert((a == 1) && (b == 2) && (f(false) == 0))
-  ;; after leaving a catch by break/escape/return, later errors are not
-  ;; caught by it
-  val func g () {
-    loop {
-      catch :X { break() }
-    }
-    throw(:X)
-  }
-  val st, e = pcall(g)
-  assert(!st && (e == :X))
-  ;; until/while inside catch
-  set i = 0
-  loop {
-    catch :X {
-      set i = i + 1
-      until(i == 5)
-      throw(:X)
-    }
-  }
-  assert(i == 5)
+  assert(ok && (v == 2))
+  ;; a function inside the body can 'return'
+  val ok, v = catch :X { (\{ return(3) })() }
+  assert(ok && (v == 3))
 }
 
 ;; ---- catch in coroutines and C callbacks
@@ -356,16 +319,16 @@ do {
   assert(!st && (a == :Y) && (b == 1))
   ;; catch inside a callback called from C
   val s = string.gsub("abc", ".", \(c){
-    val ok, e = catch :X { throw(:X, c ++ c) }
+    val ok, _, e = catch :X { throw(:X, c ++ c) }
     e
   })
   assert(s == "aabbcc")
   val s = string.gsub("ab", ".", \(c){
-    val ok, e = catch :X {
+    val ok, x, e = catch :X {
       if c == "a" { throw(:X, "A") }
       "B"
     }
-    e
+    if ok { x } else { e }
   })
   assert(s == "AB")
   val t = [3, 1, 2]
@@ -377,7 +340,7 @@ do {
   ;; error inside a C function inside the body
   val ok, e = catch true { string.rep("x", -1, 3) }
   assert(ok)
-  val ok, e = catch true { ("x")::rep(1e10) }
+  val ok, e = catch true { ("xx")::rep(math.maxinteger) }
   assert(!ok && string.find(e, "too large"))
   ;; stack overflow inside the body
   val func rec () { rec() ; nil }
@@ -526,6 +489,30 @@ do {
   assert(table.concat(log) == "12")
 }
 
+;; ---- value blocks with locals, closures and to-be-closed variables
+;; (regressions: locals declared inside the initializer of 'val'/'var'
+;; got shifted registers; a '__close' call clobbered the block value)
+
+do {
+  val v = do { var x = 1; val d = 5; x }
+  assert(v == 1)
+  val v = do { var x = 1; val d = \{ set x = 100 }; x + 1 }
+  assert(v == 2)
+  val v = do { var x = 1; pin p = setmetatable([], [__close = \{ set x = 3 }]); x + 1 }
+  assert(v == 2)
+  val v = do { pin p = setmetatable([], [__close = \{ }]); 7 }
+  assert(v == 7)
+  val a, b = (do { val t = [1, 2]; t@1 }, 2)
+  assert((a == 1) && (b == 2))
+  var w = 0
+  set w = do { var x = 10; defer { set x = 0 }; x }
+  assert(w == 10)
+  val v = if true { val x = 1; val y = \{ x }; y() } else { 0 }
+  assert(v == 1)
+  val v = loop { val x = 5; defer { assert(x == 5) }; break(x) }
+  assert(v == 5)
+}
+
 ;; ---- syntax errors
 
 do {
@@ -536,8 +523,8 @@ do {
   err("catch :X", "'{' expected")
   err("catch { }", "unexpected symbol")
   err("defer", "'{' expected")
-  err("defer { break() }", "break outside a loop")
-  err("loop { defer { break() } }", "break outside a loop")
+  err("defer { break() }", "break outside loop")
+  err("loop { defer { break() } }", "break outside loop")
   assert(load("defer { return(1) }; 1"))  ;; return inside defer is allowed
 }
 

@@ -37,6 +37,28 @@ the `catch` stack-trace output of the reference, tasks interactions
 
 ## Mechanism for `catch`
 
+Status: implemented with option (A) (`luaB_catch` in `lbaselib.c`,
+`catchexp`/`deferstat` in `lparser.c`, function values closable in
+`lfunc.c`); (B) stays as the planned replacement when `break`/`escape`/
+`return` across `catch` are needed. `testes/catch.atm` passes; its
+"jumps across catch" cases are compile errors for now.
+
+Two bugs of the Atmos front end surfaced with `defer` in value blocks
+and were fixed on the way: (1) `val x = <expr>` predeclared `x` before
+parsing the expression (as Lua does), so locals declared by a block
+inside the expression got shifted registers; the names are now
+declared after the initializer. (2) `OP_CLOSE` placed the `__close`
+call right above the closed variable, clobbering the temporary that
+holds a block's value; it now closes "at top" like `OP_RETURN`.
+The debug build (`ltests.h`, which stresses register allocation with
+`MAXINDEXRK 1`) found two more: (3) the value register of a compound
+expression was not reserved (`value_result`), so a function ending in
+`if`/`do`/`loop` could have a frame one slot too small; (4) tagged
+constructors did not free the register of the `tag` key when it did not
+fit as a constant. Still open (TODO.md): a compound expression used
+while temporaries are live (`print(do { 1 })`, `f() + do { ... }`)
+takes its value register at the local level, below the temporaries.
+
 Two options.
 
 ### (A) closure + `pcall` (what the reference does)

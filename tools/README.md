@@ -68,6 +68,11 @@ Semantics assumed for the Atmos implementation (the tests rely on them):
   non-table operand is an error
 - error messages, variable-kind names (global/local/upvalue/field/method/
   constant) and syntax-error formats are Lua's
+- `catch CND { }` evaluates to `true, values` or `false, e1, ..., en`;
+  the body is a closure (no `break`/`escape`/`return` across it, no
+  `...`); `defer { }` is a closure in a hidden to-be-closed slot: a
+  function as a to-be-closed value is called on close (see
+  `.claude/plans/catch.md`, `testes/catch.atm`)
 - errors carry several values: `throw(e1, ..., en)` raises them all (no
   position prefix), `pcall` returns `false, e1, ..., en`, `xpcall`
   handlers receive them all and their results replace them, `__close`
