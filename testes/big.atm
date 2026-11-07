@@ -1,0 +1,86 @@
+;; $Id: testes/big.lua $
+;; See Copyright Notice in file lua.h
+
+if _soft {
+  return('a')
+}
+
+print("testing large tables")
+
+val debug = require("debug")
+
+val lim = (2 ** 18) + 1000
+var prog = ["0"]
+loop i in (1, lim) {
+  set prog@(#prog + 1) = i
+}
+set prog = "val y = [" ++ (table.concat(prog, ",") ++ "]\n")
+set prog = prog ++ ("set X = y\n" ++ (("assert(X@(%d) == %d)\n")::format(lim - 1, lim - 2) ++ "0\n"))
+
+val env = [string=string, assert=assert]
+var f = assert(load(prog, nil, nil, env))
+
+f()
+assert((env.X@(lim) == (lim - 1)) && (env.X@(lim + 1) == lim))
+loop k in pairs(env) {
+  set env@(k) = undef
+}
+
+;; yields during accesses larger than K (in RK)
+setmetatable(env, [__index=func (t, n) {
+  coroutine.yield('g')
+  return(_G@(n))
+}, __newindex=func (t, n, v) {
+  coroutine.yield('s')
+  set _G@(n) = v
+}])
+
+set X = nil
+val co = coroutine.wrap(f)
+assert(co() == 's')
+assert(co() == 'g')
+assert(co() == 'g')
+assert(co() == 0)
+
+assert((X@(lim) == (lim - 1)) && (X@(lim + 1) == lim))
+
+;; errors in accesses larger than K (in RK)
+set getmetatable(env).__index = func () {}
+set getmetatable(env).__newindex = func () {}
+val e, m = pcall(f)
+assert(!e && m::find("global 'X'"))
+
+;; errors in metamethods 
+set getmetatable(env).__newindex = func () {
+  error("hi")
+}
+val e, m = xpcall(f, debug.traceback)
+assert(!e && m::find("'newindex'"))
+
+set f, X = nil
+
+coroutine.yield('b')
+
+if (2 ** 32) == 0 {  ;; (small integers) {   
+
+  print("testing string length overflow")
+
+  val repstrings = 192  ;; number of strings to be concatenated
+  val ssize = math.ceil((2.0 ** 32) / repstrings) + 1  ;; size of each string
+
+  assert((repstrings * ssize) > (2.0 ** 32))  ;; it should be larger than maximum size
+
+  val longs = string.rep("\0", ssize)  ;; create one long string
+
+  ;; create function to concatenate 'repstrings' copies of its argument
+  val rep = assert(load("val a = ...; " ++ string.rep("a", repstrings, " ++ ")))
+
+  val a, b = pcall(rep, longs)  ;; call that function
+
+  ;; it should fail without creating string (result would be too large)
+  assert(!a && string.find(b, "overflow"))
+}  ;; }
+
+print('OK')
+
+return('a')
