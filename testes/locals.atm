@@ -1,0 +1,1313 @@
+;; $Id: testes/locals.lua $
+;; See Copyright Notice in file lua.h
+
+;; (global *)
+
+print('testing local variables and environments')
+
+val debug = require("debug")
+
+val tracegc = require("tracegc")
+
+;; bug in 5.1:
+
+var f
+set f = func (x) {
+  set x = nil
+  return(x)
+}
+assert(f(10) == nil)
+
+var f
+set f = func () {
+  val x
+  return(x)
+}
+assert(f(10) == nil)
+
+var f
+set f = func (x) {
+  set x = nil
+  val y
+  return(x, y)
+}
+assert((f(10) == nil) && (select(2, f(20)) == nil))
+
+do {
+  val i = 10
+  do {
+    val i = 100
+    assert(i == 100)
+  }
+  do {
+    val i = 1000
+    assert(i == 1000)
+  }
+  assert(i == 10)
+  if i != 10 {
+    val i = 20
+  } else {
+    val i = 30
+    assert(i == 30)
+  }
+}
+
+set f = nil
+
+var f
+var x = 1
+
+do {
+  ;; (global a)
+  set a = nil
+  load('val a = []')()
+  assert(a == nil)
+}
+
+func f (a) {
+  val _1, _2, _3, _4, _5
+  val _6, _7, _8, _9, _10
+  var x = 3
+  val b = a
+  val c, d = (a, b)
+  if (d == b) {
+    var x = 'q'
+    set x = b
+    assert(x == 2)
+  } else {
+    assert(nil)
+  }
+  assert(x == 3)
+  val f = 10
+}
+
+var b = 10
+var a
+loop {
+  var b
+  set a, b = (1, 2)
+  assert((a + 1) == b)
+  until((a + b) == 3)
+}
+
+assert(x == 1)
+
+f(2)
+assert(type(f) == 'function')
+
+val func getenv (f) {
+  val a, b = debug.getupvalue(f, 1)
+  assert(a == '_ENV')
+  return(b)
+}
+
+;; test for global table of loaded chunks
+assert(getenv(load("set a = 3")) == _G)
+val c = []
+val f = load("set a = 3", nil, nil, c)
+assert(getenv(f) == c)
+assert(c.a == nil)
+f()
+assert(c.a == 3)
+
+;; old test for limits for special instructions
+do {
+  var i = 2
+  var p = 4  ;; p == 2^i
+  loop {
+    loop j in (-3, 3) {
+      assert(load(string.format("""var a = %s;
+                                        set a = a + %s;
+                                        assert(a == (2 ** %s))""", j, p - j, i), ''))()
+      assert(load(string.format("""var a = %s;
+                                        set a = a - %s;
+                                        assert(a == -(2 ** %s))""", -j, p - j, i), ''))()
+      assert(load(string.format("""var a, b = (0, %s);
+                                        set a = b - %s;
+                                        assert(a == -(2 ** %s))""", -j, p - j, i), ''))()
+    }
+    set p = 2 * p
+    set i = i + 1
+    until(p <= 0)
+  }
+}
+
+print('+')
+
+if rawget(_G, "T") {
+  ;; testing clearing of dead elements from tables
+  collectgarbage("stop")  ;; stop GC
+  val a = [@([])=4, @(3)=0, alo=1, a1234567890123456789012345678901234567890=10]
+
+  val t = T.querytab(a)
+
+  loop k, _ in pairs(a) {
+    set a@(k) = undef
+  }
+  collectgarbage()  ;; restore GC and collect dead fields in 'a'
+  loop i in (0, t - 1) {
+    val k = querytab(a, i)
+    assert((k == nil) || (type(k) == 'number') || (k == 'alo'))
+  }
+
+  ;; testing allocation errors during table insertions
+  val a = []
+  val func additems () {
+    set a.x = true
+    set a.y = true
+    set a.z = true
+    set a@(1) = true
+    set a@(2) = true
+  }
+  loop i in (1, math.huge) {
+    T.alloccount(i)
+    val st, msg = pcall(additems)
+    T.alloccount()
+    var count = 0
+    loop k, v in pairs(a) {
+      assert(a@(k) == v)
+      set count = count + 1
+    }
+    if st {
+      assert(count == 5)
+      break()
+    }
+  }
+}
+
+;; testing lexical environments
+
+assert(_ENV == _G)
+
+do {
+  val dummy
+  val _ENV = (func (...) {
+    return(...)  ;; {
+  })(_G, dummy)
+
+  do {
+    val _ENV = [assert=assert]
+    assert(true)
+  }
+  val mt = [_G=_G]
+  var foo, x
+  ;; (global A)  ;; "declare" A
+  set A = false
+  do {
+    val _ENV = mt
+    func foo (x) {
+      set A = x
+      do {
+        val _ENV = _G
+        set A = 1000
+      }
+      return(func (x) {
+        return(A ++ x)
+      })
+    }
+  }
+  assert(getenv(foo) == mt)
+  set x = foo('hi')
+  assert((mt.A == 'hi') && (A == 1000))
+  assert(x('*') == (mt.A ++ '*'))
+
+  do {
+    val _ENV = [assert=assert, A=10]
+    do {
+      val _ENV = [assert=assert, A=20]
+      assert(A == 20)
+      set x = A
+    }
+    assert((A == 10) && (x == 20))
+  }
+  assert(x == 20)
+
+  set A = nil
+
+  do {
+    print("testing local constants")
+    ;; (global assert, load, string, X)
+    set X = 1  ;; not a constant
+    val a, b, c = (10, 20, 30)
+    set b = a + c + b  ;; 'b' is not constant
+    assert((a == 10) && (b == 60) && (c == 30))
+
+    val func checkro (name, code) {
+      val st, msg = load(code)
+      val gab = string.format("attempt to assign to const variable '%s'", name)
+      assert(!st && string.find(msg, gab))
+    }
+
+    checkro("y", "var x = 10; val y = 20; var z = 30; set x = 11; set y = 12")
+    checkro("x", "val x = 10; var y = 20; val z = 30; set x = 11")
+    checkro("z", "val x = 10; var y = 20; val z = 30; set y = 10; set z = 11")
+    checkro("foo", "val foo = 10; set foo = func () {}")
+    checkro("foo", "val foo = []; set foo = func () {}")
+
+    checkro("z", """    var a = 10; val z; var b;
+    func foo () { set a = 20; set z = 32 }
+  """)
+
+    checkro("var1", """    var a = 10; val var1;
+    func foo () { set a = 20; set z = func () { set var1 = 12 } }
+  """)
+  }
+
+  print("testing to-be-closed variables")
+
+  ;; (Lua: 'local <close> a, b' -> "multiple to-be-closed variables")
+
+  var stack
+  set stack = func (n) {
+    set n = ((n == 0) || stack(n - 1))
+  }
+
+  val func func2close (f, x, y) {
+    val obj = setmetatable([], [__close=f])
+    if x {
+      return(x, obj, y)
+    } else {
+      return(obj)
+    }
+  }
+
+  do {
+    val a = []
+    do {
+      pin b = false  ;; not to be closed
+      pin x = setmetatable(["x"], [__close=func (self) {
+        set a@(#a + 1) = self@(1)
+      }])
+      val w, y_, z = func2close(func (self, err) {
+        assert(err == nil)
+        set a@(#a + 1) = "y"
+      }, 10, 20)
+      pin y = y_
+      pin c = nil  ;; not to be closed
+      set a@(#a + 1) = "in"
+      assert((w == 10) && (z == 20))
+    }
+    set a@(#a + 1) = "out"
+    assert((a@(1) == "in") && (a@(2) == "y") && (a@(3) == "x") && (a@(4) == "out"))
+  }
+
+  do {
+    var X = false
+
+    var x, closescope = func2close(func (_, msg) {
+      stack(10)
+      assert(msg == nil)
+      set X = true
+    }, 100)
+    assert(x == 100)  ;; 'x' is not read-only
+    set x = 101
+
+    ;; closing functions do not corrupt returning values
+    var foo
+    set foo = func (x) {
+      pin _ = closescope
+      return(x, X, 23)
+    }
+
+    val a, b, c = foo(1.5)
+    assert((a == 1.5) && (b == false) && (c == 23) && (X == true))
+
+    set X = false
+    set foo = func (x) {
+      pin _ = func2close(func (_, msg) {
+        ;; without errors, enclosing function should be still active when
+        ;; __close is called
+        assert(debug.getinfo(2).name == "foo")
+        assert(msg == nil)
+      })
+      pin _ = closescope
+      val y = 15
+      return(y)
+    }
+
+    assert((foo() == 15) && (X == true))
+
+    set X = false
+    set foo = func () {
+      pin x = closescope
+      return(x)
+    }
+
+    assert((foo() == closescope) && (X == true))
+  }
+
+  do {  ;; testing presence of second argument
+    val func foo (howtoclose, obj, n) {
+      var ca  ;; copy of 'a' visible inside its close metamethod
+      do {
+        pin a = func2close(func (...) {
+          val t = table.pack(...)
+          assert(select("#", ...) == n)
+          assert((t.n == n) && (t@(1) == ca) && ((t.n < 2) || (t@(2) == obj)))
+          set ca = 15  ;; final value to be returned if howtoclose=="scope"
+        })
+        set ca = a
+        ifs {  ;; 'a' closed by return
+          howtoclose == "ret" => {
+            return(obj)
+          }
+          howtoclose == "err" => {  ;; 'a' closed by error
+            error(obj)
+          }
+        }
+      }  ;; 'a' closed by end of scope
+      return(ca)  ;; ca now should be 15
+    }
+    ;; with no errors, closing methods receive no extra argument
+    assert(foo("scope", nil, 1) == 15)  ;; close by end of scope
+    assert(foo("ret", 32, 1) == 32)  ;; close by return
+    ;; with errors, they do
+    val st, msg = pcall(foo, "err", 23, 2)  ;; close by error
+    assert(!st && (msg == 23))
+  }
+
+  ;; testing to-be-closed x compile-time constants
+  ;; (there were some bugs here in Lua 5.4-rc3, due to a confusion
+  ;; between compile levels and stack levels of variables)
+  do {
+    var flag = false
+    val x = setmetatable([], [__close=func () {
+      assert(flag == false)
+      set flag = true
+    }])
+    val y = nil
+    val z = nil
+    do {
+      pin a = x
+    }
+    assert(flag)  ;; 'x' must be closed here
+  }
+
+  do {
+    ;; similar problem, but with implicit close in for loops
+    var flag = false
+    val x = setmetatable([], [__close=func () {
+      assert(flag == false)
+      set flag = true
+    }])
+    ;; return an empty iterator, nil, nil, and 'x' to be closed
+    var a
+    set a = func () {
+      return((func () {
+        return(nil)
+      }), nil, nil, x)
+    }
+    val v = 1
+    val w = 1
+    val x = 1
+    val y = 1
+    val z = 1
+    loop k in a() {
+      set a = k
+    }  ;; ending the loop must close 'x'
+    assert(flag)  ;; 'x' must be closed here
+  }
+
+  do {
+    ;; calls cannot be tail in the scope of to-be-closed variables
+    var X, Y
+    val func foo () {
+      pin _ = func2close(func () {
+        set Y = 10
+      })
+      assert((X == true) && (Y == nil))  ;; 'X' not closed yet
+      return(1, 2, 3)
+    }
+
+    val func bar () {
+      pin _ = func2close(func () {
+        set X = false
+      })
+      set X = true
+      do {
+        return(foo())  ;; not a tail call!
+      }
+    }
+
+    val a, b, c, d = bar()
+    assert((a == 1) && (b == 2) && (c == 3) && (X == false) && (Y == 10) && (d == nil))
+  }
+
+  do {
+    ;; bug in 5.4.3: previous condition (calls cannot be tail in the
+    ;; scope of to-be-closed variables) must be valid for tbc variables
+    ;; created by 'for' loops.
+
+    var closed = false
+
+    val func foo () {
+      return(func () {
+        return(true)
+      }, 0, 0, func2close(func () {
+        set closed = true
+      }))
+    }
+
+    val func tail () {
+      return(closed)
+    }
+
+    val func foo1 () {
+      loop k in foo() {
+        return(tail())
+      }
+    }
+
+    assert(foo1() == false)
+    assert(closed == true)
+  }
+
+  do {
+    ;; bug in 5.4.4: 'break' may generate wrong 'close' instruction when
+    ;; leaving a loop block.
+
+    var closed = false
+
+    val o1 = setmetatable([], [__close=func () {
+      set closed = true
+    }])
+
+    val func test_ () {
+      loop k, v in (next, [], nil, o1) {
+        val func f () {  ;; create an upvalue
+          return(k)
+        }
+        break()
+      }
+      assert(closed)
+    }
+
+    test_()
+  }
+
+  do {
+    print("testing errors in __close")
+
+    ;; original error is in __close
+    val func foo () {
+
+      pin x = func2close(func (self, msg) {
+
+        assert(string.find(msg, "@y"))
+        error("@x")
+      })
+
+      pin x1 = func2close(func (self, msg) {
+
+        assert(string.find(msg, "@y"))
+      })
+
+      pin gc = func2close(func () {
+        collectgarbage()
+      })
+
+      pin y = func2close(func (self, msg) {
+
+        assert(string.find(msg, "@z"))  ;; error in 'z'
+        error("@y")
+      })
+
+      pin z = func2close(func (self, msg) {
+
+        assert(msg == nil)
+        error("@z")
+      })
+
+      return(200)
+    }
+
+    val stat, msg = pcall(foo, false)
+    assert(string.find(msg, "@x"))
+
+    ;; original error not in __close
+    val func foo () {
+
+      pin x = func2close(func (self, msg) {
+
+        ;; after error, 'foo' was discarded, so caller now
+        ;; must be 'pcall'
+        assert(debug.getinfo(2).name == "pcall")
+        assert(string.find(msg, "@x1"))
+      })
+
+      pin x1 = func2close(func (self, msg) {
+
+        assert(debug.getinfo(2).name == "pcall")
+        assert(string.find(msg, "@y"))
+        error("@x1")
+      })
+
+      pin gc = func2close(func () {
+        collectgarbage()
+      })
+
+      pin y = func2close(func (self, msg) {
+
+        assert(debug.getinfo(2).name == "pcall")
+        assert(string.find(msg, "@z"))
+        error("@y")
+      })
+
+      var first = true
+      pin z = func2close(func (self, msg) {
+
+        assert(debug.getinfo(2).name == "pcall")
+        ;; 'z' close is called once
+        assert(first && (msg == 4))
+        set first = false
+        error("@z")
+      })
+
+      error(4)  ;; original error
+    }
+
+    val stat, msg = pcall(foo, true)
+    assert(string.find(msg, "@x1"))
+
+    ;; error leaving a block
+    val func foo (...) {
+      do {
+        pin x1 = func2close(func (self, msg) {
+
+          assert(string.find(msg, "@X"))
+          error("@Y")
+        })
+
+        pin x123 = func2close(func (_, msg) {
+
+          assert(msg == nil)
+          error("@X")
+        })
+      }
+      os.exit(false)  ;; should not run
+    }
+
+    val st, msg = xpcall(foo, debug.traceback)
+    assert(string.match(msg, "^[^ ]* @Y"))
+
+    ;; error in toclose in vararg function
+    val func foo (...) {
+      pin x123 = func2close(func () {
+        error("@x123")
+      })
+    }
+
+    val st, msg = xpcall(foo, debug.traceback)
+    assert(string.match(msg, "^[^ ]* @x123"))
+    assert(string.find(msg, "in metamethod 'close'"))
+  }
+
+  do {  ;; errors due to non-closable values
+    val func foo () {
+      pin x = []
+      os.exit(false)  ;; should not run
+    }
+    val stat, msg = pcall(foo)
+    assert(!stat && string.find(msg, "variable 'x' got a non%-closable value"))
+
+    val func foo () {
+      pin xyz = setmetatable([], [__close=print])
+      set getmetatable(xyz).__close = nil  ;; remove metamethod
+    }
+    val stat, msg = pcall(foo)
+    assert(!stat && string.find(msg, "metamethod 'close'"))
+
+    val func foo () {
+      pin a1 = func2close(func (_, msg) {
+        assert(string.find(msg, "number value"))
+        error(12)
+      })
+      pin a2 = setmetatable([], [__close=print])
+      pin a3 = func2close(func (_, msg) {
+        assert(msg == nil)
+        error(123)
+      })
+      set getmetatable(a2).__close = 4  ;; invalidate metamethod
+    }
+    val stat, msg = pcall(foo)
+    assert(!stat && (msg == 12))
+  }
+
+  do {  ;; tbc inside close methods
+    val track = []
+    val func foo () {
+      pin x = func2close(func () {
+        pin xx = func2close(func (_, msg) {
+          assert(msg == nil)
+          set track@(#track + 1) = "xx"
+        })
+        set track@(#track + 1) = "x"
+      })
+      set track@(#track + 1) = "foo"
+      return(20, 30, 40)
+    }
+    val a, b, c, d = foo()
+    assert((a == 20) && (b == 30) && (c == 40) && (d == nil))
+    assert((track@(1) == "foo") && (track@(2) == "x") && (track@(3) == "xx"))
+
+    ;; again, with errors
+    val track = []
+    val func foo () {
+      pin x0 = func2close(func (_, msg) {
+        assert(msg == 202)
+        set track@(#track + 1) = "x0"
+      })
+      pin x = func2close(func () {
+        pin xx = func2close(func (_, msg) {
+          assert(msg == 101)
+          set track@(#track + 1) = "xx"
+          error(202)
+        })
+        set track@(#track + 1) = "x"
+        error(101)
+      })
+      set track@(#track + 1) = "foo"
+      return(20, 30, 40)
+    }
+    val st, msg = pcall(foo)
+    assert(!st && (msg == 202))
+    assert((track@(1) == "foo") && (track@(2) == "x") && (track@(3) == "xx") && (track@(4) == "x0"))
+  }
+
+  val func checktable (t1, t2) {
+    assert(#t1 == #t2)
+    loop i in (1, #t1) {
+      assert(t1@(i) == t2@(i))
+    }
+  }
+
+  do {  ;; test for tbc variable high in the stack
+
+    ;; function to force a stack overflow
+    var overflow
+    set overflow = func (n) {
+      overflow(n + 1)
+    }
+
+    ;; error handler will create tbc variable handling a stack overflow,
+    ;; high in the stack
+    val func errorh (m) {
+      assert(string.find(m, "stack overflow"))
+      pin x = func2close(func (o) {
+        set o@(1) = 10
+      })
+      return(x)
+    }
+
+    var flag
+    var st, obj
+    ;; run test in a coroutine so as not to swell the main stack
+    val co = coroutine.wrap(func () {
+      ;; tbc variable down the stack
+      pin y = func2close(func (obj, msg) {
+        assert(msg == nil)
+        set obj@(1) = 100
+        set flag = obj
+      })
+      tracegc.stop()
+      set st, obj = xpcall(overflow, errorh, 0)
+      tracegc.start()
+    })
+    co()
+    assert(!st && (obj@(1) == 10) && (flag@(1) == 100))
+  }
+
+  if rawget(_G, "T") {
+
+    do {
+      ;; bug in 5.4.3
+      ;; 'lua_settop' may use a pointer to stack invalidated by 'luaF_close'
+
+      ;; reduce stack size
+      collectgarbage()
+      collectgarbage()
+      collectgarbage()
+
+      ;; force a stack reallocation
+      var loop_
+      set loop_ = func (n) {
+        if n < 400 {
+          loop_(n + 1)
+        }
+      }
+
+      ;; close metamethod will reallocate the stack
+      val o = setmetatable([], [__close=func () {
+        loop_(0)
+      }])
+
+      val script = """toclose 2; settop 1; return 1"""
+
+      assert(T.testC(script, o) == script)
+    }
+
+    ;; memory error inside closing function
+    val func foo () {
+      pin y = func2close(func () {
+        T.alloccount()
+      })
+      pin x = setmetatable([], [__close=func () {
+        T.alloccount(0)  ;; force a memory error
+        val x = []
+      }])
+      error(1000)  ;; common error inside the function's body
+    }
+
+    stack(5)  ;; ensure a minimal number of CI structures
+
+    ;; despite memory error, 'y' will be executed and
+    ;; memory limit will be lifted
+    val _, msg = pcall(foo)
+    assert(msg == "not enough memory")
+
+    var closemsg
+    val close = func2close(func (self, msg) {
+      T.alloccount()
+      set closemsg = msg
+    })
+
+    ;; set a memory limit and return a closing object to remove the limit
+    val func enter (count) {
+      stack(10)  ;; reserve some stack space
+      T.alloccount(count)
+      set closemsg = nil
+      return(close)
+    }
+
+    val func test_ () {
+      pin x = enter(0)  ;; set a memory limit
+      val y = []  ;; raise a memory error
+    }
+
+    val _, msg = pcall(test_)
+    assert((msg == "not enough memory") && (closemsg == "not enough memory"))
+
+    ;; repeat test with extra closing upvalues
+    val func test_ () {
+      pin xxx = func2close(func (self, msg) {
+        assert(msg == "not enough memory")
+        error(1000)  ;; raise another error
+      })
+      pin xx = func2close(func (self, msg) {
+        assert(msg == "not enough memory")
+      })
+      pin x = enter(0)  ;; set a memory limit
+      val y = []  ;; raise a memory error
+    }
+
+    val _, msg = pcall(test_)
+    assert((msg == 1000) && (closemsg == "not enough memory"))
+
+    do {  ;; testing 'toclose' in C string buffer
+      collectgarbage()
+      var s = string.rep('a', 10000)  ;; large string
+      val m = T.totalmem()
+      collectgarbage("stop")
+      set s = string.upper(s)  ;; allocate buffer + new string (10K each)
+      ;; ensure buffer was deallocated
+      assert((T.totalmem() - m) <= 11000)
+      collectgarbage("restart")
+    }
+
+    do {  ;; now some tests for freeing buffer in case of errors
+      val lim = 10000  ;; some size larger than the static buffer
+      val extra = 2000  ;; some extra memory (for callinfo, etc.)
+
+      val s = string.rep("a", lim)
+
+      ;; concat this table needs two buffer resizes (one for each 's')
+      val a = [s, s]
+
+      collectgarbage()
+      collectgarbage()
+
+      val m = T.totalmem()
+      collectgarbage("stop")
+
+      ;; error in the first buffer allocation
+      T.totalmem(m + extra)
+      assert(!pcall(table.concat, a))
+      ;; first buffer was not even allocated
+      assert((T.totalmem() - m) <= extra)
+
+      ;; error in the second buffer allocation
+      T.totalmem(m + lim + extra)
+      assert(!pcall(table.concat, a))
+      ;; first buffer was released by 'toclose'
+      assert((T.totalmem() - m) <= extra)
+
+      ;; userdata, buffer, final string
+      T.totalmem(m + (2 * lim) + extra)
+      assert(#table.concat(a) == (2 * lim))
+
+      T.totalmem(0)  ;; remove memory limit
+      collectgarbage("restart")
+
+      print('+')
+    }
+
+    do {
+      ;; '__close' vs. return hooks in C functions
+      val trace = []
+
+      val func hook (event) {
+        set trace@(#trace + 1) = event ++ (" " ++ (debug.getinfo(2).name || "?"))
+      }
+
+      ;; create tbc variables to be used by C function
+      val x = func2close(func (_, msg) {
+        set trace@(#trace + 1) = "x"
+      })
+
+      val y = func2close(func (_, msg) {
+        set trace@(#trace + 1) = "y"
+      })
+
+      debug.sethook(hook, "r")
+      val t = [T.testC("""       toclose 2      # x
+       pushnum 10
+       pushint 20
+       toclose 3      # y
+       return 2
+    """, x, y)]
+      debug.sethook()
+
+      ;; hooks ran before return hook from 'testC'
+      checktable(trace, ["return sethook", "y", "return ?", "x", "return ?", "return testC"])
+      ;; results are correct
+      checktable(t, [10, 20])
+    }
+  }
+
+  do {  ;; '__close' vs. return hooks in Lua functions
+    val trace = []
+
+    val func hook (event) {
+      set trace@(#trace + 1) = event ++ (" " ++ debug.getinfo(2).name)
+    }
+
+    val func foo (...) {
+      pin x = func2close(func (_, msg) {
+        set trace@(#trace + 1) = "x"
+      })
+
+      pin y = func2close(func (_, msg) {
+        debug.sethook(hook, "r")
+      })
+
+      return(...)
+    }
+
+    val t = [foo(10, 20, 30)]
+    debug.sethook()
+    checktable(t, [10, 20, 30])
+    checktable(trace, ["return sethook", "return close", "x", "return close", "return foo"])
+  }
+
+  print("to-be-closed variables in coroutines")
+
+  do {
+    ;; yielding inside closing metamethods
+
+    val trace = []
+    val co = coroutine.wrap(func () {
+
+      set trace@(#trace + 1) = "nowX"
+
+      ;; will be closed after 'y'
+      pin x = func2close(func (_, msg) {
+        assert(msg == nil)
+        set trace@(#trace + 1) = "x1"
+        coroutine.yield("x")
+        set trace@(#trace + 1) = "x2"
+      })
+
+      return(pcall(func () {
+        do {  ;; 'z' will be closed first
+          pin z = func2close(func (_, msg) {
+            assert(msg == nil)
+            set trace@(#trace + 1) = "z1"
+            coroutine.yield("z")
+            set trace@(#trace + 1) = "z2"
+          })
+        }
+
+        set trace@(#trace + 1) = "nowY"
+
+        ;; will be closed after 'z'
+        pin y = func2close(func (_, msg) {
+          assert(msg == nil)
+          set trace@(#trace + 1) = "y1"
+          coroutine.yield("y")
+          set trace@(#trace + 1) = "y2"
+        })
+
+        return(10, 20, 30)
+      }))
+    })
+
+    assert(co() == "z")
+    assert(co() == "y")
+    assert(co() == "x")
+    checktable([co()], [true, 10, 20, 30])
+    checktable(trace, ["nowX", "z1", "z2", "nowY", "y1", "y2", "x1", "x2"])
+  }
+
+  do {
+    ;; yielding inside closing metamethods while returning
+    ;; (bug in 5.4.3)
+
+    var extrares  ;; result from extra yield (if any)
+
+    val func check (body, extra, ...) {
+      val t = table.pack(...)
+      val co = coroutine.wrap(body)
+      if extra {
+        set extrares = co()  ;; runs until first (extra) yield
+      }
+      val res = table.pack(co())  ;; runs until "regular" yield
+      ;; regular yield will yield all values passed to the close function;
+      ;; without errors, that is only the object being closed.
+      assert((res.n == 1) && (type(res@(1)) == "table"))
+      val res2 = table.pack(co())  ;; runs until end of function
+      assert(res2.n == t.n)
+      loop i in (1, #t) {
+        if t@(i) == "x" {
+          assert(res2@(i) == res@(1))  ;; value that was closed
+        } else {
+          assert(res2@(i) == t@(i))
+        }
+      }
+    }
+
+    val func foo () {
+      pin x = func2close(coroutine.yield)  ;; "regular" yield
+      pin extra = func2close(func (self) {
+        assert(self == extrares)
+        coroutine.yield(100)  ;; first (extra) yield
+      })
+      set extrares = extra
+      return(table.unpack([10, x, 30]))
+    }
+    check(foo, true, 10, "x", 30)
+    assert(extrares == 100)
+
+    val func foo () {
+      pin x = func2close(coroutine.yield)  ;; "regular" yield
+      return()
+    }
+    check(foo, false)
+
+    val func foo () {
+      pin x = func2close(coroutine.yield)  ;; "regular" yield
+      val y, z = (20, 30)
+      return(x)
+    }
+    check(foo, false, "x")
+
+    val func foo () {
+      pin x = func2close(coroutine.yield)  ;; "regular" yield
+      pin extra = func2close(coroutine.yield)  ;; extra yield
+      return(table.unpack([], 1, 100))  ;; 100 nils
+    }
+    check(foo, true, table.unpack([], 1, 100))
+  }
+
+  do {
+    ;; yielding inside closing metamethods after an error
+
+    val co = coroutine.wrap(func () {
+
+      val func foo (err) {
+
+        pin z = func2close(func (_, msg) {
+          assert((msg == nil) || (msg == (err + 20)))
+          coroutine.yield("z")
+          return(100, 200)
+        })
+
+        pin y = func2close(func (_, msg) {
+          ;; still gets the original error (if any)
+          assert((msg == err) || ((msg == nil) && (err == 1)))
+          coroutine.yield("y")
+          if err {  ;; creates or changes the error
+            error(err + 20)
+          }
+        })
+
+        pin x = func2close(func (_, msg) {
+          assert((msg == err) || ((msg == nil) && (err == 1)))
+          coroutine.yield("x")
+          return(100, 200)
+        })
+
+        if err == 10 {
+          error(err)
+        } else {
+          return(10, 20)
+        }
+      }
+
+      coroutine.yield(pcall(foo, nil))  ;; no error
+      coroutine.yield(pcall(foo, 1))  ;; error in __close
+      return(pcall(foo, 10))  ;; 'foo' will raise an error
+    })
+
+    var a, b = co()  ;; first foo: no error
+    assert((a == "x") && (b == nil))  ;; yields inside 'x'; Ok
+    set a, b = co()
+    assert((a == "y") && (b == nil))  ;; yields inside 'y'; Ok
+    set a, b = co()
+    assert((a == "z") && (b == nil))  ;; yields inside 'z'; Ok
+    var a, b, c = co()
+    assert(a && (b == 10) && (c == 20))  ;; returns from 'pcall(foo, nil)'
+
+    var a, b = co()  ;; second foo: error in __close
+    assert((a == "x") && (b == nil))  ;; yields inside 'x'; Ok
+    set a, b = co()
+    assert((a == "y") && (b == nil))  ;; yields inside 'y'; Ok
+    set a, b = co()
+    assert((a == "z") && (b == nil))  ;; yields inside 'z'; Ok
+    val st, msg = co()  ;; reports the error in 'y'
+    assert(!st && (msg == 21))
+
+    var a, b = co()  ;; third foo: error in function body
+    assert((a == "x") && (b == nil))  ;; yields inside 'x'; Ok
+    set a, b = co()
+    assert((a == "y") && (b == nil))  ;; yields inside 'y'; Ok
+    set a, b = co()
+    assert((a == "z") && (b == nil))  ;; yields inside 'z'; Ok
+    val st, msg = co()  ;; gets final error
+    assert(!st && (msg == (10 + 20)))
+  }
+
+  do {
+    ;; an error in a wrapped coroutine closes variables
+    var x = false
+    var y = false
+    val co = coroutine.wrap(func () {
+      pin xv = func2close(func () {
+        set x = true
+      })
+      do {
+        pin yv = func2close(func () {
+          set y = true
+        })
+        coroutine.yield(100)  ;; yield doesn't close variable
+      }
+      coroutine.yield(200)  ;; yield doesn't close variable
+      error(23)  ;; error does
+    })
+
+    var b = co()
+    assert((b == 100) && !x && !y)
+    set b = co()
+    assert((b == 200) && !x && y)
+    val a, b = pcall(co)
+    assert(!a && (b == 23) && x && y)
+  }
+
+  do {
+
+    ;; error in a wrapped coroutine raising errors when closing a variable
+    var x = 0
+    var co = coroutine.wrap(func () {
+      pin xx = func2close(func (_, msg) {
+        set x = x + 1
+        assert(string.find(msg, "@XXX"))
+        error("@YYY")
+      })
+      pin xv = func2close(func () {
+        set x = x + 1
+        error("@XXX")
+      })
+      coroutine.yield(100)
+      error(200)
+    })
+    assert(co() == 100)
+    assert(x == 0)
+    val st, msg = pcall(co)
+    assert(x == 2)
+    assert(!st && string.find(msg, "@YYY"))  ;; should get error raised
+
+    var x = 0
+    var y = 0
+    set co = coroutine.wrap(func () {
+      pin xx = func2close(func (_, err) {
+        set y = y + 1
+        assert(string.find(err, "XXX"))
+        error("YYY")
+      })
+      pin xv = func2close(func () {
+        set x = x + 1
+        error("XXX")
+      })
+      coroutine.yield(100)
+      return(200)
+    })
+    assert(co() == 100)
+    assert(x == 0)
+    val st, msg = pcall(co)
+    assert((x == 1) && (y == 1))
+    ;; should get first error raised
+    assert(!st && string.find(msg, "%w+%.%w+:%d+: YYY"))
+  }
+
+  ;; a suspended coroutine should not close its variables when collected
+  var co
+  set co = coroutine.wrap(func () {
+    ;; should not run
+    pin x = func2close(func () {
+      os.exit(false)
+    })
+    set co = nil
+    coroutine.yield()
+  })
+  co()  ;; start coroutine
+  assert(co == nil)  ;; eventually it will be collected
+  collectgarbage()
+
+  if rawget(_G, "T") {
+    print("to-be-closed variables x coroutines in C")
+    do {
+      var token = 0
+      var count = 0
+      val f = T.makeCfunc("""      toclose 1
+      toclose 2
+      return .
+    """)
+
+      val obj = func2close(func (_, msg) {
+        set count = count + 1
+        set token = coroutine.yield(count, token)
+      })
+
+      val co = coroutine.wrap(f)
+      var ct, res = co(obj, obj, 10, 20, 30, 3)  ;; will return 10, 20, 30
+      ;; initial token value, after closing 2nd obj
+      assert((ct == 1) && (res == 0))
+      ;; run until yield when closing 1st obj
+      set ct, res = co(100)
+      assert((ct == 2) && (res == 100))
+      set res = [co(200)]  ;; run until end
+      assert((res@(1) == 10) && (res@(2) == 20) && (res@(3) == 30) && (res@(4) == nil))
+      assert(token == 200)
+    }
+
+    do {
+      val f = T.makeCfunc("""      toclose 1
+      return .
+    """)
+
+      val obj = func2close(func () {
+        var temp
+        pin x = func2close(func () {
+          coroutine.yield(temp)
+          return(1, 2, 3)  ;; to be ignored
+        })
+        set temp = coroutine.yield("closing obj")
+        return(1, 2, 3)  ;; to be ignored
+      })
+
+      val co = coroutine.wrap(f)
+      var res = co(obj, 10, 30, 1)  ;; will return only 30
+      assert(res == "closing obj")
+      set res = co("closing x")
+      assert(res == "closing x")
+      set res = [co()]
+      assert((res@(1) == 30) && (res@(2) == nil))
+    }
+
+    do {
+      ;; still cannot yield inside 'closeslot'
+      val f = T.makeCfunc("""      toclose 1
+      closeslot 1
+    """)
+
+      val obj = func2close(coroutine.yield)
+      val co = coroutine.create(f)
+      val st, msg = coroutine.resume(co, obj)
+      assert(!st && string.find(msg, "attempt to yield across"))
+
+      ;; nor outside a coroutine
+      val f = T.makeCfunc("""      toclose 1
+    """)
+
+      val st, msg = pcall(f, obj)
+      assert(!st && string.find(msg, "attempt to yield from outside"))
+    }
+  }
+
+  do {
+    ;; detail in scopes of variables in the loop of 'repeat-until'
+    val res = []
+    val func foo (a) {
+      loop {
+        val x
+        pin i = setmetatable([], [__close=func () {
+          set res@(#res + 1) = debug.getlocal(2, 2)  ;; get 'x'
+          set res@(#res + 1) = debug.getlocal(2, 3)  ;; get 'i'
+          set a = true
+        }])
+        until(a)
+      }
+    }
+    foo(false)
+    ;; loop variables still in scope when closing 'i', both when 'repeat'
+    ;; repeats and when 'repeat' stops.
+    assert((res@(1) == "x") && (res@(2) == "i") && (res@(3) == "x") && (res@(4) == "i"))
+  }
+
+  ;; to-be-closed variables in generic for loops
+  do {
+    var numopen = 0
+    val func open (x) {
+      set numopen = numopen + 1
+      return(func () {  ;; iteration function
+        set x = x - 1
+        if x > 0 {
+          return(x)
+        }
+      }, nil, nil, func2close(func () {  ;; state, control variable, closing function
+        set numopen = numopen - 1
+      }))
+    }
+
+    var s = 0
+    loop i in open(10) {
+      set s = s + i
+    }
+    assert((s == 45) && (numopen == 0))
+
+    var s = 0
+    loop i in open(10) {
+      if i < 5 {
+        break()
+      }
+      set s = s + i
+    }
+    assert((s == 35) && (numopen == 0))
+
+    var s = 0
+    do :endloop {
+      loop i in open(10) {
+        loop j in open(10) {
+          if (i + j) < 5 {
+            escape(:endloop)
+          }
+          set s = s + i
+        }
+      }
+    }
+    assert((s == 375) && (numopen == 0))
+  }
+
+  print('OK')
+
+  return(5, f)
+}  ;; }
