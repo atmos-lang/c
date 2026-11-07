@@ -483,7 +483,7 @@ if !_soft {
   print("testing stack overflow")
   var C = 0
   ;; get line where stack overflow will happen
-  val l = debug.getinfo(1, "l").currentline + 1
+  val l = debug.getinfo(1, "l").currentline + 4
   var auxy
   set auxy = func () {  ;; produce a stack overflow
     set C = C + 1
@@ -627,7 +627,7 @@ do {
     assert(false)
   })
   val line = string.match(msg, "%w+%.atm:(%d+): assertion failed!$")
-  assert(tonumber(line) == (debug.getinfo(1, "l").currentline - 2))
+  assert(tonumber(line) == (debug.getinfo(1, "l").currentline - 3))
 
   ;; 'assert' with non-string messages
   set res, msg = pcall(assert, false, t)
@@ -651,8 +651,8 @@ assert(!a && (type(b) == "table") && (c == nil))
 
 print("testing tokens in error messages")
 checksyntax("syntax error", "", "error", 1)
-checksyntax("= 1.000", "", "1.000", 1)
-checksyntax("= 'aa'", "", "'aa'", 1)
+checksyntax("x 1.000", "", "1.000", 1)
+checksyntax("1 'aa'", "", "'aa'", 1)
 checksyntax("loop { while(**) }", "", "**", 1)
 checksyntax("loop i in => {}", "", "=>", 1)
 
@@ -700,11 +700,11 @@ testrep("", "(", "2", ")", 2)  ;; parentheses
 ;; nested calls  (a(a(a(a(...)))))
 testrep("val func a (x) { x }; ", "a(", "2.2", ")", 2.2)
 testrep("", "do { ", "", " }")
-testrep("", "loop { while(a) ", "", " }")
+testrep("", "loop { while(a); ", "", " }")
 testrep("val a; ", "if a {} else { ", "", " }")
 testrep("", "func foo () { ", "", " }")
-testrep("val a = ''; ", "a ++ ", "'a'", "", "a")
-testrep("val a = 1; ", "a ** ", "a", "", 1)
+;; (Lua: 'a .. a .. ...' and 'a ^ a ^ ...' nest to the right and hit the
+;;  C stack limit; Atmos operators are left associative and iterative)
 
 checkmessage("set a = f(x" ++ (string.rep(",x", 260) ++ ")"), "too many registers")
 

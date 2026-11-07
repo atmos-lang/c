@@ -57,7 +57,7 @@ typedef struct BlockCnt {
   /* Atmos */
   TString *tag;  /* tag of a 'do :tag' block (NULL otherwise) */
   lu_byte hasescape;  /* true if block has pending escapes */
-  short resvar;  /* hidden variable holding the block value (or -1) */
+  short resreg;  /* register holding the block value (or -1) */
 } BlockCnt;
 
 
@@ -385,50 +385,53 @@ static void removevars (FuncState *fs, int tolevel) {
 
 
 /*
-** Create a hidden local variable (holding the value of a compound
-** statement). It occupies a register but is not visible for the
-** debug library (its debug information is already closed).
+** Emit a CLOSE for register level 'reg' if some enclosing block at that
+** level or above has upvalues or to-be-closed variables (so that a
+** value can be stored at 'reg' before leaving those blocks).
 */
-static int new_hiddenvar (LexState *ls) {
-  FuncState *fs = ls->fs;
-  int vidx = fs->nactvar;
-  LocVar *dbg;
-  new_localvarliteral(ls, "(value)");
-  adjustlocalvars(ls, 1);
-  luaK_reserveregs(fs, 1);
-  dbg = localdebuginfo(fs, vidx);
-  dbg->endpc = dbg->startpc;  /* never active for the debug library */
-  return vidx;
+static void closeupto (FuncState *fs, int reg) {
+  BlockCnt *bl;
+  for (bl = fs->bl; bl != NULL && reglevel(fs, bl->nactvar) >= reg;
+       bl = bl->previous) {
+    if (bl->upval) {
+      luaK_codeABC(fs, OP_CLOSE, reg, 0, 0);
+      return;
+    }
+  }
 }
 
 
 /*
-** Store the value of 'e' into hidden variable 'vidx' (nil if 'e' is void).
+** Store the value of 'e' into register 'reg' (nil if 'e' is void),
+** closing enclosing blocks above 'reg' first.
 */
-static void store_hidden (LexState *ls, int vidx, expdesc *e) {
+static void store_value (LexState *ls, int reg, expdesc *e) {
   FuncState *fs = ls->fs;
-  Vardesc *vd = getlocalvardesc(fs, vidx);
-  if (e->k == VVOID)
-    luaK_nil(fs, vd->vd.ridx, 1);
+  if (e->k == VVOID) {
+    closeupto(fs, reg);
+    luaK_nil(fs, reg, 1);
+  }
   else {
     expdesc var;
-    init_var(fs, &var, vidx);
+    luaK_exp2anyreg(fs, e);  /* evaluate before closing */
+    closeupto(fs, reg);
+    init_exp(&var, VLOCAL, 0);  /* fake local variable at 'reg' */
+    var.u.var.ridx = cast_byte(reg);
+    var.u.var.vidx = 0;
     luaK_storevar(fs, &var, e);
   }
 }
 
 
 /*
-** Remove hidden variable 'vidx' and turn its register into a temporary
-** describing the statement value.
+** The value of a compound statement is in register 'reg', the first
+** free register when the statement started; describe it as a
+** temporary on the top of the stack.
 */
-static void hidden_result (LexState *ls, int vidx, expdesc *v) {
+static void value_result (LexState *ls, int reg, expdesc *v) {
   FuncState *fs = ls->fs;
-  int ridx = getlocalvardesc(fs, vidx)->vd.ridx;
-  lua_assert(fs->nactvar == vidx + 1);
-  removevars(fs, vidx);
-  init_exp(v, VNONRELOC, ridx);
-  fs->freereg = cast_byte(ridx + 1);
+  init_exp(v, VNONRELOC, reg);
+  fs->freereg = cast_byte(reg + 1);
 }
 
 
@@ -758,7 +761,7 @@ static void enterblock (FuncState *fs, BlockCnt *bl, lu_byte isloop) {
   bl->insidetbc = (fs->bl != NULL && fs->bl->insidetbc);
   bl->tag = NULL;
   bl->hasescape = 0;
-  bl->resvar = -1;
+  bl->resreg = -1;
   bl->previous = fs->bl;  /* link block in function's block list */
   fs->bl = bl;
   lua_assert(fs->freereg == luaY_nvarstack(fs));
@@ -948,10 +951,10 @@ static void statlist (LexState *ls, expdesc *v, int *n) {
 
 
 /*
-** Parse a block ('{' statlist '}') whose value goes to hidden variable
-** 'resvar' (or is discarded if 'resvar' is -1).
+** Parse a block ('{' statlist '}') whose value goes to register
+** 'resreg' (or is discarded if 'resreg' is -1).
 */
-static void block (LexState *ls, int resvar) {
+static void block (LexState *ls, int resreg) {
   FuncState *fs = ls->fs;
   BlockCnt bl;
   expdesc v;
@@ -960,8 +963,8 @@ static void block (LexState *ls, int resvar) {
   enterblock(fs, &bl, 0);
   checknext(ls, '{');
   statlist(ls, &v, &n);
-  if (resvar >= 0)
-    store_hidden(ls, resvar, &v);
+  if (resreg >= 0)
+    store_value(ls, resreg, &v);
   else
     discard(ls, &v);
   ls->blockline = ls->lastline;  /* line of last statement */
@@ -972,16 +975,16 @@ static void block (LexState *ls, int resvar) {
 
 /*
 ** Parse a branch of a conditional ('{' block '}' or '=>' expression),
-** storing its value in hidden variable 'resvar'.
+** storing its value in register 'resreg'.
 */
-static void branch (LexState *ls, int resvar) {
+static void branch (LexState *ls, int resreg) {
   if (ls->t.token == '{')
-    block(ls, resvar);
+    block(ls, resreg);
   else {
     expdesc v;
     checknext(ls, TK_ARROW);
     expr(ls, &v);
-    store_hidden(ls, resvar, &v);
+    store_value(ls, resreg, &v);
     ls->blockline = ls->lastline;
   }
 }
@@ -1283,6 +1286,7 @@ static void body (LexState *ls, expdesc *e, int ismethod, int line) {
   /* body ->  '(' parlist ')' funcblock */
   FuncState new_fs;
   BlockCnt bl;
+  enterlevel(ls);  /* control recursion depth of nested functions */
   new_fs.f = addprototype(ls);
   new_fs.f->linedefined = line;
   open_func(ls, &new_fs, &bl);
@@ -1296,6 +1300,7 @@ static void body (LexState *ls, expdesc *e, int ismethod, int line) {
   funcblock(ls, line);
   codeclosure(ls, e);
   close_func(ls);
+  leavelevel(ls);
 }
 
 
@@ -1305,6 +1310,7 @@ static void body (LexState *ls, expdesc *e, int ismethod, int line) {
 static void lambda (LexState *ls, expdesc *e, int line) {
   FuncState new_fs;
   BlockCnt bl;
+  enterlevel(ls);  /* control recursion depth of nested functions */
   new_fs.f = addprototype(ls);
   new_fs.f->linedefined = line;
   open_func(ls, &new_fs, &bl);
@@ -1325,6 +1331,7 @@ static void lambda (LexState *ls, expdesc *e, int line) {
   funcblock(ls, line);
   codeclosure(ls, e);
   close_func(ls);
+  leavelevel(ls);
 }
 
 
@@ -1908,8 +1915,8 @@ static void storeextra (LexState *ls, BlockCnt *bl, expdesc *def) {
   }
   else
     e = *def;
-  if (bl->resvar >= 0)
-    store_hidden(ls, bl->resvar, &e);
+  if (bl->resreg >= 0)
+    store_value(ls, bl->resreg, &e);
   else
     discard(ls, &e);
 }
@@ -1929,11 +1936,11 @@ static void breakstat (LexState *ls, int line) {
       luaK_exp2nextreg(ls->fs, &e);
       expr(ls, &e);
     }
-    if (bl->resvar >= 0) store_hidden(ls, bl->resvar, &e);
+    if (bl->resreg >= 0) store_value(ls, bl->resreg, &e);
     else discard(ls, &e);
   }
-  else if (bl->resvar >= 0)
-    store_hidden(ls, bl->resvar, &nilv);
+  else if (bl->resreg >= 0)
+    store_value(ls, bl->resreg, &nilv);
   checknext(ls, ')');
   breakjump(ls, bl, line);
 }
@@ -1950,7 +1957,8 @@ static void untilstat (LexState *ls, int line) {
   expr(ls, &e);
   luaK_exp2anyreg(fs, &e);  /* condition value (to be the loop value) */
   c = e;
-  luaK_goiftrue(fs, &c);  /* jump if false */
+  luaK_goiftrue(fs, &c);  /* jump if false (frees the register) */
+  luaK_reserveregs(fs, 1);  /* keep the condition value for the store */
   jf = c.f;
   storeextra(ls, bl, &e);  /* true: loop value is extra or condition */
   breakjump(ls, bl, line);
@@ -2011,28 +2019,28 @@ static void escapestat (LexState *ls, int line) {
 */
 static int ifstat (LexState *ls, expdesc *v) {
   FuncState *fs = ls->fs;
-  int hid = new_hiddenvar(ls);
+  int reg = luaY_nvarstack(fs);  /* register for the value */
   int condfalse, escape;
   luaX_next(ls);  /* skip 'if' */
   condfalse = cond(ls);
-  branch(ls, hid);  /* 'then' part */
+  branch(ls, reg);  /* 'then' part */
   escape = luaK_jump(fs);
   luaK_fixline(fs, ls->blockline);  /* jump "belongs" to the branch */
   luaK_patchtohere(fs, condfalse);
   if (testnext(ls, TK_ELSE))
-    branch(ls, hid);  /* 'else' part */
+    branch(ls, reg);  /* 'else' part */
   else if (testnext(ls, TK_ARROW)) {  /* if c => a => b */
     expdesc e;
     expr(ls, &e);
-    store_hidden(ls, hid, &e);
+    store_value(ls, reg, &e);
   }
   else {
     expdesc e;
     init_exp(&e, VVOID, 0);
-    store_hidden(ls, hid, &e);  /* no else: nil */
+    store_value(ls, reg, &e);  /* no else: nil */
   }
   luaK_patchtohere(fs, escape);
-  hidden_result(ls, hid, v);
+  value_result(ls, reg, v);
   return 1;
 }
 
@@ -2042,7 +2050,7 @@ static int ifstat (LexState *ls, expdesc *v) {
 */
 static int ifsstat (LexState *ls, expdesc *v) {
   FuncState *fs = ls->fs;
-  int hid = new_hiddenvar(ls);
+  int reg = luaY_nvarstack(fs);  /* register for the value */
   int escapelist = NO_JUMP;
   int haselse = 0;
   int line = ls->linenumber;
@@ -2052,11 +2060,11 @@ static int ifsstat (LexState *ls, expdesc *v) {
     if (testnext(ls, TK_ELSE)) {
       checknext(ls, TK_ARROW);
       if (ls->t.token == '{')
-        block(ls, hid);
+        block(ls, reg);
       else {
         expdesc e;
         expr(ls, &e);
-        store_hidden(ls, hid, &e);
+        store_value(ls, reg, &e);
       }
       haselse = 1;
       break;
@@ -2065,11 +2073,11 @@ static int ifsstat (LexState *ls, expdesc *v) {
       int condfalse = cond(ls);
       checknext(ls, TK_ARROW);
       if (ls->t.token == '{')
-        block(ls, hid);
+        block(ls, reg);
       else {
         expdesc e;
         expr(ls, &e);
-        store_hidden(ls, hid, &e);
+        store_value(ls, reg, &e);
       }
       luaK_concat(fs, &escapelist, luaK_jump(fs));
       luaK_fixline(fs, ls->blockline);  /* jump "belongs" to the branch */
@@ -2079,11 +2087,11 @@ static int ifsstat (LexState *ls, expdesc *v) {
   if (!haselse) {
     expdesc e;
     init_exp(&e, VVOID, 0);
-    store_hidden(ls, hid, &e);  /* no case: nil */
+    store_value(ls, reg, &e);  /* no case: nil */
   }
   check_match(ls, '}', '{', line);
   luaK_patchtohere(fs, escapelist);
-  hidden_result(ls, hid, v);
+  value_result(ls, reg, v);
   return 1;
 }
 
@@ -2100,7 +2108,7 @@ static int dostat (LexState *ls, expdesc *v) {
     return 1;
   }
   else {
-    int hid = new_hiddenvar(ls);
+    int reg = luaY_nvarstack(fs);  /* register for the value */
     BlockCnt bl;
     expdesc e;
     int n;
@@ -2113,13 +2121,13 @@ static int dostat (LexState *ls, expdesc *v) {
     line = ls->linenumber;
     enterblock(fs, &bl, 0);
     bl.tag = tag;
-    bl.resvar = cast_short(hid);
+    bl.resreg = cast_short(reg);
     checknext(ls, '{');
     statlist(ls, &e, &n);
-    store_hidden(ls, hid, &e);
+    store_value(ls, reg, &e);
     check_match(ls, '}', '{', line);
     leaveblock(fs);
-    hidden_result(ls, hid, v);
+    value_result(ls, reg, v);
     return 1;
   }
 }
@@ -2214,17 +2222,17 @@ static void forlist (LexState *ls, TString *names[], int nnames, int base,
 */
 static int loopstat (LexState *ls, expdesc *v) {
   FuncState *fs = ls->fs;
-  int hid = new_hiddenvar(ls);
+  int reg = luaY_nvarstack(fs);  /* register for the value */
   int line = ls->linenumber;
   BlockCnt bl;
-  luaK_nil(fs, getlocalvardesc(fs, hid)->vd.ridx, 1);  /* default value */
   luaX_next(ls);  /* skip 'loop' */
   enterblock(fs, &bl, 1);  /* loop block */
-  bl.resvar = cast_short(hid);
+  bl.resreg = cast_short(reg);
   if (ls->t.token == '{') {  /* infinite loop */
     int loopinit = luaK_getlabel(fs);
     block(ls, -1);
     luaK_jumpto(fs, loopinit);
+    luaK_fixline(fs, ls->blockline);  /* jump "belongs" to the body */
   }
   else {
     TString *names[MAXLOOPVARS];
@@ -2264,8 +2272,9 @@ static int loopstat (LexState *ls, expdesc *v) {
       }
     }
   }
+  luaK_nil(fs, reg, 1);  /* normal exit: loop value is nil */
   leaveblock(fs);  /* loop scope ('break' jumps to this point) */
-  hidden_result(ls, hid, v);
+  value_result(ls, reg, v);
   return 1;
 }
 
@@ -2403,8 +2412,8 @@ static void retstat (LexState *ls) {
 static int statement (LexState *ls, expdesc *v) {
   int line = ls->linenumber;  /* may be needed for error messages */
   int n = 0;
-  enterlevel(ls);
   init_exp(v, VVOID, 0);
+  /* (expression statements control recursion depth in 'unaryexp') */
   switch (ls->t.token) {
     case TK_VAL: case TK_VAR: case TK_PIN: {
       localstat(ls, line);
@@ -2456,7 +2465,6 @@ static int statement (LexState *ls, expdesc *v) {
   }
   lua_assert(ls->fs->f->maxstacksize >= ls->fs->freereg &&
              ls->fs->freereg >= luaY_nvarstack(ls->fs));
-  leavelevel(ls);
   return n;
 }
 

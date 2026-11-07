@@ -575,9 +575,10 @@ static void read_string (LexState *ls, int del, SemInfo *seminfo) {
 
 /*
 ** Multi-line raw string, delimited by three quotes ('"""' or "'''").
-** It has no escape sequences and ends at the first run of exactly
-** three matching quotes; a newline right after the opening delimiter
-** is skipped. The three opening quotes were already read.
+** It has no escape sequences and ends at the first run of three or
+** more matching quotes (the extra quotes belong to the content); a
+** newline right after the opening delimiter is skipped. The three
+** opening quotes were already read.
 */
 static void read_raw_string (LexState *ls, int del, SemInfo *seminfo) {
   int line = ls->linenumber;  /* initial line (for error message) */
@@ -601,8 +602,11 @@ static void read_raw_string (LexState *ls, int del, SemInfo *seminfo) {
         if (ls->current == del) {
           int n = 0;
           while (ls->current == del) { n++; next(ls); }
-          if (n == 3) goto endloop;  /* closing delimiter */
-          while (n-- > 0) save(ls, del);  /* other runs are content */
+          if (n >= 3) {  /* closing delimiter (extra quotes are content) */
+            while (n-- > 3) save(ls, del);
+            goto endloop;
+          }
+          while (n-- > 0) save(ls, del);  /* shorter runs are content */
         }
         else save_and_next(ls);
       }

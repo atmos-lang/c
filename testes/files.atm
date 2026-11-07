@@ -713,6 +713,7 @@ and the rest of the file
   assert((type(a) == 'number') && (a == 123.4) && (b == -56e-2))
   assert((d == 'second line') && (e == 'third line'))
   assert(h == """
+
 and the rest of the file
 """)
   assert(os.remove(file))

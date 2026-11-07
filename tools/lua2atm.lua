@@ -560,6 +560,8 @@ local function pstring (e)
     -- multi-line literal: delimiters cannot touch the same quote char
     for _, q in ipairs{'"', "'"} do
       if s:sub(1,1) ~= q and s:sub(-1) ~= q and not s:find(q:rep(3), 1, true) then
+        -- a newline right after the opening delimiter is skipped
+        if s:sub(1,1) == "\n" then s = "\n" .. s end
         return q:rep(3) .. s .. q:rep(3)
       end
     end

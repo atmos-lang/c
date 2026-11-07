@@ -249,8 +249,7 @@ do {  ;; testing active lines
     assert(next(t.activelines) == nil)  ;; no extra lines
   }
 
-  checkactivelines(func (...) {
-    ;; vararg function
+  checkactivelines(func (...) {  ;; vararg function
     ;; 1st line is empty
     ;; 2nd line is empty
     ;; 3th line is empty
@@ -270,7 +269,8 @@ do {  ;; testing active lines
 
   checkactivelines(func (a, b, ...) {}, [0])
 
-  checkactivelines(func (a, b) {}, [1])
+  checkactivelines(func (a, b) {
+  }, [1])
 
   loop _, n in pairs([0, 1, 2, 10, 50, 100, 1000, 10000]) {
     checkactivelines(load(string.format("%s 1", string.rep("\n", n))), [n + 1])
@@ -824,7 +824,7 @@ set t = debug.getinfo(func (a, b, ...) {
 assert((t.isvararg == true) && (t.nparams == 2) && (t.nups == 1))
 
 set t = debug.getinfo(func (a, b, ...) {
-  val t = table.pack(...)
+  val t = [...]  ;; (no globals: no upvalues)
   set t.n = 2
   return(t@(a))
 }, "u")
@@ -1000,6 +1000,7 @@ assert((a > 10) && (a.op == "lt"))
 do {  ;; testing for-iterator name
   val func f () {
     assert(debug.getinfo(1).name == "for iterator")
+    nil  ;; (functions evaluate to their last expression: end the loop)
   }
 
   loop i in f {

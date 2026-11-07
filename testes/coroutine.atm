@@ -396,7 +396,7 @@ val f1 = coroutine.wrap(func () {
   }, func () {
 
     var s = 0
-    loop i in (f, nil, 1) {
+    loop i in (f, nil, 1, nil) {
       pcall(func () {
         set s = s + i
       })
@@ -473,9 +473,7 @@ func foo () {
   error(foo)
 }
 
-func goo () {
-  foo()
-}
+func goo () { foo() }
 set x = coroutine.wrap(goo)
 assert(x() == 3)
 var a, b = pcall(x)
@@ -1224,7 +1222,7 @@ set f = func (s, i) {
 
 assert(run(func () {
   var s = 0
-  loop i in (f, 4, 0) {
+  loop i in (f, 4, 0, nil) {
     set s = s + i
   }
   return(s)

@@ -111,22 +111,20 @@ if !_port {  ;;[
   }
 
   var files = [
-    @("names.atm") = "do { [...] }\n",
-    @("err.atm") = "set B = 15; set a = a + 1;",
-    @("synerr.atm") = "set B =",
+    @("names.atm") = "do { return([...]) }\n",
+    @("err.atm") = "set B = 15; set a = a + 1;\n",
+    @("synerr.atm") = "set B =\n",
     @("A.atm") = "",
-    @("B.atm") = "assert(... == 'B'); require('A')",
+    @("B.atm") = "assert(... == 'B'); require('A')\n",
     @("A.lc") = "",
     @("A") = "",
     @("L") = "",
     @("XXxX") = "",
-    @("C.atm") = "set package.loaded@(...) = 25; require('C')",
+    @("C.atm") = "set package.loaded@(...) = 25; require('C')\n",
   ]
 
   set AA = nil
-  val extras = """set NAME = '%s'
-set REQUIRED = ...
-AA"""
+  val extras = "\nset NAME = '%s'\nset REQUIRED = ...\nAA\n"
 
   createfiles(files, "", extras)
 
@@ -194,7 +192,7 @@ AA"""
 
   set package.path = string.gsub("D/?.atm;D/?/init.atm", "D/", DIR)
 
-  set files = [@("P1/init.atm")="set AA = 10", @("P1/xuxu.atm")="set AA = 20"]
+  set files = [@("P1/init.atm")="set AA = 10\n", @("P1/xuxu.atm")="set AA = 20\n"]
 
   createfiles(files, "set _ENV = []\n", "\n_ENV\n")
   set AA = 0

@@ -17,6 +17,7 @@ set _G.x = nil
 
 ;; escape sequences
 assert('\n\"\'\\' == """
+
 "'\""")
 
 assert(string.find("\a\b\f\n\r\t\v", "^%c%c%c%c%c%c%c$"))
@@ -125,7 +126,8 @@ lexerror("""'alo \98""", "<eof>")
 loop i in (0, 255) {
   val s = string.char(i)
   assert(!string.find(s, "[a-zA-Z_]") == !load("set " ++ (s ++ " = 1"), ""))
-  assert(!string.find(s, "[a-zA-Z_0-9]") == !load("set a" ++ (s ++ "1 = 1"), ""))
+  ;; ('a@1' is a valid index in Atmos)
+  assert(!string.find(s, "[a-zA-Z_0-9@]") == !load("set a" ++ (s ++ "1 = 1"), ""))
 }
 
 ;; long variable names
@@ -143,8 +145,10 @@ print('+')
 
 ;; escapes --
 assert("\n\t" == """
+
 	""")
 assert("""
+
  $debug""" == "\n $debug")
 assert(""" [ """ != """ ] """)
 ;; long strings --
