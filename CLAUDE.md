@@ -21,8 +21,11 @@ VM, libraries and bytecode format stay Lua's.
 - One commit per step (one test file, one feature); push after each commit
   and report the GitHub link of the commit
   (`https://github.com/atmos-lang/c/commit/<sha>`).
-- Do not ask for permissions or confirmation; decide and proceed, then
-  report numbered summaries.
+- Discussion first: analyze, explain and record decisions in the plan
+  files; ask before implementing anything (never start changing code on
+  a design question or a plan item without an explicit go-ahead).
+- Once a step is approved, do not ask for permissions or confirmation on
+  the details; decide and proceed, then report numbered summaries.
 - Build with `make`; debug build with `T` library:
   `make MYCFLAGS='-DLUA_USER_H=\"ltests.h\"'` in a scratch copy.
 - Never put model names in commits, code or docs.
