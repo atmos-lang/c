@@ -55,8 +55,12 @@ Semantics assumed for the Atmos implementation (the tests rely on them):
 - two statements on one line need `;` between them; newlines otherwise are
   whitespace
 - `"""..."""` and `'''...'''` are raw multi-line strings (no escapes),
-  closed by the first matching triple quote; a newline right after the
-  opening delimiter is skipped (Lua long-string semantics)
+  closed by the first run of three or more matching quotes (the extra
+  quotes belong to the content); a newline right after the opening
+  delimiter is skipped (Lua long-string semantics)
+- an `if` without `else` evaluates to `nil` (one value); a function whose
+  body ends in a call returns that call's first value, so an iterator or
+  callback that must return nothing has to end with an explicit `nil`
 - `pin x = v` is a to-be-closed variable (Lua `<close>`); `nil`/`false`
   are allowed; `escape`/`break` close pending variables
 - `return(...)` of a call is a proper tail call
