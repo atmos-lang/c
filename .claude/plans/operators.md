@@ -121,16 +121,29 @@ closure directly: binary ones get two parameters `a, b`, unary `#`/`!`
 one; `-` is binary; pipes/others are an error ("lambda error: invalid
 operator").
 
-### `where` (separate step)
+### `where` (deferred)
 
 The clause comes textually after the expression it feeds, but its
-declarations must be compiled first; a one-pass compiler cannot emit
-the expression before knowing its locals. Needs token recording in the
-lexer: when an expression statement starts, tokens are recorded until
-its end; if a `where` follows, the clause is parsed and compiled first,
-then the recorded tokens are replayed for the expression. Planned as
-its own step after the others (lexer buffer, nesting of `where` inside
-`where`, line numbers of replayed tokens).
+declarations must be compiled first; a one-pass compiler has already
+emitted the expression (with the names resolved as globals) when it
+sees `where`. Options examined:
+
+1. Scan ahead: tokenize the expression statement to its end before
+   compiling, compile the clause, replay the tokens. Finding the end
+   of an expression without parsing means duplicating the grammar's
+   termination rules (newlines, same-line call arguments, `} else {`,
+   nested blocks with their own `where`). Fragile.
+2. Compile, then roll back: record the statement's tokens; on `where`,
+   undo what it emitted (code, line info, constants and their cache,
+   nested prototypes, upvalues added to enclosing functions, locals,
+   labels) and recompile after the clause. Intrusive; the candidate if
+   `where` is ever needed.
+3. A closure, as the reference does: moves the ordering problem inside
+   the closure, does not remove it.
+
+Decision: deferred. `where` stays "operator not implemented";
+`e where { a = ...; b = ... }` is written `do { val a = ...; val b =
+...; e }` with the same scoping. Two reference tests use it.
 
 ## Tests
 

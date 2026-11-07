@@ -74,8 +74,8 @@ while the statement is parsed (see expressions.md). Tests:
 See [operators.md](operators.md): `??`/`!?`, `=>=`/`=<=`/`===`/`=!=`,
 `?>`/`!>` as C functions named by the operator in `_G`; `++` on tables
 in the VM; pipes, `match` and lambda operator shortcuts in the parser.
-Tests: `testes/ops.atm`. Pending: `where` (needs token recording in the
-lexer, see the plan).
+Tests: `testes/ops.atm`. `where` deferred (see the plan: needs either a
+scan-ahead or a code rollback; `do { val ...; e }` covers it).
 
 ## 8. Tail calls
 
