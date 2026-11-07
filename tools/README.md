@@ -35,10 +35,32 @@ Conversion rules:
 
 Other manual adjustments needed by the test suite:
 
-- `...` cannot be used inside nested blocks (`if`, loops): copy it to
-  locals first
-- `string.dump` of Atmos functions is not supported: such tests are dropped
 - numerals must start with a digit (`.5` → `0.5`); hexadecimal numerals
   followed by `+`/`-` need spaces (`0xE+1` → `0xE + 1`)
-- `load(src)` compiles Atmos source; chunks evaluate to their last
-  expression (`load("return 2 // 0")` → `load("2 // 0")`)
+- `load(src)`, `loadfile` and `dofile` compile Atmos source; chunks and
+  function bodies evaluate to their last expression
+  (`load("return 2 // 0")` → `load("2 // 0")`); a callback whose last
+  statement is a call that returns values must end with an explicit `nil`
+  when the extra values matter (e.g. `gsub` replacement functions)
+- named varargs (`...t`) become `val t = table.pack(...)`
+- `local a, b <close>, c = ...` has no equivalent: `<close>` variables are
+  declared separately with `pin`
+- `goto` out of nested loops becomes `do :tag { ... escape(:tag) }`
+
+Semantics assumed for the Atmos implementation (the tests rely on them):
+
+- `func NAME (...) {...}` assigns to the visible variable `NAME` (global if
+  none is in scope), like Lua's `function NAME`
+- a parenthesized single expression truncates to one value (`(f())`)
+- two statements on one line need `;` between them; newlines otherwise are
+  whitespace
+- `"""..."""` and `'''...'''` are raw multi-line strings (no escapes),
+  closed by the first matching triple quote; a newline right after the
+  opening delimiter is skipped (Lua long-string semantics)
+- `pin x = v` is a to-be-closed variable (Lua `<close>`); `nil`/`false`
+  are allowed; `escape`/`break` close pending variables
+- `return(...)` of a call is a proper tail call
+- `a ++ b` concatenates tables when both are tables; a table with a
+  non-table operand is an error
+- error messages, variable-kind names (global/local/upvalue/field/method/
+  constant) and syntax-error formats are Lua's
