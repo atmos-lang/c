@@ -42,6 +42,28 @@ reference implementation compiles blocks into closures, which breaks
 `...`, `debug.getlocal`, tail calls and `return` semantics), no new
 opcodes or runtime support. About 40 lines of Atmos-specific code.
 
+## Relation to Lua's "results at the top of the stack"
+
+The value register is the same mechanism Lua uses for call results: a call
+leaves its results at the slot of the called function, which is `freereg`
+at the call, and `reg = luaY_nvarstack(fs)` at statement start is exactly
+that slot. The block's locals live above it and die at its end, and the
+value stays at `reg`, like a callee frame vanishing and leaving results
+at the func slot; `value_result` describes it as `VNONRELOC reg`, as the
+parser describes a call adjusted to one result.
+
+What is not supported is more than one value:
+
+- fixed count (`do { (1, 2) }`, `break(a, b)`): feasible by storing n
+  values at `reg..reg+n-1` and reporting n, if every exit of the block
+  agrees on n (or pads with nils to the maximum); small extension of
+  `store_value`/`value_result`. Not done because the reference truncates
+  to one value too.
+- open count (`break(f())` with all results of `f`): only `OP_CALL`,
+  `OP_VARARG`, `OP_RETURN`, `OP_SETLIST` set or read `L->top`; an exit in
+  the middle of a block cannot set `L->top`, so this needs a new opcode
+  or a runtime helper. Left out.
+
 ## Open points
 
 - Only one test in the converted Lua suite uses a compound statement as a
