@@ -44,6 +44,34 @@ do {
   assert(!st && string.find(a, ":%d+: here"))
 }
 
+;; 'errorn(level, ...)': like 'error' with the level first, raising all
+;; the other arguments; the position goes in value 1 when it is a string
+do {
+  val st, a, b = pcall(errorn, 0, "x", 2)
+  assert(!st && (a == "x") && (b == 2) && (count(pcall(errorn, 0, "x", 2)) == 3))
+  val st, a, b = pcall(\{ errorn(1, "here", 2) })
+  assert(!st && string.find(a, "^throw.atm:%d+: here$") && (b == 2))
+  val func f () { errorn(2, "caller", 1, 2) }
+  val st, a, b, c = pcall(\{ f() })
+  assert(!st && string.find(a, "^throw.atm:%d+: caller$") && (b == 1) && (c == 2))
+  ;; non-string first value: no position
+  val t = []
+  val st, a, b = pcall(errorn, 1, t, "y")
+  assert(!st && (a == t) && (b == "y"))
+  ;; no values / nil object
+  val st, a = pcall(errorn, 1)
+  assert(!st && (a == "<no error object>") && (count(pcall(errorn, 1)) == 2))
+  val st, a, b = pcall(errorn, 1, nil, 2)
+  assert(!st && (a == "<no error object>") && (b == 2))
+  ;; 'level' must be a number
+  val st, a = pcall(errorn, "x")
+  assert(!st && string.find(a, "bad argument #1 to 'errorn' %(number expected"))
+  ;; 'error' is 'errorn' with the level second: same message
+  val st1, a1 = pcall(\{ error("m", 1) })
+  val st2, a2 = pcall(\{ errorn(1, "m") })
+  assert(string.gsub(a1, "%d+", "") == string.gsub(a2, "%d+", ""))
+}
+
 ;; message handlers receive all the values and return the new ones
 do {
   val st, a, b = xpcall(\{ throw("e", 10) }, \(e, n){ (e ++ "!", n + 1) })
