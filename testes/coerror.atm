@@ -67,6 +67,7 @@ do {
   assert(coroutine.resume(co))
   val _, st, e, v = coroutine.error(co, "a", "b")
   assert((st == false) && (e == "a") && (v == "b"))
+  assert(select(2, coroutine.resume(co)) == 2)  ;; now inside the xpcall
   val _, st, m = coroutine.error(co, "c", "d")
   assert((st == false) && (m == "c!d"))
   ;; the coroutine can keep yielding after catching
@@ -101,6 +102,11 @@ do {
   })
   coroutine.resume(co)
   val st, e = coroutine.error(co, "err")
+  assert(!st && (e == "err"))
+  ;; as in Lua, the to-be-closed variables of a coroutine dead by error
+  ;; are pending until it is closed
+  assert(#log == 0)
+  val st, e = coroutine.close(co)
   assert(!st && (e == "err"))
   assert(table.concat(log, ",") == "d2,err,d1")
   ;; yield inside nested functions: the error is raised there
@@ -152,7 +158,7 @@ do {
     select(2, coroutine.resume(inner))
   })
   assert(string.find(select(2, coroutine.resume(outer)), "normal coroutine"))
-  assert(string.find(err(coroutine.error, 1), "coroutine expected"))
+  assert(string.find(err(coroutine.error, 1), "thread expected"))
 }
 
 print("OK")

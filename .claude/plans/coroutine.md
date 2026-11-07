@@ -142,8 +142,12 @@ keeps calls from the body working without giving each coroutine a big stack.
 
 ### Status
 
-Idea stage; nothing implemented for (c). Item (a) has a design and
-tests (below); (b) is not needed (see above).
+Idea stage; nothing implemented for (c). Item (a) is implemented
+(`lua_resumeerror` in `ldo.c`, `coroutine.error` in `lcorolib.c`;
+tests `testes/coerror.atm`); (b) is not needed (see above). Note: as
+in Lua, the to-be-closed variables of a coroutine that dies by an
+uncaught error stay pending until `coroutine.close(co)`; the task
+layer must close dead tasks (the reference does).
 
 ## Design for (a)
 

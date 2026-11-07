@@ -30,14 +30,15 @@ static lua_State *getco (lua_State *L) {
 ** Resumes a coroutine. Returns the number of results for non-error
 ** cases or -1 for errors.
 */
-static int auxresume (lua_State *L, lua_State *co, int narg) {
+static int auxresume (lua_State *L, lua_State *co, int narg, int raise) {
   int status, nres;
   if (l_unlikely(!lua_checkstack(co, narg))) {
     lua_pushliteral(L, "too many arguments to resume");
     return -1;  /* error flag */
   }
   lua_xmove(L, co, narg);
-  status = lua_resume(co, L, narg, &nres);
+  status = raise ? lua_resumeerror(co, L, narg, &nres)
+                 : lua_resume(co, L, narg, &nres);
   if (l_likely(status == LUA_OK || status == LUA_YIELD)) {
     if (l_unlikely(!lua_checkstack(L, nres + 1))) {
       lua_pop(co, nres);  /* remove results anyway */
@@ -59,10 +60,7 @@ static int auxresume (lua_State *L, lua_State *co, int narg) {
 }
 
 
-static int luaB_coresume (lua_State *L) {
-  lua_State *co = getco(L);
-  int r;
-  r = auxresume(L, co, lua_gettop(L) - 1);
+static int finishresume (lua_State *L, int r) {
   if (l_unlikely(r < 0)) {  /* error with '-r' values? */
     lua_pushboolean(L, 0);
     lua_insert(L, r - 1);  /* 'false' before the error values */
@@ -78,7 +76,7 @@ static int luaB_coresume (lua_State *L) {
 
 static int luaB_auxwrap (lua_State *L) {
   lua_State *co = lua_tothread(L, lua_upvalueindex(1));
-  int r = auxresume(L, co, lua_gettop(L));
+  int r = auxresume(L, co, lua_gettop(L), 0);
   if (l_unlikely(r < 0)) {  /* error with '-r' values? */
     int n = -r;  /* number of error values */
     int stat = lua_status(co);
@@ -102,6 +100,12 @@ static int luaB_auxwrap (lua_State *L) {
     return lua_errorn(L, n);  /* propagate error */
   }
   return r;
+}
+
+
+static int luaB_coresume (lua_State *L) {
+  lua_State *co = getco(L);
+  return finishresume(L, auxresume(L, co, lua_gettop(L) - 1, 0));
 }
 
 
@@ -156,6 +160,20 @@ static int auxstatus (lua_State *L, lua_State *co) {
         return COS_DEAD;
     }
   }
+}
+
+
+/*
+** coroutine.error(co, ...): resume 'co' raising the arguments at its
+** pending yield. A coroutine not started yet dies without running.
+*/
+static int luaB_coerror (lua_State *L) {
+  lua_State *co = getco(L);
+  int status = auxstatus(L, co);
+  if (status != COS_YIELD)
+    return luaL_error(L, "cannot raise error in a %s coroutine",
+                         statname[status]);
+  return finishresume(L, auxresume(L, co, lua_gettop(L) - 1, 1));
 }
 
 
@@ -221,6 +239,7 @@ static int luaB_close (lua_State *L) {
 static const luaL_Reg co_funcs[] = {
   {"create", luaB_cocreate},
   {"resume", luaB_coresume},
+  {"error", luaB_coerror},
   {"running", luaB_corunning},
   {"status", luaB_costatus},
   {"wrap", luaB_cowrap},

@@ -940,10 +940,22 @@ static int resume_error (lua_State *L, const char *msg, int narg,
 ** function), plus erroneous cases: non-suspended coroutine or dead
 ** coroutine.
 */
+/* arguments for 'resume' */
+typedef struct ResumeInfo {
+  int n;  /* number of arguments */
+  int raise;  /* raise the arguments as an error at the yield point? */
+} ResumeInfo;
+
+
 static void resume (lua_State *L, void *ud) {
-  int n = *(cast(int*, ud));  /* number of arguments */
+  ResumeInfo *ri = cast(ResumeInfo *, ud);
+  int n = ri->n;  /* number of arguments */
   StkId firstArg = L->top.p - n;  /* first argument */
   CallInfo *ci = L->ci;
+  if (ri->raise) {  /* 'lua_resumeerror' */
+    L->status = LUA_OK;  /* mark that it is running (again) */
+    luaG_errormsgn(L, n);  /* the pending yield (or the start) raises */
+  }
   if (L->status == LUA_OK)  /* starting a coroutine? */
     ccall(L, firstArg - 1, LUA_MULTRET, 0);  /* just call its body */
   else {  /* resuming from previous yield */
@@ -1007,9 +1019,10 @@ static void duperrvalues (lua_State *L, void *ud) {
 }
 
 
-LUA_API int lua_resume (lua_State *L, lua_State *from, int nargs,
-                                      int *nresults) {
+static int resume_aux (lua_State *L, lua_State *from, int nargs,
+                       int *nresults, int raise) {
   TStatus status;
+  ResumeInfo ri;
   lua_lock(L);
   if (L->status == LUA_OK) {  /* may be starting a coroutine */
     if (L->ci != &L->base_ci)  /* not in base level? */
@@ -1026,7 +1039,8 @@ LUA_API int lua_resume (lua_State *L, lua_State *from, int nargs,
   L->nCcalls++;
   luai_userstateresume(L, nargs);
   api_checkpop(L, (L->status == LUA_OK) ? nargs + 1 : nargs);
-  status = luaD_rawrunprotected(L, resume, &nargs);
+  ri.n = nargs; ri.raise = raise;
+  status = luaD_rawrunprotected(L, resume, &ri);
    /* continue running after recoverable errors */
   status = precover(L, status);
   if (l_likely(!errorstatus(status)))
@@ -1049,6 +1063,22 @@ LUA_API int lua_resume (lua_State *L, lua_State *from, int nargs,
             : cast_int(L->top.p - (L->ci->func.p + 1));
   lua_unlock(L);
   return APIstatus(status);
+}
+
+
+LUA_API int lua_resume (lua_State *L, lua_State *from, int nargs,
+                                      int *nresults) {
+  return resume_aux(L, from, nargs, nresults, 0);
+}
+
+
+/*
+** Resume 'L' raising its 'nerr' top values as an error at the pending
+** yield (or at the start, for a coroutine not started yet).
+*/
+LUA_API int lua_resumeerror (lua_State *L, lua_State *from, int nerr,
+                                           int *nresults) {
+  return resume_aux(L, from, nerr, nresults, 1);
 }
 
 

@@ -77,6 +77,9 @@ Semantics assumed for the Atmos implementation (the tests rely on them):
   case with `h`); `\+`, `\#`, `\===` are operator lambdas
 - error messages, variable-kind names (global/local/upvalue/field/method/
   constant) and syntax-error formats are Lua's
+- `coroutine.error(co, e1, ..., en)` resumes a suspended coroutine
+  raising the values at its pending yield (a not-started coroutine dies
+  without running); C API `lua_resumeerror`
 - `catch CND { }` evaluates to `true, values` or `false, e1, ..., en`;
   the body is a closure (no `break`/`escape`/`return` across it, no
   `...`); `defer { }` is a closure in a hidden to-be-closed slot: a
