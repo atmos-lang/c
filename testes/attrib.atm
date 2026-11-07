@@ -1,0 +1,559 @@
+;; $Id: testes/attrib.lua $
+;; See Copyright Notice in file lua.h
+
+print("testing require")
+
+assert(require("string") == string)
+assert(require("math") == math)
+assert(require("table") == table)
+assert(require("io") == io)
+assert(require("os") == os)
+assert(require("coroutine") == coroutine)
+
+assert(type(package.path) == "string")
+assert(type(package.cpath) == "string")
+assert(type(package.loaded) == "table")
+assert(type(package.preload) == "table")
+
+assert(type(package.config) == "string")
+print("package config: " ++ string.gsub(package.config, "\n", "|"))
+
+do {
+  ;; create a path with 'max' templates,
+  ;; each with 1-10 repetitions of '?'
+  val max = (_soft && 100) || 2000
+  val t = []
+  loop i in (1, max) {
+    set t@(i) = string.rep("?", (i % 10) + 1)
+  }
+  set t@(#t + 1) = ";"  ;; empty template
+  val path = table.concat(t, ";")
+  ;; use that path in a search
+  val s, err = package.searchpath("xuxu", path)
+  ;; search fails; check that message has an occurrence of
+  ;; '??????????' with ? replaced by xuxu and at least 'max' lines
+  assert(!s && string.find(err, string.rep("xuxu", 10)) && (#string.gsub(err, "[^\n]", "") >= max))
+  ;; path with one very long template
+  val path = string.rep("?", max)
+  val s, err = package.searchpath("xuxu", path)
+  assert(!s && string.find(err, string.rep('xuxu', max)))
+}
+
+do {
+  val oldpath = package.path
+  set package.path = []
+  val s, err = pcall(require, "no-such-file")
+  assert(!s && string.find(err, "package.path"))
+  set package.path = oldpath
+}
+
+do {
+  print("testing 'require' message")
+  val oldpath = package.path
+  val oldcpath = package.cpath
+
+  set package.path = "?.lua;?/?"
+  set package.cpath = "?.so;?/init"
+
+  val st, msg = pcall(require, 'XXX')
+
+  val expected = """module 'XXX' not found:
+	no field package.preload['XXX']
+	no file 'XXX.lua'
+	no file 'XXX/XXX'
+	no file 'XXX.so'
+	no file 'XXX/init'"""
+
+  assert(msg == expected)
+
+  set package.path = oldpath
+  set package.cpath = oldcpath
+}
+
+print('+')
+
+;; The next tests for 'require' assume some specific directories and
+;; libraries.
+
+if !_port {  ;;[
+
+  val dirsep = string.match(package.config, "^([^\n]+)\n")
+
+  ;; auxiliary directory with C modules and temporary files
+  val DIR = "libs" ++ dirsep
+
+  ;; prepend DIR to a name and correct directory separators
+  val func D (x) {
+    val x = string.gsub(x, "/", dirsep)
+    return(DIR ++ x)
+  }
+
+  ;; prepend DIR and pospend proper C lib. extension to a name
+  val func DC (x) {
+    val ext = ((dirsep == '\\') && ".dll") || ".so"
+    return(D(x ++ ext))
+  }
+
+  val func createfiles (files, preextras, posextras) {
+    loop n, c in pairs(files) {
+      io.output(D(n))
+      io.write(string.format(preextras, n))
+      io.write(c)
+      io.write(string.format(posextras, n))
+      io.close(io.output())
+    }
+  }
+
+  val func removefiles (files) {
+    loop n in pairs(files) {
+      os.remove(D(n))
+    }
+  }
+
+  var files = [
+    @("names.atm") = "do { [...] }\n",
+    @("err.atm") = "set B = 15; set a = a + 1;",
+    @("synerr.atm") = "set B =",
+    @("A.atm") = "",
+    @("B.atm") = "assert(... == 'B'); require('A')",
+    @("A.lc") = "",
+    @("A") = "",
+    @("L") = "",
+    @("XXxX") = "",
+    @("C.atm") = "set package.loaded@(...) = 25; require('C')",
+  ]
+
+  set AA = nil
+  val extras = """set NAME = '%s'
+set REQUIRED = ...
+AA"""
+
+  createfiles(files, "", extras)
+
+  ;; testing explicit "dir" separator in 'searchpath'
+  assert(package.searchpath("C.atm", D("?"), "", "") == D("C.atm"))
+  assert(package.searchpath("C.atm", D("?"), ".", ".") == D("C.atm"))
+  assert(package.searchpath("--x-", D("?"), "-", "X") == D("XXxX"))
+  assert(package.searchpath("---xX", D("?"), "---", "XX") == D("XXxX"))
+  assert(package.searchpath(D("C.atm"), "?", dirsep) == D("C.atm"))
+  assert(package.searchpath(".\\C.atm", D("?"), "\\") == D("./C.atm"))
+
+  val oldpath = package.path
+
+  set package.path = string.gsub("D/?.atm;D/?.lc;D/?;D/??x?;D/L", "D/", DIR)
+
+  val func try (p, n, r, ext) {
+    set NAME = nil
+    val rr, x = require(p)
+    assert(NAME == n)
+    assert(REQUIRED == p)
+    assert(rr == r)
+    assert(ext == x)
+  }
+
+  val a = require("names")
+  assert((a@(1) == "names") && (a@(2) == D("names.atm")))
+
+  var st, msg = pcall(require, "err")
+  assert(!st && string.find(msg, "arithmetic") && (B == 15))
+  set st, msg = pcall(require, "synerr")
+  assert(!st && string.find(msg, "error loading module"))
+
+  assert(package.searchpath("C", package.path) == D("C.atm"))
+  assert(require("C") == 25)
+  assert(require("C") == 25)
+  set AA = nil
+  try('B', 'B.atm', true, "libs/B.atm")
+  assert(package.loaded.B)
+  assert(require("B") == true)
+  assert(package.loaded.A)
+  assert(require("C") == 25)
+  set package.loaded.A = nil
+  try('B', nil, true, nil)  ;; should not reload package
+  try('A', 'A.atm', true, "libs/A.atm")
+  set package.loaded.A = nil
+  os.remove(D('A.atm'))
+  set AA = []
+  try('A', 'A.lc', AA, "libs/A.lc")  ;; now must find second option
+  assert(package.searchpath("A", package.path) == D("A.lc"))
+  assert(require("A") == AA)
+  set AA = false
+  try('K', 'L', false, "libs/L")  ;; default option
+  try('K', 'L', false, "libs/L")  ;; default option (should reload it)
+  assert(rawget(_G, "_REQUIREDNAME") == nil)
+
+  set AA = "x"
+  try("X", "XXxX", AA, "libs/XXxX")
+
+  removefiles(files)
+  set NAME, REQUIRED, AA, B = nil
+
+  ;; testing require of sub-packages
+
+  val _G = _G
+
+  set package.path = string.gsub("D/?.atm;D/?/init.atm", "D/", DIR)
+
+  set files = [@("P1/init.atm")="set AA = 10", @("P1/xuxu.atm")="set AA = 20"]
+
+  createfiles(files, "set _ENV = []\n", "\n_ENV\n")
+  set AA = 0
+
+  var m, ext = assert(require("P1"))
+  assert(ext == "libs/P1/init.atm")
+  assert((AA == 0) && (m.AA == 10))
+  assert(require("P1") == m)
+  assert(require("P1") == m)
+
+  assert(package.searchpath("P1.xuxu", package.path) == D("P1/xuxu.atm"))
+  set m.xuxu, ext = assert(require("P1.xuxu"))
+  assert((AA == 0) && (m.xuxu.AA == 20))
+  assert(ext == "libs/P1/xuxu.atm")
+  assert(require("P1.xuxu") == m.xuxu)
+  assert(require("P1.xuxu") == m.xuxu)
+  assert((require("P1") == m) && (m.AA == 10))
+
+  removefiles(files)
+  set AA = nil
+
+  set package.path = ""
+  assert(!pcall(require, "file_does_not_exist"))
+  set package.path = "??\0?"
+  assert(!pcall(require, "file_does_not_exist1"))
+
+  set package.path = oldpath
+
+  ;; check 'require' error message
+  val fname = "file_does_not_exist2"
+  var m, err = pcall(require, fname)
+  loop t in string.gmatch(package.path ++ (";" ++ package.cpath), "[^;]+") {
+    val t = string.gsub(t, "?", fname)
+    assert(string.find(err, t, 1, true))
+  }
+
+  do {  ;; testing 'package.searchers' not being a table
+    val searchers = package.searchers
+    set package.searchers = 3
+    val st, msg = pcall(require, 'a')
+    assert(!st && string.find(msg, "must be a table"))
+    set package.searchers = searchers
+  }
+
+  val func import (...) {
+    val f = [...]
+    return(func (m) {
+      loop i in (1, #f) {
+        set m@(f@(i)) = _G@(f@(i))
+      }
+    })
+  }
+
+  ;; cannot change environment of a C function
+  assert(!pcall(module, 'XUXU'))
+
+  ;; testing require of C libraries
+
+  val p = ""  ;; On Mac OS X, redefine this to "_"
+
+  ;; check whether loadlib works in this system
+  var st, err, when = package.loadlib(DC("lib1"), "*")
+  if !st {
+    val f, err, when = package.loadlib("donotexist", p ++ "xuxu")
+    assert(!f && (type(err) == "string") && (when == "absent"))
+    (Message || print)('\n >>> cannot load dynamic library <<<\n')
+    print(err, when)
+  } else {
+    ;; tests for loadlib
+    var f = assert(package.loadlib(DC("lib1"), p ++ "onefunction"))
+    val a, b = f(15, 25)
+    assert((a == 25) && (b == 15))
+
+    set f = assert(package.loadlib(DC("lib1"), p ++ "anotherfunc"))
+    assert(f(10, 20) == "10%20\n")
+
+    ;; check error messages
+    var f, err, when = package.loadlib(DC("lib1"), p ++ "xuxu")
+    assert(!f && (type(err) == "string") && (when == "init"))
+    set f, err, when = package.loadlib("donotexist", p ++ "xuxu")
+    assert(!f && (type(err) == "string") && (when == "open"))
+
+    ;; symbols from 'lib1' must be visible to other libraries
+    set f = assert(package.loadlib(DC("lib11"), p ++ "luaopen_lib11"))
+    assert(f() == "exported")
+
+    ;; test C modules with prefixes in names
+    set package.cpath = DC("?")
+    val lib2, ext = require("lib2-v2")
+    assert(string.find(ext, "libs/lib2-v2", 1, true))
+    ;; check correct access to global environment and correct
+    ;; parameters
+    assert((_ENV.x == "lib2-v2") && (_ENV.y == DC("lib2-v2")))
+    assert(lib2.id("x") == true)  ;; a different "id" implementation
+
+    ;; test C submodules
+    val fs, ext = require("lib1.sub")
+    assert((_ENV.x == "lib1.sub") && (_ENV.y == DC("lib1")))
+    assert(string.find(ext, "libs/lib1", 1, true))
+    assert(fs.id(45) == 45)
+    set _ENV.x, _ENV.y = nil
+  }
+
+  set _ENV = _G
+
+  ;; testing preload
+  do {
+    val p = package
+    set package = []
+    set p.preload.pl = func (...) {
+      val _ENV = [...]
+      func xuxu (x) {
+        return(x + 20)
+      }
+      return(_ENV)
+    }
+
+    val pl, ext = require("pl")
+    assert(require("pl") == pl)
+    assert(pl.xuxu(10) == 30)
+    assert((pl@(1) == "pl") && (pl@(2) == ":preload:") && (ext == ":preload:"))
+
+    set package = p
+    assert(type(package.path) == "string")
+  }
+
+  do {
+    print("testing external strings")
+    set package.cpath = DC("?")
+    val lib2 = require("lib2-v2")
+    val t = []
+    loop _, len in ipairs([0, 10, 39, 40, 41, 1000]) {
+      val str = string.rep("a", len)
+      val str1 = lib2.newstr(str)
+      assert(str == str1)
+      assert(!T || (T.hash(str) == T.hash(str1)))
+      set t@(str1) = 20
+      assert((t@(str) == 20) && (t@(str1) == 20))
+      set t@(str) = 10
+      assert(t@(str1) == 10)
+      val tt = [@(str1)=str1]
+      assert((next(tt) == str1) && (next(tt, str1) == nil))
+      assert(tt@(str) == str)
+      val str2 = lib2.newstr(str1)
+      assert((str == str2) && (t@(str2) == 10) && (tt@(str2) == str))
+    }
+  }
+
+  print('+')
+}  ;;]
+
+print("testing assignments, logical operators, and constructors")
+
+val res, res2 = 27
+
+var a, b = (1, 2 + 3)
+assert((a == 1) && (b == 5))
+set a = []
+var f
+set f = func () {
+  return(10, 11, 12)
+}
+set a.x, b, a@(1) = (1, 2, f())
+assert((a.x == 1) && (b == 2) && (a@(1) == 10))
+set a@(f()), b, a@(f() + 3) = (f(), a, 'x')
+assert((a@(10) == 10) && (b == a) && (a@(13) == 'x'))
+
+do {
+  val func f (n) {
+    val x = []
+    loop i in (1, n) {
+      set x@(i) = i
+    }
+    return(table.unpack(x))
+  }
+  var a, b, c
+  set a, b = (0, f(1))
+  assert((a == 0) && (b == 1))
+  set a, b = (0, f(1))
+  assert((a == 0) && (b == 1))
+  set a, b, c = (0, 5, f(4))
+  assert((a == 0) && (b == 5) && (c == 1))
+  set a, b, c = (0, 5, f(0))
+  assert((a == 0) && (b == 5) && (c == nil))
+}
+
+var a, b, c, d = (1 && nil, 1 || nil, (1 && (nil || 1)), 6)
+assert(!a && b && c && (d == 6))
+
+set d = 20
+set a, b, c, d = f()
+assert((a == 10) && (b == 11) && (c == 12) && (d == nil))
+set a, b = (f(), 1, 2, 3, f())
+assert((a == 10) && (b == 1))
+
+assert(((a < b) == false) && ((a > b) == true))
+assert((10 && 2) == 2)
+assert((10 || 2) == 10)
+assert((10 || assert(nil)) == 10)
+assert(!(nil && assert(nil)))
+assert((nil || "alo") == "alo")
+assert((nil && 10) == nil)
+assert((false && 10) == false)
+assert((true || 10) == true)
+assert((false || 10) == 10)
+assert(false != nil)
+assert(nil != false)
+assert(!nil == true)
+assert(!!nil == false)
+assert(!!1 == true)
+assert(!!a == true)
+assert(!!(6 || nil) == true)
+assert(!!(nil && 56) == false)
+assert(!!(nil && true) == false)
+assert(!10 == false)
+assert(![] == false)
+assert(!0.5 == false)
+assert(!"x" == false)
+
+assert([] != [])
+print('+')
+
+set a = []
+set a@(true) = 20
+set a@(false) = 10
+assert((a@(1 < 2) == 20) && (a@(1 > 2) == 10))
+
+func f (a) {
+  return(a)
+}
+
+var a = []
+loop i in (3000, -3000, -1) {
+  set a@(i + 0.0) = i
+}
+set a@(10e30) = "alo"
+set a@(true) = 10
+set a@(false) = 20
+assert((a@(10e30) == 'alo') && (a@(!1) == 20) && (a@(10 < 20) == 10))
+loop i in (3000, -3000, -1) {
+  assert(a@(i) == i)
+}
+set a@(print) = assert
+set a@(f) = print
+set a@(a) = a
+assert(a@(a)@(a)@(a)@(a)@(print) == assert)
+a@(print)(a@(a@(f)) == a@(print))
+assert(!pcall(func () {
+  val a = []
+  set a@(nil) = 10
+}))
+assert(!pcall(func () {
+  val a = [@(nil)=10]
+}))
+assert(a@(nil) == undef)
+set a = nil
+
+var a, b, c
+set a = [10, 9, 8, 7, 6, 5, 4, 3, 2, @(-3)='a', @(f)=print, a='a', b='ab']
+set a, a.x, a.y = (a, a@(-3))
+assert((a@(1) == 10) && (a@(-3) == a.a) && (a@(f) == print) && (a.x == 'a') && !a.y)
+set a@(1), f(a)@(2), b, c = ([@('alo')=assert], 10, a@(1), a@(f), 6, 10, 23, f(a), 2)
+a@(1).alo((a@(2) == 10) && (b == 10) && (c == print))
+
+set a.aVeryLongName012345678901234567890123456789012345678901234567890123456789 = 10
+val func foo () {
+  return(a.aVeryLongName012345678901234567890123456789012345678901234567890123456789)
+}
+assert((foo() == 10) && (a.aVeryLongName012345678901234567890123456789012345678901234567890123456789 == 10))
+
+do {
+  ;; _ENV constant
+  val func foo () {
+    val _ENV = 11
+    set X = "hi"
+  }
+  val st, msg = pcall(foo)
+  assert(!st && string.find(msg, "number"))
+}
+
+;; test of large float/integer indices
+
+;; compute maximum integer where all bits fit in a float
+var maxint = math.maxinteger
+
+;; trim (if needed) to fit in a float
+loop {
+  while((maxint != (maxint + 0.0)) || ((maxint - 1) != (maxint - 1.0)))
+  set maxint = maxint // 2
+}
+
+val maxintF = maxint + 0.0  ;; float version
+
+assert((maxintF == maxint) && (math.type(maxintF) == "float") && (maxintF >= (2.0 ** 14)))
+
+;; floats and integers must index the same places
+set a@(maxintF) = 10
+set a@(maxintF - 1.0) = 11
+set a@(-maxintF) = 12
+set a@(-maxintF + 1.0) = 13
+
+assert((a@(maxint) == 10) && (a@(maxint - 1) == 11) && (a@(-maxint) == 12) && (a@(-maxint + 1) == 13))
+
+set a@(maxint) = 20
+set a@(-maxint) = 22
+
+assert((a@(maxintF) == 20) && (a@(maxintF - 1.0) == 11) && (a@(-maxintF) == 22) && (a@(-maxintF + 1.0) == 13))
+
+set a = nil
+
+;; test conflicts in multiple assignment
+do {
+  var a, i, j, b
+  set a = ['a', 'b']
+  set i = 1
+  set j = 2
+  set b = a
+  set i, a@(i), a, j, a@(j), a@(i + j) = (j, i, i, b, j, i)
+  assert((i == 2) && (b@(1) == 1) && (a == 1) && (j == b) && (b@(2) == 2) && (b@(3) == 1))
+  set a = []
+  val func foo () {  ;; assigining to upvalues
+    set b, a.x, a = (a, 10, 20)
+  }
+  foo()
+  assert((a == 20) && (b.x == 10))
+}
+
+;; repeat test with upvalues
+do {
+  var a, i, j, b
+  set a = ['a', 'b']
+  set i = 1
+  set j = 2
+  set b = a
+  val func foo () {
+    set i, a@(i), a, j, a@(j), a@(i + j) = (j, i, i, b, j, i)
+  }
+  foo()
+  assert((i == 2) && (b@(1) == 1) && (a == 1) && (j == b) && (b@(2) == 2) && (b@(3) == 1))
+  val t = []
+  (func (a) {
+    set t@(a), a = (10, 20)
+  })(1)
+  assert(t@(1) == 10)
+}
+
+;; bug in 5.2 beta
+val func foo () {
+  var a
+  return(func () {
+    var b
+    set a, b = (3, 14)  ;; local and upvalue have same index
+    return(a, b)
+  })
+}
+
+val a, b = foo()()
+assert((a == 3) && (b == 14))
+
+print('OK')
+
+return(res)
