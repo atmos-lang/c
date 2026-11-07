@@ -1,0 +1,251 @@
+;; $Id: testes/vararg.lua $
+;; See Copyright Notice in file lua.h
+
+print('testing vararg')
+
+var f
+set f = func (a, ...) {
+  val t = table.pack(...)  ;; (Lua: '...t' named vararg)
+  val x = [n=select('#', ...), ...]
+  assert(x.n == t.n)
+  loop i in (1, x.n) {
+    assert((a@(i) == x@(i)) && (x@(i) == t@(i)))
+  }
+  return(x.n)
+}
+
+val func c12 (...) {
+  assert(arg == _G.arg)  ;; no local 'arg'
+  val x = [...]
+  set x.n = #x
+  var res = ((x.n == 2) && (x@(1) == 1) && (x@(2) == 2))
+  if res {
+    set res = 55
+  }
+  return(res, 2)
+}
+
+val func vararg (...) {  ;; (Lua: '...t' named vararg)
+  return(table.pack(...))
+}
+
+val func call (f, args) {
+  return(f(table.unpack(args, 1, args.n)))
+}
+
+assert(f() == 0)
+assert(f([1, 2, 3], 1, 2, 3) == 3)
+assert(f(["alo", nil, 45, f, nil], "alo", nil, 45, f, nil) == 5)
+
+assert(vararg().n == 0)
+assert(vararg(nil, nil).n == 2)
+
+assert(c12(1, 2) == 55)
+var a, b = assert(call(c12, [1, 2]))
+assert((a == 55) && (b == 2))
+set a = call(c12, [1, 2, n=2])
+assert((a == 55) && (b == 2))
+set a = call(c12, [1, 2, n=1])
+assert(!a)
+assert(c12(1, 2, 3) == false)
+var a = vararg(call(next, [_G, nil, n=2]))
+var b, c = next(_G)
+assert((a@(1) == b) && (a@(2) == c) && (a.n == 2))
+set a = vararg(call(call, [c12, [1, 2]]))
+assert((a.n == 2) && (a@(1) == 55) && (a@(2) == 2))
+set a = call(print, ['+'])
+assert(a == nil)
+
+val t = [1, 10]
+func t::f (...) {
+  val arg = [...]
+  return(self@(...) + #arg)
+}
+assert((t::f(1, 4) == 3) && (t::f(2) == 11))
+print('+')
+
+val lim = 20
+var i, a = (1, [])
+loop {
+  while(i <= lim)
+  set a@(i) = i + 0.3
+  set i = i + 1
+}
+
+func f (a, b, c, d, ...) {
+  val more = [...]
+  assert((a == 1.3) && (more@(1) == 5.3) && (more@(lim - 4) == (lim + 0.3)) && !more@(lim - 3))
+}
+
+val func g (a, b, c) {
+  assert((a == 1.3) && (b == 2.3) && (c == 3.3))
+}
+
+call(f, a)
+call(g, a)
+
+set a = []
+set i = 1
+loop {
+  while(i <= lim)
+  set a@(i) = i
+  set i = i + 1
+}
+assert(call(math.max, a) == lim)
+
+print("+")
+
+;; new-style varargs
+
+val func oneless (a, ...) {
+  return(...)
+}
+
+func f (n, a, ...) {
+  var b
+  assert(arg == _G.arg)  ;; no local 'arg'
+  val vs = table.pack(...)  ;; (varargs cannot be used in nested blocks)
+  if n == 0 {
+    val b, c, d = table.unpack(vs, 1, vs.n)
+    return(a, b, c, d, oneless(oneless(oneless(table.unpack(vs, 1, vs.n)))))
+  } else {
+    set n, b, a = (n - 1, table.unpack(vs, 1, vs.n), a)
+    assert(b == table.unpack(vs, 1, vs.n))
+    return(f(n, a, table.unpack(vs, 1, vs.n)))
+  }
+}
+
+set a, b, c, d, e = assert(f(10, 5, 4, 3, 2, 1))
+assert((a == 5) && (b == 4) && (c == 3) && (d == 2) && (e == 1))
+
+set a, b, c, d, e = f(4)
+assert((a == nil) && (b == nil) && (c == nil) && (d == nil) && (e == nil))
+
+do {  ;; vararg expressions using unpack
+  val func aux (a, v, ...) {
+    val t = table.pack(...)  ;; (Lua: '...t' named vararg)
+    loop k, val_ in pairs(v) {
+      set t@(k) = val_
+    }
+    return(table.unpack(t, 1, t.n))  ;; (Lua: 'return ...' sees the changes)
+  }
+
+  val t = table.pack(aux(10, [11, @(5)=24], 1, 2, 3, nil, 4))
+  assert((t.n == 5) && (t@(1) == 11) && (t@(2) == 2) && (t@(3) == 3) && (t@(4) == nil) && (t@(5) == 24))
+
+  val t = table.pack(aux(nil, [1, @(20)="a", @(30)="b", n=30]))
+  assert((t.n == 30) && (t@(1) == 1) && (t@(20) == "a") && (t@(30) == "b"))
+  ;; table has only those four elements
+  assert(next(t, next(t, next(t, next(t, next(t, nil))))) == nil)
+
+  val a, b, c, d = aux(nil, [], 10, 20, 30)
+  assert((a == 10) && (b == 20) && (c == 30) && (d == nil))
+
+  val func aux (a, b, n, ...) {
+    val t = table.pack(...)  ;; (Lua: '...t' named vararg)
+    set t.n = n
+    return(b, table.unpack(t, 1, t.n))  ;; (Lua: 'return b, ...' sees the changes)
+  }
+  val t = table.pack(aux(10, 1, 10000))
+  assert((t.n == 10001) && (t@(1) == 1) && (#t == 1))
+
+  val func checkerr (emsg, f, ...) {
+    val st, msg = pcall(f, ...)
+    assert(!st && string.find(msg, emsg))
+  }
+  ;; (Lua: checks for a proper 'n' in the vararg table; not applicable)
+
+}
+
+;; varargs for main chunks
+var f = assert(load(""" [...] """))
+val x = f(2, 3)
+assert((x@(1) == 2) && (x@(2) == 3) && (x@(3) == undef))
+
+set f = load("""  val x = [...]
+  val n = select('#', ...)
+  val y = table.pack(...)
+  loop i in (1, n) { assert(x@(i) == y@(i)) }
+  assert(x@(n + 1) == undef)
+  true
+""")
+
+assert(f("a", "b", nil, [], assert))
+assert(f())
+
+set a = [select(3, table.unpack([10, 20, 30, 40]))]
+assert((#a == 2) && (a@(1) == 30) && (a@(2) == 40))
+set a = [select(1)]
+assert(next(a) == nil)
+set a = [select(-1, 3, 5, 7)]
+assert((a@(1) == 7) && (a@(2) == undef))
+set a = [select(-2, 3, 5, 7)]
+assert((a@(1) == 5) && (a@(2) == 7) && (a@(3) == undef))
+pcall(select, 10000)
+pcall(select, -10000)
+
+;; bug in 5.2.2
+
+func f (p1, p2, p3, p4, p5, p6, p7, p8, p9, p10, p11, p12, p13, p14, p15, p16, p17, p18, p19, p20, p21, p22, p23, p24, p25, p26, p27, p28, p29, p30, p31, p32, p33, p34, p35, p36, p37, p38, p39, p40, p41, p42, p43, p44, p45, p46, p48, p49, p50, ...) {
+
+  val a1, a2, a3, a4, a5, a6, a7
+  val a8, a9, a10, a11, a12, a13, a14
+}
+
+;; assertion fail here
+f()
+
+;; missing arguments in tail call
+do {
+  val func f (a, b, c) {
+    return(c, b)
+  }
+  val func g () {
+    return(f(1, 2))
+  }
+  val a, b = g()
+  assert((a == nil) && (b == 2))
+}
+
+do {  ;; vararg parameter used in nested functions
+  val func foo (...) {
+    val tab1 = table.pack(...)  ;; (Lua: '...tab1' named vararg)
+    return(func (...) {
+      val tab2 = table.pack(...)
+      return([tab1, tab2])
+    })
+  }
+  val f = foo(10, 20, 30)
+  val t = f("a", "b")
+  assert((t@(1).n == 3) && (t@(1)@(1) == 10))
+  assert((t@(2).n == 2) && (t@(2)@(1) == "a"))
+}
+
+;; (named vararg parameters ('...t') do not exist in Atmos: the tests for
+;; read-only vararg parameters and for '_ENV' as vararg parameter were
+;; dropped)
+
+do {  ;; access to vararg parameter
+  val func notab (keys, t, ...) {
+    val v = table.pack(...)  ;; (Lua: '...v' named vararg)
+    loop _, k in pairs(keys) {
+      assert(t@(k) == v@(k))
+    }
+    assert(t.n == v.n)
+    return(...)
+  }
+
+  val t = table.pack(10, 20, 30)
+  val keys = [-1, 0, 1, t.n, t.n + 1, 1.0, 1.1, "n", print, "k", "1"]
+  notab(keys, t, 10, 20, 30)
+
+  ;; writing to the vararg table
+  val func foo (...) {
+    val t = table.pack(...)  ;; (Lua: '...t' named vararg)
+    set t@(1) = t@(1) + 10
+    return(t@(1))
+  }
+  assert(foo(10, 30) == 20)
+}
+
+print('OK')
