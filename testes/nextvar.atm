@@ -1,0 +1,1165 @@
+;; $Id: testes/nextvar.lua $
+;; See Copyright Notice in file lua.h
+
+;; (global *)
+
+print('testing tables, next, and for')
+
+val func checkerror (msg, f, ...) {
+  val s, err = pcall(f, ...)
+  assert(!s && string.find(err, msg))
+}
+
+;;--------------------------------------------------------------
+val func printTable (t) {
+  val a, h = T.querytab(t)
+  print("array:")
+  loop i in (1, a) {
+    print("", T.querytab(t, i - 1))
+  }
+  print("hash:")
+  loop i in (1, h) {
+    print("", T.querytab(t, (a + i) - 1))
+  }
+}
+;;--------------------------------------------------------------
+val func countentries (t) {
+  var e = 0
+  loop _ in pairs(t) {
+    set e = e + 1
+  }
+  return(e)
+}
+;;--------------------------------------------------------------
+
+val func check (t, na, nh) {
+  if !T {
+    return()
+  }
+  val a, h = T.querytab(t)
+  if (a != na) || (h != nh) {
+    print(na, nh, a, h)
+    assert(nil)
+  }
+}
+
+var a = []
+
+;; make sure table has lots of space in hash part
+loop i in (1, 100) {
+  set a@(i ++ "+") = true
+}
+loop i in (1, 100) {
+  set a@(i ++ "+") = undef
+}
+;; fill hash part with numeric indices testing size operator
+loop i in (1, 100) {
+  set a@(i) = true
+  assert(#a == i)
+}
+
+do {  ;; rehash moving elements from array to hash
+  val a = []
+  loop i in (1, 100) {
+    set a@(i) = i
+  }
+  check(a, 128, 0)
+
+  loop i in (5, 95) {
+    set a@(i) = nil
+  }
+  check(a, 128, 0)
+
+  set a@(129) = 1  ;; force a re-hash
+  check(a, 4, 8)  ;; keys larger than 4 go to the hash part
+
+  loop i in (1, 4) {
+    assert(a@(i) == i)
+  }
+  loop i in (5, 95) {
+    assert(a@(i) == nil)
+  }
+  loop i in (96, 100) {
+    assert(a@(i) == i)
+  }
+  assert(a@(129) == 1)
+}
+
+do {  ;; growing hash part keeping array part
+  val a = table.create(1000)
+  check(a, 1000, 0)
+  set a.x = 10
+  check(a, 1000, 1)  ;; array part keeps its elements
+}
+
+do {  ;; "growing" length of a prebuilt table
+  val N = 100
+  val a = table.create(N)
+  loop i in (1, N) {
+    set a@(#a + 1) = true
+    assert(#a == i)
+  }
+  check(a, N, 0)
+}
+
+;; testing ipairs
+var x = 0
+loop k, v in ipairs([10, 20, 30, x=12]) {
+  set x = x + 1
+  assert((k == x) && (v == (x * 10)))
+}
+
+loop _ in ipairs([x=12, y=24]) {
+  assert(nil)
+}
+
+;; test for 'false' x ipair
+set x = false
+var i = 0
+loop k, v in ipairs([true, false, true, false]) {
+  set i = i + 1
+  set x = !x
+  assert(x == v)
+}
+assert(i == 4)
+
+;; iterator function is always the same
+assert((type(ipairs([])) == 'function') && (ipairs([]) == ipairs([])))
+
+do {  ;; overflow (must wrap-around)
+  val f = ipairs([])
+  var k, v = f([@(math.mininteger)=10], math.maxinteger)
+  assert((k == math.mininteger) && (v == 10))
+  set k, v = f([@(math.mininteger)=10], k)
+  assert(k == nil)
+}
+
+do {
+  ;; alternate insertions and deletions in an almost full hash.
+  ;; In versions pre-5.5, that causes constant rehashings and
+  ;; takes a long time to complete.
+  val a = []
+  loop i in (1, (2 ** 11) - 1) {
+    set a@(i ++ "") = true
+  }
+
+  loop i in (1, 1e5) {
+    val key = i ++ "."
+    set a@(key) = true
+    set a@(key) = nil
+  }
+  assert(countentries(a) == ((2 ** 11) - 1))
+}
+
+if !T {
+  (Message || print)('\n >>> testC not active: skipping tests for table sizes <<<\n')
+} else {  ;;[
+  ;; testing table sizes
+
+  ;; minimum power of 2 (or zero) >= n
+  val func mp2 (n) {
+    val mp = 2 ** math.ceil(math.log(n, 2))
+    assert(((mp == 0) || ((mp / 2) < n)) && (n <= mp))
+    return(mp)
+  }
+
+  ;; testing C library sizes
+  do {
+    var s = 0
+    loop _ in pairs(math) {
+      set s = s + 1
+    }
+    check(math, 0, mp2(s))
+  }
+
+  ;; testing constructor sizes
+  val sizes = [0, 1, 2, 3, 4, 5, 7, 8, 9, 15, 16, 17, 30, 31, 32, 33, 34, 254, 255, 256, 257, 500, 1001]
+
+  loop _, sa in ipairs(sizes) {  ;; 'sa' is size of the array part
+    val arr = ["["]
+    loop i in (1, sa) {  ;; build array part
+      set arr@(1 + i) = "1,"
+    }
+    loop _, sh in ipairs(sizes) {  ;; 'sh' is size of the hash part
+      loop j in (1, sh) {  ;; build hash part
+        set arr@(1 + sa + j) = string.format('k%x=%d,', j, j)
+      }
+      set arr@(1 + sa + sh + 1) = "]"
+      val prog = table.concat(arr)
+      val f = assert(load(prog))
+      collectgarbage("stop")
+      f()  ;; call once to ensure stack space
+      ;; make sure table is not resized after being created
+      if (sa == 0) || (sh == 0) {
+        T.alloccount(2)  ;; header + array or hash part
+      } else {
+        T.alloccount(3)  ;; header + array part + hash part
+      }
+      val t = f()
+      T.alloccount()
+      collectgarbage("restart")
+      assert(#t == sa)
+      check(t, sa, mp2(sh))
+    }
+  }
+
+  ;; tests with unknown number of elements
+  var a = []
+  loop i in (1, sizes@(#sizes)) {  ;; build auxiliary table
+    set a@(i) = i
+  }
+  loop k in ipairs(sizes) {
+    var t = [table.unpack(a, 1, k)]
+    assert(#t == k)
+    check(t, k, 0)
+    set t = [1, 2, 3, table.unpack(a, 1, k)]
+    check(t, k + 3, 0)
+    assert(#t == (k + 3))
+  }
+
+  ;; testing tables dynamically built
+  var lim = 130
+  var a = []
+  set a@(2) = 1
+  check(a, 2, 0)
+  set a = []
+  set a@(0) = 1
+  check(a, 0, 1)
+  set a@(2) = 1
+  check(a, 2, 1)
+  set a = []
+  set a@(0) = 1
+  set a@(1) = 1
+  check(a, 1, 1)
+  set a = []
+  loop i in (1, lim) {
+    set a@(i) = 1
+    assert(#a == i)
+    check(a, mp2(i), 0)
+  }
+
+  set a = []
+  loop i in (1, lim) {
+    set a@('a' ++ i) = 1
+    assert(#a == 0)
+    check(a, 0, mp2(i))
+  }
+
+  ;; insert and delete elements until a rehash occur. Caller must ensure
+  ;; that a rehash will change the shape of the table. Must repeat because
+  ;; the insertion may collide with the deleted element, and then there is
+  ;; no rehash.
+  val func forcerehash (t) {
+    val na, nh = T.querytab(t)
+    var i = 10000
+    loop {
+      set i = i + 1
+      set t@(i) = true
+      set t@(i) = undef
+      val nna, nnh = T.querytab(t)
+      until((nna != na) || (nnh != nh))
+    }
+  }
+
+  do {
+    val a = []
+    loop i in (1, 16) {
+      set a@(i) = i
+    }
+    check(a, 16, 0)
+    loop i in (1, 11) {
+      set a@(i) = undef
+    }
+    check(a, 16, 0)
+    set a@(30) = true  ;; force a rehash
+    set a@(30) = undef
+    check(a, 0, 8)  ;; 5 elements in the hash part: [12]-[16]
+    set a@(10) = 1
+    forcerehash(a)
+    check(a, 16, 1)
+    loop i in (1, 14) {
+      set a@(i) = true
+      set a@(i) = undef
+    }
+    check(a, 16, 1)  ;; no rehash...
+    set a@(31) = true  ;; force a rehash
+    set a@(32) = true
+    check(a, 0, 4)  ;; [15], [16], [31], [32]
+  }
+
+  ;; reverse filling
+  do {
+    val N = 2 ** 10
+    val a = []
+    loop i in (N, 1, -1) {  ;; fill in reverse
+      set a@(i) = i
+    }
+    check(a, mp2(N), 0)
+  }
+
+  do {  ;; "almost sparse" arrays
+    ;; create table with holes in 1/3 of its entries; all its
+    ;; elements are always in the array part
+    val a = []
+    loop i in (1, 257) {
+      if (i % 3) != 1 {
+        set a@(i) = true
+        check(a, mp2(i), 0)
+      }
+    }
+  }
+
+  do {
+    ;; alternate insertions and deletions should give some extra
+    ;; space for the hash part. Otherwise, a mix of insertions/deletions
+    ;; could cause too many rehashes. (See the other test for "alternate
+    ;; insertions and deletions" in this file.)
+    val a = []
+    loop i in (1, 256) {
+      set a@(i ++ "") = true
+    }
+    check(a, 0, 256)  ;; hash part is full
+    set a@("256") = nil  ;; delete a key
+    forcerehash(a)
+    ;; table has only 255 elements, but it got some extra space;
+    ;; otherwise, almost each delete-insert would rehash the table again.
+    assert(countentries(a) == 255)
+    check(a, 0, 512)
+  }
+
+  ;; size tests for vararg
+  set lim = 35
+  val func foo (n, ...) {
+    val arg = [...]
+    check(arg, n, 0)
+    assert(select('#', ...) == n)
+    set arg@(n + 1) = true
+    check(arg, mp2(n + 1), 0)
+    set arg.x = true
+    check(arg, mp2(n + 1), 1)
+  }
+  val a = []
+  loop i in (1, lim) {
+    set a@(i) = true
+    foo(i, table.unpack(a))
+  }
+}  ;;]
+
+;; test size operation on tables with nils
+assert(#[] == 0)
+assert(#[nil] == 0)
+assert(#[nil, nil] == 0)
+assert(#[nil, nil, nil] == 0)
+assert(#[nil, nil, nil, nil] == 0)
+assert(#[1, 2, 3, nil, nil] == 3)
+print('+')
+
+do {
+  val s1, s2 = math.randomseed()
+  print(string.format("testing length for some random tables (seeds 0X%x:%x)", s1, s2))
+  val N = 130
+  loop i in (1, 1e3) {  ;; create that many random tables
+    val a = table.create(math.random(N))  ;; initiate with random size
+    loop j in (1, math.random(N)) {  ;; add random number of random entries
+      set a@(math.random(N)) = true
+    }
+    assert((#a == 0) || (a@(#a) && !a@(#a + 1)))
+  }
+}
+
+do {
+  print("testing attack on table length")
+  val t = []
+  val lim = math.floor(math.log(math.maxinteger, 2)) - 1
+  loop i in (lim, 0, -1) {
+    set t@(2 ** i) = true
+  }
+  assert(t@(math.tointeger(2 ** lim)))
+  ;; next loop should not take forever
+  loop i in (1, #t) {
+  }
+}
+
+val nofind = []
+
+;; next uses always the same iteration function
+assert(next([]) == next([]))
+
+val func find (name) {
+  var n, v
+  loop {
+    while(1)
+    set n, v = next(_G, n)
+    if !n {
+      return(nofind)
+    }
+    assert(_G@(n) != undef)
+    if n == name {
+      return(v)
+    }
+  }
+}
+
+val func find1 (name) {
+  loop n, v in pairs(_G) {
+    if n == name {
+      return(v)
+    }
+  }
+  return(nil)  ;; not found
+}
+
+assert((print == find("print")) && (print == find1("print")))
+assert(_G.print == find("print"))
+assert(assert == find1("assert"))
+assert(nofind == find("return"))
+assert(!find1("return"))
+set _G@("ret" ++ "urn") = undef
+assert(nofind == find("return"))
+set _G.xxx = 1
+assert(xxx == find("xxx"))
+
+;; invalid key to 'next'
+checkerror("invalid key", next, [10, 20], 3)
+
+;; both 'pairs' and 'ipairs' need an argument
+checkerror("bad argument", pairs)
+checkerror("bad argument", ipairs)
+
+print('+')
+
+set a = []
+loop i in (0, 10000) {
+  if math.fmod(i, 10) != 0 {
+    set a@('x' ++ i) = i
+  }
+}
+
+var n = [n=0]
+loop i, v in pairs(a) {
+  set n.n = n.n + 1
+  assert(i && v && (a@(i) == v))
+}
+assert(n.n == 9000)
+set a = nil
+
+do {  ;; clear global table
+  val a = []
+  loop n, v in pairs(_G) {
+    set a@(n) = v
+  }
+  loop n, v in pairs(a) {
+    if !package.loaded@(n) && (type(v) != "function") && !string.find(n, "^[%u_]") {
+
+      set _G@(n) = undef
+    }
+    collectgarbage()
+  }
+}
+
+;;
+
+val func checknext (a) {
+  val b = []
+  do {
+    var k, v = next(a)
+    loop {
+      while(k)
+      set b@(k) = v
+      set k, v = next(a, k)
+    }
+  }
+  loop k, v in pairs(b) {
+    assert(a@(k) == v)
+  }
+  loop k, v in pairs(a) {
+    assert(b@(k) == v)
+  }
+}
+
+checknext([1, x=1, y=2, z=3])
+checknext([1, 2, x=1, y=2, z=3])
+checknext([1, 2, 3, x=1, y=2, z=3])
+checknext([1, 2, 3, 4, x=1, y=2, z=3])
+checknext([1, 2, 3, 4, 5, x=1, y=2, z=3])
+
+assert(#[] == 0)
+assert(#[@(-1)=2] == 0)
+loop i in (0, 40) {
+  val a = []
+  loop j in (1, i) {
+    set a@(j) = j
+  }
+  assert(#a == i)
+}
+
+;; 'maxn' is now deprecated, but it is easily defined in Lua
+func table.maxn (t) {
+  var max = 0
+  loop k in pairs(t) {
+    set max = ((type(k) == 'number') && math.max(max, k)) || max
+  }
+  return(max)
+}
+
+assert(table.maxn([]) == 0)
+assert(table.maxn([@("1000")=true]) == 0)
+assert(table.maxn([@("1000")=true, @(24.5)=3]) == 24.5)
+assert(table.maxn([@(1000)=true]) == 1000)
+assert(table.maxn([@(10)=true, @(100 * math.pi)=print]) == (100 * math.pi))
+
+set table.maxn = nil
+
+;; int overflow
+set a = []
+loop i in (0, 50) {
+  set a@(2 ** i) = true
+}
+assert(a@(#a))
+
+print('+')
+
+do {  ;; testing 'next' with all kinds of keys
+  val a = [@(1)=1, @(1.1)=2, @('x')=3, @(string.rep('x', 1000))=4, @(print)=5, @(checkerror)=6, @(coroutine.running())=7, @(true)=8, @(io.stdin)=9, @([])=10]
+  ;; integer
+  ;; float
+  ;; short string
+  ;; long string
+  ;; C function
+  ;; Lua function
+  ;; thread
+  ;; boolean
+  ;; userdata
+  ;; table
+
+  val b = []
+  loop i in (1, 10) {
+    set b@(i) = true
+  }
+  loop k, v in pairs(a) {
+    assert(b@(v))
+    set b@(v) = undef
+  }
+  assert(next(b) == nil)  ;; 'b' now is empty
+}
+
+;; erasing values
+var t = [@([1])=1, @([2])=2, @(string.rep("x ", 4))=3, @(100.3)=4, @(4)=5]
+
+var n = 0
+loop k, v in pairs(t) {
+  set n = n + 1
+  assert(t@(k) == v)
+  set t@(k) = undef
+  collectgarbage()
+  assert(t@(k) == undef)
+}
+assert(n == 5)
+
+do {
+  print("testing next x GC of deleted keys")
+  ;; bug in 5.4.1
+  val co = coroutine.wrap(func (t) {
+    loop k, v in pairs(t) {
+      val k1 = next(t)  ;; all previous keys were deleted
+      assert(k == k1)  ;; current key is the first in the table
+      set t@(k) = nil
+      val expected = (((type(k) == "table") && k@(1)) || ((type(k) == "function") && k()) || string.sub(k, 1, 1))
+      assert(expected == v)
+      coroutine.yield(v)
+    }
+  })
+  val t = []
+  set t@([1]) = 1  ;; add several unanchored, collectable keys
+  set t@([2]) = 2
+  set t@(string.rep("a", 50)) = "a"  ;; long string
+  set t@(string.rep("b", 50)) = "b"
+  set t@([3]) = 3
+  set t@(string.rep("c", 10)) = "c"  ;; short string
+  set t@(func () {
+    return(10)
+  }) = 10
+  var count = 7
+  loop {
+    while(co(t))
+    collectgarbage("collect")  ;; collect dead keys
+    set count = count - 1
+  }
+  assert((count == 0) && (next(t) == nil))  ;; traversed the whole table
+}
+
+val func test_ (a) {
+  assert(!pcall(table.insert, a, 2, 20))
+  table.insert(a, 10)
+  table.insert(a, 2, 20)
+  table.insert(a, 1, -1)
+  table.insert(a, 40)
+  table.insert(a, #a + 1, 50)
+  table.insert(a, 2, -2)
+  assert(a@(2) != undef)
+  assert(a@("2") == undef)
+  assert(!pcall(table.insert, a, 0, 20))
+  assert(!pcall(table.insert, a, #a + 2, 20))
+  assert(table.remove(a, 1) == -1)
+  assert(table.remove(a, 1) == -2)
+  assert(table.remove(a, 1) == 10)
+  assert(table.remove(a, 1) == 20)
+  assert(table.remove(a, 1) == 40)
+  assert(table.remove(a, 1) == 50)
+  assert(table.remove(a, 1) == nil)
+  assert(table.remove(a) == nil)
+  assert(table.remove(a, #a) == nil)
+}
+
+set a = [n=0, @(-7)="ban"]
+test_(a)
+assert((a.n == 0) && (a@(-7) == "ban"))
+
+set a = [@(-7)="ban"]
+test_(a)
+assert((a.n == nil) && (#a == 0) && (a@(-7) == "ban"))
+
+set a = [@(-1)="ban"]
+test_(a)
+assert((#a == 0) && (table.remove(a) == nil) && (a@(-1) == "ban"))
+
+set a = [@(0)="ban"]
+assert((#a == 0) && (table.remove(a) == "ban") && (a@(0) == undef))
+
+table.insert(a, 1, 10)
+table.insert(a, 1, 20)
+table.insert(a, 1, -1)
+assert(table.remove(a) == 10)
+assert(table.remove(a) == 20)
+assert(table.remove(a) == -1)
+assert(table.remove(a) == nil)
+
+set a = ['c', 'd']
+table.insert(a, 3, 'a')
+table.insert(a, 'b')
+assert(table.remove(a, 1) == 'c')
+assert(table.remove(a, 1) == 'd')
+assert(table.remove(a, 1) == 'a')
+assert(table.remove(a, 1) == 'b')
+assert(table.remove(a, 1) == nil)
+assert((#a == 0) && (a.n == nil))
+
+set a = [10, 20, 30, 40]
+assert(table.remove(a, #a + 1) == nil)
+assert(!pcall(table.remove, a, 0))
+assert(a@(#a) == 40)
+assert(table.remove(a, #a) == 40)
+assert(a@(#a) == 30)
+assert(table.remove(a, 2) == 20)
+assert((a@(#a) == 30) && (#a == 2))
+
+do {  ;; testing table library with metamethods
+  val func test_ (proxy, t) {
+    loop i in (1, 10) {
+      table.insert(proxy, 1, i)
+    }
+    assert((#proxy == 10) && (#t == 10) && (proxy@(1) != undef))
+    loop i in (1, 10) {
+      assert(t@(i) == (11 - i))
+    }
+    table.sort(proxy)
+    loop i in (1, 10) {
+      assert((t@(i) == i) && (proxy@(i) == i))
+    }
+    assert(table.concat(proxy, ",") == "1,2,3,4,5,6,7,8,9,10")
+    loop i in (1, 8) {
+      assert(table.remove(proxy, 1) == i)
+    }
+    assert((#proxy == 2) && (#t == 2))
+    val a, b, c = table.unpack(proxy)
+    assert((a == 9) && (b == 10) && (c == nil))
+  }
+
+  ;; all virtual
+  var t = []
+  val proxy = setmetatable([], [__len=func () {
+    return(#t)
+  }, __index=t, __newindex=t])
+  test_(proxy, t)
+
+  ;; only __newindex
+  var count = 0
+  set t = setmetatable([], [__newindex=func (t, k, v) {
+    set count = count + 1
+    rawset(t, k, v)
+  }])
+  test_(t, t)
+  assert(count == 10)  ;; after first 10, all other sets are not new
+
+  ;; no __newindex
+  set t = setmetatable([], [__index=func (_, k) {
+    return(k + 1)
+  }, __len=func (_) {
+    return(5)
+  }])
+  assert(table.concat(t, ";") == "2;3;4;5;6")
+}
+
+do {  ;; testing overflow in table.insert (must wrap-around)
+
+  val t = setmetatable([], [__len=func () {
+    return(math.maxinteger)
+  }])
+  table.insert(t, 20)
+  val k, v = next(t)
+  assert((k == math.mininteger) && (v == 20))
+}
+
+if !T {
+  (Message || print)('\n >>> testC not active: skipping tests for table library on non-tables <<<\n')
+} else {  ;;[
+  val debug = require('debug')
+  val tab = [10, 20, 30]
+  val mt = []
+  val u = T.newuserdata(0)
+  checkerror("table expected", table.insert, u, 40)
+  checkerror("table expected", table.remove, u)
+  debug.setmetatable(u, mt)
+  checkerror("table expected", table.insert, u, 40)
+  checkerror("table expected", table.remove, u)
+  set mt.__index = tab
+  checkerror("table expected", table.insert, u, 40)
+  checkerror("table expected", table.remove, u)
+  set mt.__newindex = tab
+  checkerror("table expected", table.insert, u, 40)
+  checkerror("table expected", table.remove, u)
+  set mt.__len = func () {
+    return(#tab)
+  }
+  table.insert(u, 40)
+  assert((#u == 4) && (#tab == 4) && (u@(4) == 40) && (tab@(4) == 40))
+  assert(table.remove(u) == 40)
+  table.insert(u, 1, 50)
+  assert((#u == 4) && (#tab == 4) && (u@(4) == 30) && (tab@(1) == 50))
+
+  set mt.__newindex = nil
+  set mt.__len = nil
+  val tab2 = []
+  val u2 = T.newuserdata(0)
+  debug.setmetatable(u2, [__newindex=func (_, k, v) {
+    set tab2@(k) = v
+  }])
+  table.move(u, 1, 4, 1, u2)
+  assert((#tab2 == 4) && (tab2@(1) == tab@(1)) && (tab2@(4) == tab@(4)))
+}  ;; ]
+
+print('+')
+
+set a = []
+loop i in (1, 1000) {
+  set a@(i) = i
+  set a@(i - 1) = undef
+}
+assert((next(a, nil) == 1000) && (next(a, 1000) == nil))
+
+assert(next([]) == nil)
+assert(next([], nil) == nil)
+
+loop a, b in pairs([]) {
+  error("not here")
+}
+loop i in (1, 0) {
+  error('not here')
+}
+loop i in (0, 1, -1) {
+  error('not here')
+}
+set a = nil
+loop i in (1, 1) {
+  assert(!a)
+  set a = 1
+}
+assert(a)
+set a = nil
+loop i in (1, 1, -1) {
+  assert(!a)
+  set a = 1
+}
+assert(a)
+
+do {
+  print("testing floats in numeric for")
+  var a
+  ;; integer count
+  set a = 0
+  loop i in (1, 1, 1) {
+    set a = a + 1
+  }
+  assert(a == 1)
+  set a = 0
+  loop i in (10000, 1e4, -1) {
+    set a = a + 1
+  }
+  assert(a == 1)
+  set a = 0
+  loop i in (1, 0.99999, 1) {
+    set a = a + 1
+  }
+  assert(a == 0)
+  set a = 0
+  loop i in (9999, 1e4, -1) {
+    set a = a + 1
+  }
+  assert(a == 0)
+  set a = 0
+  loop i in (1, 0.99999, -1) {
+    set a = a + 1
+  }
+  assert(a == 1)
+
+  ;; float count
+  set a = 0
+  loop i in (0, 0.999999999, 0.1) {
+    set a = a + 1
+  }
+  assert(a == 10)
+  set a = 0
+  loop i in (1.0, 1, 1) {
+    set a = a + 1
+  }
+  assert(a == 1)
+  set a = 0
+  loop i in (-1.5, -1.5, 1) {
+    set a = a + 1
+  }
+  assert(a == 1)
+  set a = 0
+  loop i in (1e6, 1e6, -1) {
+    set a = a + 1
+  }
+  assert(a == 1)
+  set a = 0
+  loop i in (1.0, 0.99999, 1) {
+    set a = a + 1
+  }
+  assert(a == 0)
+  set a = 0
+  loop i in (99999, 1e5, -1.0) {
+    set a = a + 1
+  }
+  assert(a == 0)
+  set a = 0
+  loop i in (1.0, 0.99999, -1) {
+    set a = a + 1
+  }
+  assert(a == 1)
+}
+
+do {
+  print("testing NaN in numeric for")
+  val NaN = 0 / 0
+
+  loop i in (1, NaN, 1) {
+    error("should not run the loop")
+  }
+  loop i in (1, NaN, -1) {
+    error("should not run the loop")
+  }
+  loop i in (1.0, NaN) {
+    error("should not run the loop")
+  }
+  loop i in (1.0, NaN, -1) {
+    error("should not run the loop")
+  }
+  loop i in (NaN, 1) {
+    error("should not run the loop")
+  }
+  loop i in (NaN, 1, -1) {
+    error("should not run the loop")
+  }
+
+  ;; NaN is not negative, so the loop must be ascending
+  ;; (that's somewhat arbitrary)
+  loop i in (2, 1, NaN) {
+    error("should not run the loop")
+  }
+  var s = 0
+  loop i in (1, 5, NaN) {
+    set s = s + 1
+  }
+  assert(s == 1)
+}
+
+do {  ;; attempt to change the control variable
+  val st, msg = load("loop i in (1, 10) { set i = 10 }")
+  assert(!st && string.find(msg, "assign to const variable 'i'"))
+
+  val st, msg = load("loop v, k in [] { set v = 10 }")
+  assert(!st && string.find(msg, "assign to const variable 'v'"))
+
+}
+
+;; conversion
+set a = 0
+loop i in ("10", "1", "-2") {
+  set a = a + 1
+}
+assert(a == 5)
+
+do {  ;; checking types
+  var c
+  val func checkfloat (i) {
+    assert(math.type(i) == "float")
+    set c = c + 1
+  }
+
+  set c = 0
+  loop i in (1.0, 10) {
+    checkfloat(i)
+  }
+  assert(c == 10)
+
+  set c = 0
+  loop i in (-1, -10, -1.0) {
+    checkfloat(i)
+  }
+  assert(c == 10)
+
+  val func checkint (i) {
+    assert(math.type(i) == "integer")
+    set c = c + 1
+  }
+
+  val m = math.maxinteger
+  set c = 0
+  loop i in (m, m - 10, -1) {
+    checkint(i)
+  }
+  assert(c == 11)
+
+  set c = 0
+  loop i in (1, 10.9) {
+    checkint(i)
+  }
+  assert(c == 10)
+
+  set c = 0
+  loop i in (10, 0.001, -1) {
+    checkint(i)
+  }
+  assert(c == 10)
+
+  set c = 0
+  loop i in (1, "10.8") {
+    checkint(i)
+  }
+  assert(c == 10)
+
+  set c = 0
+  loop i in (9, "3.4", -1) {
+    checkint(i)
+  }
+  assert(c == 6)
+
+  set c = 0
+  loop i in (0, " -3.4  ", -1) {
+    checkint(i)
+  }
+  assert(c == 4)
+
+  set c = 0
+  loop i in (100, "96.3", -2) {
+    checkint(i)
+  }
+  assert(c == 2)
+
+  set c = 0
+  loop i in (1, math.huge) {
+    if i > 10 {
+      break()
+    }
+    checkint(i)
+  }
+  assert(c == 10)
+
+  set c = 0
+  loop i in (-1, -math.huge, -1) {
+    if i < -10 {
+      break()
+    }
+    checkint(i)
+  }
+  assert(c == 10)
+
+  loop i in (math.mininteger, -10e100) {
+    assert(false)
+  }
+  loop i in (math.maxinteger, 10e100, -1) {
+    assert(false)
+  }
+}
+
+do {  ;; testing other strange cases for numeric 'for'
+
+  val func checkfor (from, to, step, t) {
+    var c = 0
+    loop i in (from, to, step) {
+      set c = c + 1
+      assert(i == t@(c))
+    }
+    assert(c == #t)
+  }
+
+  val maxi = math.maxinteger
+  val mini = math.mininteger
+
+  checkfor(mini, maxi, maxi, [mini, -1, maxi - 1])
+
+  checkfor(mini, math.huge, maxi, [mini, -1, maxi - 1])
+
+  checkfor(maxi, mini, mini, [maxi, -1])
+
+  checkfor(maxi, mini, -maxi, [maxi, 0, -maxi])
+
+  checkfor(maxi, -math.huge, mini, [maxi, -1])
+
+  checkfor(maxi, mini, 1, [])
+  checkfor(mini, maxi, -1, [])
+
+  checkfor(maxi - 6, maxi, 3, [maxi - 6, maxi - 3, maxi])
+  checkfor(mini + 4, mini, -2, [mini + 4, mini + 2, mini])
+
+  val step = maxi // 10
+  var c = mini
+  loop i in (mini, maxi, step) {
+    assert(i == c)
+    set c = c + step
+  }
+
+  set c = maxi
+  loop i in (maxi, mini, -step) {
+    assert(i == c)
+    set c = c - step
+  }
+
+  checkfor(maxi, maxi, maxi, [maxi])
+  checkfor(maxi, maxi, mini, [maxi])
+  checkfor(mini, mini, maxi, [mini])
+  checkfor(mini, mini, mini, [mini])
+}
+
+checkerror("'for' step is zero", func () {
+  loop i in (1, 10, 0) {
+  }
+})
+
+checkerror("'for' step is zero", func () {
+  loop i in (1, -10, 0) {
+  }
+})
+
+checkerror("'for' step is zero", func () {
+  loop i in (1.0, -10, 0.0) {
+  }
+})
+
+collectgarbage()
+
+;; testing generic 'for'
+
+val func f (n, p) {
+  val t = []
+  loop i in (1, p) {
+    set t@(i) = i * 10
+  }
+  return(func (_, n, ...) {
+    assert(select("#", ...) == 0)  ;; no extra arguments
+    if n > 0 {
+      set n = n - 1
+      return(n, table.unpack(t))
+    }
+  }, nil, n)
+}
+
+var x = 0
+loop n, a, b, c, d in f(5, 3) {
+  set x = x + 1
+  assert((a == 10) && (b == 20) && (c == 30) && (d == nil))
+}
+assert(x == 5)
+
+;; testing __pairs and __ipairs metamethod
+set a = []
+do {
+  val x, y, z = pairs(a)
+  assert((type(x) == 'function') && (y == a) && (z == nil))
+}
+
+val func foo (e, i) {
+  assert(e == a)
+  if i <= 10 {
+    return(i + 1, i + 2)
+  }
+}
+
+val func foo1 (e, i) {
+  set i = i + 1
+  assert(e == a)
+  if i <= e.n {
+    return(i, a@(i))
+  }
+}
+
+var closed = false
+setmetatable(a, [__pairs=func (x) {
+  val tbc = setmetatable([], [__close=func () {
+    set closed = true
+  }])
+  return(foo, x, 0, tbc)
+}])
+
+var i = 0
+loop k, v in pairs(a) {
+  set i = i + 1
+  assert((k == i) && (v == (k + 1)))
+}
+assert(closed)  ;; 'tbc' has been closed
+
+set a.n = 5
+set a@(3) = 30
+
+;; testing ipairs with metamethods
+set a = [n=10]
+setmetatable(a, [__index=func (t, k) {
+  if k <= t.n {
+    return(k * 10)
+  }
+}])
+set i = 0
+loop k, v in ipairs(a) {
+  set i = i + 1
+  assert((k == i) && (v == (i * 10)))
+}
+assert(i == a.n)
+
+;; testing yield inside __pairs
+do {
+  val t = setmetatable([10, 20, 30], [__pairs=func (t) {
+    val inc = coroutine.yield()
+    return(func (t, i) {
+      if i > 1 {
+        return(i - inc, t@(i - inc))
+      } else {
+        return(nil)
+      }
+    }, t, #t + 1)
+  }])
+
+  val res = []
+  val co = coroutine.wrap(func () {
+    loop i, p in pairs(t) {
+      set res@(#res + 1) = p
+    }
+  })
+
+  co()  ;; start coroutine
+  co(1)  ;; continue after yield
+  assert((res@(1) == 30) && (res@(2) == 20) && (res@(3) == 10) && (#res == 3))
+}
+
+print("OK")
