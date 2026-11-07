@@ -41,7 +41,15 @@ the converted Lua suite does and does not exercise, and the open points
 (functions ending in a call return its first value; truncation to one
 value; `match`/`where`/`catch`/pipes pending).
 
-## 4. Tail calls
+## 4. Errors with multiple values
+
+See [errors.md](errors.md): Lua passes the error object on the stack
+already, but hard-wires the count to one (`luaD_seterrorobj`, message
+handlers, `__close`, `lua_error`/`lua_pcall`/`lua_resume`, `error(v,
+level)`). Extending to n values is local to the core; `throw`/`catch`
+could then carry tag and payload without allocating.
+
+## 5. Tail calls
 
 - Tail call optimization is bad for error messages / tracebacks
   (`(...tail calls...)`). Could it be disabled? Or made explicit
