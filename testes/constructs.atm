@@ -1,0 +1,502 @@
+;; $Id: testes/constructs.lua $
+;; See Copyright Notice in file lua.h
+
+print("testing syntax")
+
+val debug = require("debug")
+
+val func checkload (s, msg) {
+  assert(string.find(select(2, load(s)), msg))
+}
+
+;; testing semicollons
+var a
+do {
+}
+do {
+  set a = 3
+  assert(a == 3)
+}
+
+;; invalid operations should not raise errors when not executed
+if false {
+  set a = 3 // 0
+  set a = 0 % 0
+}
+
+;; testing priorities
+
+assert((2 ** (3 ** 2)) == (2 ** (3 ** 2)))
+assert(((2 ** 3) * 4) == ((2 ** 3) * 4))
+assert(((2.0 ** -2) == (1 / 4)) && (-(2 ** (-(-2))) == -(-(-4))))
+assert(!nil && 2 && !((2 > 3) || (3 < 2)))
+assert((-3 - 1 - 5) == ((0 + 0) - 9))
+assert((-(2 ** 2) == -4) && (((-2) ** 2) == 4) && (((2 * 2) - 3 - 1) == 0))
+assert(((-3 % 5) == 2) && ((-3 + 5) == 2))
+assert((((2 * 1) + (3 / 3)) == 3) && (((1 + 2) ++ (3 * 1)) == "33"))
+assert(!((2 + 1) > (3 * 1)) && (("a" ++ "b") > "a"))
+
+
+assert(((3 ** 4) // (2 ** 3) // 5) == 2)
+
+assert((-3 + ((4 * 5) // (2 ** (3 ** 2)) // 9) + ((4 % 10) / 3)) == ((-3) + (((4 * 5) // (2 ** (3 ** 2))) // 9) + ((4 % 10) / 3)))
+
+assert(!((true || false) && nil))
+assert(true || (false && nil))
+
+;; old bug
+assert((((1 || false) && true) || false) == true)
+assert((((nil && true) || false) && true) == false)
+
+var a, b = (1, nil)
+assert((-(1 || 2) == -1) && (((1 && 2) + (-1.25 || -4)) == 0.75))
+var x = ((((b || a) + 1) == 2) && (((10 || a) + 1) == 11))
+assert(x)
+set x = ((((2 < 3) || 1) == true) && (((2 < 3) && 4) == 4))
+assert(x)
+
+var x, y = (1, 2)
+assert(((x > y) && x) || (y == 2))
+set x, y = (2, 1)
+assert(((x > y) && x) || (y == 2))
+
+assert((1234567890 == tonumber('1234567890')) && ((1234567890 + 1) == 1234567891))
+
+do {  ;; testing operators with different kinds of constants
+  ;; operands to consider:
+  ;;  * fit in register
+  ;;  * constant doesn't fit in register
+  ;;  * floats with integral values
+  val operand = [3, 100, 5.0, -10, -5.0, 10000, -10000]
+  val operator = ["+", "-", "*", "/", "//", "%", "**", "==", "!=", "<", ">", "<=", ">="]
+  loop _, op in ipairs(operator) {
+    val f = assert(load(string.format("""func (x, y) {
+                x %s y
+              }""", op)))()
+    loop _, o1 in ipairs(operand) {
+      loop _, o2 in ipairs(operand) {
+        val gab = f(o1, o2)
+
+        set _ENV.XX = o1
+        var code = string.format("XX %s (%s)", op, o2)
+        var res = assert(load(code))()
+        assert(res == gab)
+
+        set _ENV.XX = o2
+        set code = string.format("(%s) %s XX", o1, op)
+        set res = assert(load(code))()
+        assert(res == gab)
+
+        set code = string.format("(%s) %s (%s)", o1, op, o2)
+        set res = assert(load(code))()
+        assert(res == gab)
+      }
+    }
+  }
+  set _ENV.XX = nil
+}
+
+;; silly loops
+loop {
+  until(1)
+}
+loop {
+  until(true)
+}
+loop {
+  while(false)
+}
+loop {
+  while(nil)
+}
+
+do {  ;; test old bug (first name could not be an `upvalue')
+  val a
+  val func f (x) {
+    set x = [a=1]
+    set x = [x=1]
+    set x = [G=1]
+  }
+}
+
+do {  ;; bug since 5.4.0
+  ;; create code with a table using more than 256 constants
+  var code = ["val x = ["]
+  loop i in (1, 257) {
+    set code@(#code + 1) = i ++ ".1,"
+  }
+  set code@(#code + 1) = "];"
+  set code = table.concat(code)
+
+  ;; add "ret" to the end of that code and checks that
+  ;; it produces the expected value "val"
+  val func check (ret, val_) {
+    var code = code ++ ret
+    set code = load(code)
+    assert(code() == val_)
+  }
+
+  check("(1 + (2 || 3))", 1 + 2)
+  check("(1 ++ (2 || 3))", 1 ++ 2)
+  check("(1 == (2 || 3))", 1 == 2)
+}
+
+var f
+set f = func (i) {
+  if type(i) != 'number' {
+    return(i, 'jojo')
+  }
+  if i > 0 {
+    return(i, f(i - 1))
+  }
+}
+
+set x = [f(3), f(5), f(10)]
+assert((x@(1) == 3) && (x@(2) == 5) && (x@(3) == 10) && (x@(4) == 9) && (x@(12) == 1))
+assert(x@(nil) == nil)
+set x = [f('alo'), f('xixi'), nil]
+assert((x@(1) == 'alo') && (x@(2) == 'xixi') && (x@(3) == nil))
+set x = [f('alo') ++ 'xixi']
+assert(x@(1) == 'aloxixi')
+set x = [f([])]
+assert((x@(2) == 'jojo') && (type(x@(1)) == 'table'))
+
+var f
+set f = func (i) {
+  ifs {
+    i < 10 => {
+      return('a')
+    }
+    i < 20 => {
+      return('b')
+    }
+    i < 30 => {
+      return('c')
+    }
+  }
+}
+
+assert((f(3) == 'a') && (f(12) == 'b') && (f(26) == 'c') && (f(100) == nil))
+
+loop i in (1, 1000) {
+  break()
+}
+val n = 100
+var i = 3
+val t = []
+var a = nil
+loop {
+  while(!a)
+  set a = 0
+  loop i in (1, n) {
+    loop i in (i, 1, -1) {
+      set a = a + 1
+      set t@(i) = 1
+    }
+  }
+}
+assert((a == ((n * (n + 1)) / 2)) && (i == 3))
+assert(t@(1) && t@(n) && !t@(0) && !t@(n + 1))
+
+func f (b) {
+  var x = 1
+  loop {
+    val a
+    ifs {
+      b == 1 => {
+        val b = 1
+        set x = 10
+        break()
+      }
+      b == 2 => {
+        set x = 20
+        break()
+      }
+      b == 3 => {
+        set x = 30
+      }
+      else => {
+        val a, b, c, d = math.sin(1)
+        set x = x + 1
+      }
+    }
+    until(x >= 12)
+  }
+  return(x)
+}
+
+assert((f(1) == 10) && (f(2) == 20) && (f(3) == 30) && (f(4) == 12))
+
+var f
+set f = func (i) {
+  ifs {
+    i < 10 => {
+      return('a')
+    }
+    i < 20 => {
+      return('b')
+    }
+    i < 30 => {
+      return('c')
+    }
+    else => {
+      return(8)
+    }
+  }
+}
+
+assert((f(3) == 'a') && (f(12) == 'b') && (f(26) == 'c') && (f(100) == 8))
+
+var a, b = (nil, 23)
+set x = [((f(100) * 2) + 3) || a, a || (b + 2)]
+assert((x@(1) == 19) && (x@(2) == 25))
+set x = [f=(2 + 3) || a, a=b + 2]
+assert((x.f == 5) && (x.a == 25))
+
+set a = [y=1]
+set x = [a.y]
+assert(x@(1) == 1)
+
+var f
+set f = func (i) {
+  loop {
+    while(1)
+    if i > 0 {
+      set i = i - 1
+    } else {
+      return()
+    }
+  }
+}
+
+var g
+set g = func (i) {
+  loop {
+    while(1)
+    if i > 0 {
+      set i = i - 1
+    } else {
+      return()
+    }
+  }
+}
+
+f(10)
+g(10)
+
+do {
+  func f () {
+    return(1, 2, 3)
+  }
+  var a, b, c = f()
+  assert((a == 1) && (b == 2) && (c == 3))
+  set a, b, c = (f())
+  assert((a == 1) && (b == nil) && (c == nil))
+}
+
+var a, b = 3 && f()
+assert((a == 1) && (b == nil))
+
+func g () {
+  f()
+  return()
+}
+assert(g() == nil)
+func g () {
+  return(nil || f())
+}
+set a, b = g()
+assert((a == 1) && (b == nil))
+
+print('+')
+
+do {  ;; testing constants
+  checkload("""val xxx = 20; set xxx = 10""", ":1: attempt to assign to const variable 'xxx'")
+
+  checkload("""    var xx;
+    val xxx = 20;
+    var yyy;
+    val func foo () {
+      val abc = xx + yyy + xxx;
+      func () { func () { set xxx = yyy } }
+    }
+  """, ":6: attempt to assign to const variable 'xxx'")
+
+  checkload("""    pin x = nil
+    set x = io.open()
+  """, ":2: attempt to assign to const variable 'x'")
+}
+
+set f = """(
+  func (a, b, c, d, e)
+  {
+    val x =
+      (a >= b)
+      || c
+      || (d && e)
+      || nil
+    x
+  }
+  ,
+  [a =
+    1
+  , b =
+    (2
+    >= 1)
+  ,]
+  || [
+    1
+  ]
+)
+"""  ;; (newlines force SETLINEs between opcodes)
+
+set f, a = load(f)()
+assert((a.a == 1) && a.b)
+
+func g (a, b, c, d, e) {
+  if !((a >= b) || c || (d && e) || nil) {
+    return(0)
+  } else {
+    return(1)
+  }
+}
+
+val func h (a, b, c, d, e) {
+  loop {
+    while(((a >= b) || c || (d && e) || nil))
+    return(1)
+  }
+  return(0)
+}
+
+assert((f(2, 1) == true) && (g(2, 1) == 1) && (h(2, 1) == 1))
+assert((f(1, 2, 'a') == 'a') && (g(1, 2, 'a') == 1) && (h(1, 2, 'a') == 1))
+assert(f(1, 2, 'a') != nil, "")
+;; force SETLINE before nil
+
+assert((f(1, 2, 'a') == 'a') && (g(1, 2, 'a') == 1) && (h(1, 2, 'a') == 1))
+assert((f(1, 2, nil, 1, 'x') == 'x') && (g(1, 2, nil, 1, 'x') == 1) && (h(1, 2, nil, 1, 'x') == 1))
+assert((f(1, 2, nil, nil, 'x') == nil) && (g(1, 2, nil, nil, 'x') == 0) && (h(1, 2, nil, nil, 'x') == 0))
+assert((f(1, 2, nil, 1, nil) == nil) && (g(1, 2, nil, 1, nil) == 0) && (h(1, 2, nil, 1, nil) == 0))
+
+assert(1 && ((2 < 3) == true) && (2 < 3) && (('a' < 'b') == true))
+set x = (2 < 3) && !3
+assert(x == false)
+set x = (2 < 1) || ((2 > 1) && 'a')
+assert(x == 'a')
+
+do {
+  var a  ;; this nil comes as PUSHNIL 2
+  if nil {
+    set a = 1
+  } else {
+    set a = 2
+  }
+  assert(a == 2)
+}
+
+val func F (a) {
+  assert(debug.getinfo(1, "n").name == 'F')
+  return(a, 2, 3)
+}
+
+set a, b = F(1) != nil
+assert((a == true) && (b == nil))
+set a, b = F(nil) == nil
+assert((a == true) && (b == nil))
+
+;;--------------------------------------------------------------
+;;----------------------------------------------------------------
+
+;; sometimes will be 0, sometimes will not...
+set _ENV.GLOB1 = math.random(0, 1)
+
+;; basic expressions with their respective values
+val basiccases = [["nil", nil], ["false", false], ["true", true], ["10", 10], ["(0==_ENV.GLOB1)", 0 == _ENV.GLOB1]]
+
+var prog
+
+if _ENV.GLOB1 == 0 {
+  set basiccases@(2)@(1) = "F"  ;; constant false
+
+  set prog = """    val F = false
+    if %s { set IX = true }
+    %s
+"""
+} else {
+  set basiccases@(4)@(1) = "k10"  ;; constant 10
+
+  set prog = """    val k10 = 10
+    if %s { set IX = true }
+    %s
+  """
+}
+
+print('testing short-circuit optimizations (' ++ (_ENV.GLOB1 ++ ')'))
+
+;; operators with their respective values
+val binops = [[" && ", func (a, b) {
+  if !a {
+    return(a)
+  } else {
+    return(b)
+  }
+}], [" || ", func (a, b) {
+  if a {
+    return(a)
+  } else {
+    return(b)
+  }
+}]]
+
+val cases = []
+
+;; creates all combinations of '(cases[i] op cases[n-i])' plus
+;; 'not(cases[i] op cases[n-i])' (syntax + value)
+val func createcases (n) {
+  val res = []
+  loop i in (1, n - 1) {
+    loop _, v1 in ipairs(cases@(i)) {
+      loop _, v2 in ipairs(cases@(n - i)) {
+        loop _, op in ipairs(binops) {
+          val t = ["(" ++ (v1@(1) ++ (op@(1) ++ (v2@(1) ++ ")"))), op@(2)(v1@(2), v2@(2))]
+          set res@(#res + 1) = t
+          set res@(#res + 1) = ["!" ++ t@(1), !t@(2)]
+        }
+      }
+    }
+  }
+  return(res)
+}
+
+;; do not do too many combinations for soft tests
+val level = (_soft && 3) || 4
+
+set cases@(1) = basiccases
+loop i in (2, level) {
+  set cases@(i) = createcases(i)
+}
+print("+")
+
+var i = 0
+loop n in (1, level) {
+  loop _, v in pairs(cases@(n)) {
+    val s = v@(1)
+    val p = load(string.format(prog, s, s), "")
+    set IX = false
+    assert((p() == v@(2)) && (IX == !!v@(2)))
+    set i = i + 1
+    if (i % 60000) == 0 {
+      print('+')
+    }
+  }
+}
+set IX = nil
+set _G.GLOB1 = nil
+;;----------------------------------------------------------------
+
+;; testing some syntax errors (chosen through 'gcov')
+checkload("loop x in", "expected")
+checkload("x::call", "expected")
+
+print('OK')
