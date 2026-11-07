@@ -1,0 +1,188 @@
+;; Errors with multiple values: 'throw(...)' raises all its arguments,
+;; which travel on the stack like call results. Value 1 is the error
+;; object seen by Lua code that expects one value.
+;; See .claude/plans/errors.md.
+
+print("testing errors with multiple values")
+
+val func count (...) {
+  select("#", ...)
+}
+
+;; 'throw' raises all its arguments; 'pcall' returns them all
+do {
+  val st, a, b, c = pcall(throw, 1, 2, 3)
+  assert(!st && (a == 1) && (b == 2) && (c == 3))
+  assert(count(pcall(throw, 1, 2, 3)) == 4)
+  assert(count(pcall(throw, 1, nil, nil)) == 4)
+  val st, a, b = pcall(throw, "x", 2)
+  assert(!st && (a == "x") && (b == 2))
+  ;; one value: same as 'error' without position
+  val st, a = pcall(throw, "msg")
+  assert(!st && (a == "msg") && (count(pcall(throw, "msg")) == 2))
+  ;; no values / nil object: Lua's "<no error object>"
+  val st, a = pcall(throw)
+  assert(!st && (a == "<no error object>") && (count(pcall(throw)) == 2))
+  val st, a, b = pcall(throw, nil, 2)
+  assert(!st && (a == "<no error object>") && (b == 2))
+  ;; 'throw' adds no position information
+  val st, a = pcall(\{ throw("here") })
+  assert(!st && (a == "here"))
+  ;; an error object that is a table is not changed
+  val t = []
+  val st, a, b = pcall(throw, t, t)
+  assert(!st && (a == t) && (b == t))
+}
+
+;; 'error' is unchanged
+do {
+  val st, a = pcall(error, "x", 0)
+  assert(!st && (a == "x") && (count(pcall(error, "x", 0)) == 2))
+  val st, a = pcall(error)
+  assert(!st && (a == "<no error object>"))
+  val st, a = pcall(\{ error("here") })
+  assert(!st && string.find(a, ":%d+: here"))
+}
+
+;; message handlers receive all the values and return the new ones
+do {
+  val st, a, b = xpcall(\{ throw("e", 10) }, \(e, n){ (e ++ "!", n + 1) })
+  assert(!st && (a == "e!") && (b == 11))
+  assert(count(xpcall(\{ throw("e", 10) }, \(e, n){ (e ++ "!", n + 1) })) == 3)
+  ;; handler returning fewer values
+  val st, a = xpcall(\{ throw(1, 2, 3) }, \(x, y, z){ x + y + z })
+  assert(!st && (a == 6))
+  assert(count(xpcall(\{ throw(1, 2, 3) }, \(x, y, z){ x + y + z })) == 2)
+  ;; handler returning more values
+  val st, a, b, c = xpcall(\{ throw(1) }, \(x){ (x, x + 1, x + 2) })
+  assert(!st && (a == 1) && (b == 2) && (c == 3))
+  assert(count(xpcall(\{ throw(1) }, \(x){ (x, x + 1, x + 2) })) == 4)
+  ;; handler returning nothing
+  val st, a = xpcall(\{ throw(1, 2) }, \(){ })
+  assert(!st && (a == "<no error object>"))
+  assert(count(xpcall(\{ throw(1, 2) }, \(){ })) == 2)
+  ;; handler receives all the values
+  val st, n = xpcall(\{ throw(1, 2, 3, 4) }, count)
+  assert(!st && (n == 4))
+  ;; error with 'error' still gets one argument
+  val st, n = xpcall(\{ error(1) }, count)
+  assert(!st && (n == 1))
+  ;; error in the handler: one value
+  val st, m = xpcall(\{ throw(1, 2) }, \{ throw(3, 4) })
+  assert(!st && (m == "error in error handling"))
+  assert(count(xpcall(\{ throw(1, 2) }, \{ throw(3, 4) })) == 2)
+}
+
+;; many values
+do {
+  val t = []
+  loop i in (1, 300) { set t@i = i }
+  val res = table.pack(pcall(throw, table.unpack(t)))
+  assert((res.n == 301) && (res@1 == false) && (res@2 == 1) && (res@301 == 300))
+  val res = table.pack(xpcall(\{ throw(table.unpack(t)) }, \(...){ (...) }))
+  assert((res.n == 301) && (res@2 == 1) && (res@301 == 300))
+  val st, n = xpcall(\{ throw(table.unpack(t)) }, count)
+  assert(!st && (n == 300))
+}
+
+;; to-be-closed variables: '__close' receives the first value only;
+;; the values survive the closing
+do {
+  val log = []
+  val func tbc () {
+    setmetatable([], [__close = \(o, e, x){
+      set log.e = e
+      set log.x = x
+      set log.n = log.n + 1
+    }])
+  }
+  set log.n = 0
+  val st, a, b = pcall(\{
+    pin x = tbc()
+    pin y = tbc()
+    throw("a", "b")
+  })
+  assert(!st && (a == "a") && (b == "b") && (log.n == 2) &&
+         (log.e == "a") && (log.x == nil))
+  assert(count(pcall(\{ pin x = tbc(); throw("a", "b") })) == 3)
+  ;; a '__close' method that catches an error with a different number
+  ;; of values does not disturb the error being propagated
+  val st, a, b, c = pcall(\{
+    pin x = setmetatable([], [__close = \{
+      val s, e, f = pcall(throw, 1, 2, 3, 4, 5)
+      assert(!s && (e == 1) && (f == 2))
+      val s, e = pcall(throw)
+      assert(!s && (e == "<no error object>"))
+    }])
+    throw("a", "b", "c")
+  })
+  assert(!st && (a == "a") && (b == "b") && (c == "c"))
+  assert(count(pcall(\{
+    pin x = setmetatable([], [__close = \{ pcall(throw, 1, 2, 3, 4, 5) }])
+    throw("a", "b", "c")
+  })) == 4)
+  ;; a '__close' method that throws replaces the values
+  val st, a, b = pcall(\{
+    pin x = setmetatable([], [__close = \{ throw("c", 2) }])
+    throw("a", "b", "c")
+  })
+  assert(!st && (a == "c") && (b == 2))
+  assert(count(pcall(\{
+    pin x = setmetatable([], [__close = \{ throw("c", 2) }])
+    throw("a", "b", "c")
+  })) == 3)
+}
+
+;; coroutines
+do {
+  ;; 'resume' returns all the values
+  val co = coroutine.create(\{ throw(1, 2) })
+  val st, a, b = coroutine.resume(co)
+  assert(!st && (a == 1) && (b == 2))
+  assert(count(coroutine.resume(coroutine.create(\{ throw(1, 2) }))) == 3)
+  assert(coroutine.status(co) == "dead")
+  ;; 'close' of a coroutine dead by error returns them again
+  val st, a, b = coroutine.close(co)
+  assert(!st && (a == 1) && (b == 2))
+  ;; 'wrap' propagates all the values
+  val st, a, b = pcall(coroutine.wrap(\{ throw(1, 2) }))
+  assert(!st && (a == 1) && (b == 2))
+  assert(count(pcall(coroutine.wrap(\{ throw(1, 2) }))) == 3)
+  ;; 'close' with a pending '__close' that throws
+  val co = coroutine.create(\{
+    pin x = setmetatable([], [__close = \{ throw("c", 2) }])
+    coroutine.yield()
+  })
+  assert(coroutine.resume(co))
+  val st, a, b = coroutine.close(co)
+  assert(!st && (a == "c") && (b == 2))
+  ;; yieldable 'pcall' inside a coroutine
+  val co = coroutine.wrap(\{
+    val st, a, b = pcall(\{ coroutine.yield(); throw(1, 2) })
+    (st, a, b)
+  })
+  co()
+  val st, a, b = co()
+  assert(!st && (a == 1) && (b == 2))
+  ;; yieldable 'pcall' with a '__close' that yields and catches an
+  ;; error of its own before the values are delivered
+  val co = coroutine.wrap(\{
+    val res = table.pack(pcall(\{
+      pin x = setmetatable([], [__close = \{
+        coroutine.yield()
+        val s, e = pcall(throw, 1, 2, 3, 4, 5)
+        assert(!s && (e == 1))
+        coroutine.yield()
+      }])
+      coroutine.yield()
+      throw("a", "b", "c")
+    }))
+    table.unpack(res, 1, res.n)
+  })
+  co(); co(); co()
+  val res = table.pack(co())
+  assert((res.n == 4) && (res@1 == false) && (res@2 == "a") &&
+         (res@3 == "b") && (res@4 == "c"))
+}
+
+print("OK")

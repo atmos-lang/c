@@ -26,6 +26,9 @@ VM, libraries and bytecode format stay Lua's.
   a design question or a plan item without an explicit go-ahead).
 - Once a step is approved, do not ask for permissions or confirmation on
   the details; decide and proceed, then report numbered summaries.
+- Tests first: for an approved step, write the tests (failing) in
+  `testes/`, commit and push them, report the link, and only then
+  implement; the implementation commit makes them pass.
 - Build with `make`; debug build with `T` library:
   `make MYCFLAGS='-DLUA_USER_H=\"ltests.h\"'` in a scratch copy.
 - Never put model names in commits, code or docs.
