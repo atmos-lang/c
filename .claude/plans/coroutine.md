@@ -1,0 +1,132 @@
+# Coroutines
+
+Planned changes to the coroutine library and to the thread implementation
+(`lstate.c`, `ldo.c`, `lcorolib.c`), motivated by Atmos tasks.
+
+## a. `coroutine.error(co, err)`
+
+Resume a suspended coroutine `co` with an error instead of values: the
+pending `coroutine.yield()` inside `co` raises `err`. Pending
+to-be-closed variables and `catch` blocks of the task see the error as
+if it were raised at the yield point.
+
+Today the only ways to wake a suspended coroutine are `resume` (with
+values) and `close` (kills it, running `__close` handlers with no error
+object from the caller's point of view).
+
+## b. Close a running (normal) coroutine
+
+Lua 5.5 already allows `coroutine.close()` with no argument: the running
+coroutine closes itself. Closing a *normal* coroutine (one that resumed
+another one and is waiting for it) is still an error:
+"cannot close a normal coroutine". For tasks this is needed when a task
+aborts an ancestor (or the whole program) from inside a nested task.
+
+## c. Bounded stacks and "stackless" coroutines
+
+### The idea
+
+Two kinds of coroutines:
+
+1. **stackful**: as today, a private Lua stack that grows on demand
+   (`luaD_growstack`), yields allowed from any nesting level of Lua
+   calls (and from yieldable C calls).
+2. **stackless**: new. Not really stackless, see below.
+
+`coroutine.create` receives the prototype (function or task) plus two
+optional arguments:
+
+1. a boolean: stackful or not;
+2. a size: the stack size.
+
+A stackless coroutine can only yield **at the prototype level**: from the
+body of the function given to `create`, never from a nested call. Atmos
+tasks are always stackless. The compiler computes the stack size a
+prototype needs from its parameters and locals (this is `Proto.maxstacksize`,
+plus the vararg area for vararg functions). This size is the *shallow size*
+of the prototype, and task prototypes carry it around.
+
+The trick: a task body still calls other functions, and although they
+cannot yield they need stack space (nested calls, temporaries, C calls).
+So a stackless coroutine, while *running*, uses a full working stack; while
+*suspended* only the shallow frame is kept. On resume the shallow frame is
+restored onto a full stack; on yield only the shallow frame is saved.
+
+### Does it make sense?
+
+Yes. Restated in terms of the implementation:
+
+- A suspended stackful coroutine keeps a whole `lua_State`: the stack array
+  (at least `BASIC_STACK_SIZE` = 40 slots, usually more after it grew),
+  the `CallInfo` list, and so on. Thousands of suspended tasks cost
+  thousands of stacks.
+- With the "yield only at prototype level" restriction, a suspended
+  coroutine has exactly one Lua frame: the body's frame. Its live state is
+  `maxstacksize` registers plus the extra arguments of a vararg body.
+  Everything below or above that frame is dead at the yield point.
+- Therefore the suspended representation can be a buffer of exactly the
+  shallow size. The full working stack is only needed between resume and
+  yield, and it can be shared (one scratch stack per `lua_State` / per
+  scheduler, or simply the resumer's own stack above its top).
+- "Task protos carry their shallow size" is already true in Lua:
+  `Proto.maxstacksize` is stored in every prototype (and in bytecode
+  dumps). The vararg part is dynamic (number of extra arguments), so the
+  saved size is `maxstacksize + nextraargs`, known at resume/yield time.
+
+So the design is coherent. The restriction and the trick are the two halves:
+the restriction makes the suspended state small and well-defined, the trick
+keeps calls from the body working without giving each coroutine a big stack.
+
+### Points to settle
+
+1. **Enforcing the restriction.** `lua_yield` (and `luaD_throw`'s
+   yield path) must check that the yielding frame is the base frame of the
+   coroutine: `L->ci` is the first Lua `CallInfo` of the thread. A yield
+   from a nested call raises "attempt to yield across a non-yieldable call"
+   (or a specific message). Note that this also forbids yields inside
+   `pcall`, metamethods, `table.sort` callbacks, etc., which are nested
+   calls. For tasks it means that `await` must be compiled *inline* in the
+   task body: `catch`, `defer`, `do :tag {}`, loops, etc. cannot be
+   closures (the C implementation already plans blocks as inline code,
+   unlike the Lua reference which turns blocks into closures).
+2. **What `size` means.** Number of stack slots (`TValue`s). Options:
+   - for stackless: the shallow size, but it can be inferred from the
+     prototype (`maxstacksize`), so the explicit argument is only useful as
+     an override or can be dropped;
+   - for stackful: an upper bound (`LUAI_MAXSTACK` per coroutine) to catch
+     runaway recursion early with "stack overflow", and/or the initial
+     allocation to avoid regrowth. A bound in slots is simpler than a
+     bound in call depth; `nci` (number of `CallInfo`s) could be bounded
+     too.
+3. **Saving and restoring the frame.** Two possible implementations:
+   - *Swap*: the suspended coroutine owns only a small buffer. On resume,
+     the frame is copied onto a working stack (the scheduler's thread
+     stack, above its top, or a dedicated scratch thread); on yield it is
+     copied back. Open upvalues that point into the frame (closures
+     created by the body that capture its locals) must be relocated, as
+     `correctstack` already does when a stack is reallocated; the saved
+     buffer must be visited by the GC.
+   - *Shrink*: keep a private `lua_State` per coroutine but size its stack
+     to the shallow size while suspended (`luaD_reallocstack` down on
+     yield, up on resume). Simpler, reuses existing code, but one
+     reallocation per switch and the `lua_State` header itself (about 200
+     bytes plus a `CallInfo`) is still paid per task.
+   The swap variant gives the smallest suspended footprint; the shrink
+   variant is a smaller change. Measure before choosing.
+4. **Vararg bodies.** In Lua 5.5 a vararg function keeps its extra
+   arguments below `func` (`ci->u.l.nextraargs`). The shallow frame must
+   include them (or tasks forbid varargs).
+5. **C functions.** A stackless body may call C functions that call back
+   into Lua (`pcall`, `string.gsub`); fine as long as they do not yield.
+   `lua_callk`/`lua_pcallk` continuations are irrelevant for them.
+6. **`coroutine.wrap`, `close`, `status`, `isyieldable`.** Same API;
+   `isyieldable` is true only in the base frame of a stackless coroutine.
+7. **Scheduler.** Atmos tasks can skip `lua_State` creation entirely in the
+   swap variant: a task is a closure plus a saved frame buffer. Emitting an
+   event into thousands of waiting tasks then costs one frame copy per
+   awakened task instead of one full coroutine switch.
+
+### Status
+
+Idea stage; nothing implemented. The C Lua coroutine implementation is
+untouched so far (the branch only converts the test suite).
