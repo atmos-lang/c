@@ -1,0 +1,287 @@
+;; $Id: testes/utf8.lua $
+;; See Copyright Notice in file lua.h
+
+;; UTF-8 file
+
+;; (global <const> *)
+
+print("testing UTF-8 library")
+
+val utf8 = require('utf8')
+
+val func checkerror (msg, f, ...) {
+  val s, err = pcall(f, ...)
+  assert(!s && string.find(err, msg))
+}
+
+val func len (s) {
+  return(#string.gsub(s, "[\x80-\xBF]", ""))
+}
+
+val justone = "^" ++ (utf8.charpattern ++ "$")
+
+;; 't' is the list of codepoints of 's'
+val func checksyntax (s, t) {
+  ;; creates a string "return '\u{t[1]}...\u{t[n]}'"
+  var ts = ["'"]
+
+  loop i in (1, #t) {
+    set ts@(i + 1) = string.format("\\u{%x}", t@(i))
+  }
+  set ts@(#t + 2) = "'"
+  set ts = table.concat(ts)
+  ;; its execution should result in 's'
+  assert(assert(load(ts))() == s)
+}
+
+assert(!utf8.offset("alo", 5))
+assert(!utf8.offset("alo", -4))
+
+;; 'check' makes several tests over the validity of string 's'.
+;; 't' is the list of codepoints of 's'.
+val func check (s, t, nonstrict) {
+  val l = utf8.len(s, 1, -1, nonstrict)
+  assert((#t == l) && (len(s) == l))
+  assert(utf8.char(table.unpack(t)) == s)  ;; 't' and 's' are equivalent
+
+  assert(utf8.offset(s, 0) == 1)
+
+  checksyntax(s, t)
+
+  ;; creates new table with all codepoints of 's'
+  val t1 = [utf8.codepoint(s, 1, -1, nonstrict)]
+  assert(#t == #t1)
+  loop i in (1, #t) {  ;; 't' is equal to 't1'
+    assert(t@(i) == t1@(i))
+  }
+
+  loop i in (1, l) {  ;; for all codepoints
+    val pi, pie = utf8.offset(s, i)  ;; position of i-th char
+    val pi1 = utf8.offset(s, 2, pi)  ;; position of next char
+    assert(pi1 == (pie + 1))
+    assert(string.find(string.sub(s, pi, pi1 - 1), justone))
+    assert(utf8.offset(s, -1, pi1) == pi)
+    assert(utf8.offset(s, i - l - 1) == pi)
+    assert((pi1 - pi) == #utf8.char(utf8.codepoint(s, pi, pi, nonstrict)))
+    loop j in (pi, pi1 - 1) {
+      val off1, off2 = utf8.offset(s, 0, j)
+      assert((off1 == pi) && (off2 == (pi1 - 1)))
+    }
+    loop j in (pi + 1, pi1 - 1) {
+      assert(!utf8.len(s, j))
+    }
+    assert(utf8.len(s, pi, pi, nonstrict) == 1)
+    assert(utf8.len(s, pi, pi1 - 1, nonstrict) == 1)
+    assert(utf8.len(s, pi, -1, nonstrict) == ((l - i) + 1))
+    assert(utf8.len(s, pi1, -1, nonstrict) == (l - i))
+    assert(utf8.len(s, 1, pi, nonstrict) == i)
+  }
+
+  var expected = 1  ;; expected position of "current" character
+  loop i in (1, l + 1) {
+    val p, e = utf8.offset(s, i)
+    assert(p == expected)
+    set expected = e + 1
+  }
+  assert((expected - 1) == (#s + 1))
+
+  var i = 0
+  loop p, c in utf8.codes(s, nonstrict) {
+    set i = i + 1
+    assert((c == t@(i)) && (p == utf8.offset(s, i)))
+    assert(utf8.codepoint(s, p, p, nonstrict) == c)
+  }
+  assert(i == #t)
+
+  set i = 0
+  loop c in string.gmatch(s, utf8.charpattern) {
+    set i = i + 1
+    assert(c == utf8.char(t@(i)))
+  }
+  assert(i == #t)
+
+  loop i in (1, l) {
+    assert(utf8.offset(s, i) == utf8.offset(s, i - l - 1, #s + 1))
+  }
+}
+
+do {  ;; error indication in utf8.len
+  val func checklen (s, p) {
+    val a, b = utf8.len(s)
+    assert(!a && (b == p))
+  }
+  checklen("abc\xE3def", 4)
+  checklen("\xF4\x9F\xBF", 1)
+  checklen("\xF4\x9F\xBF\xBF", 1)
+  ;; spurious continuation bytes
+  checklen("汉字\x80", #("汉字") + 1)
+  checklen("\x80hello", 1)
+  checklen("hel\x80lo", 4)
+  checklen("汉字\xBF", #("汉字") + 1)
+  checklen("\xBFhello", 1)
+  checklen("hel\xBFlo", 4)
+}
+
+;; errors in utf8.codes
+do {
+  val func errorcodes (s) {
+    checkerror("invalid UTF%-8 code", func () {
+
+      loop c in utf8.codes(s) {
+        assert(c)
+      }
+    })
+  }
+  errorcodes("ab\xff")
+  errorcodes("\u{110000}")
+  errorcodes("in\x80valid")
+  errorcodes("\xbfinvalid")
+  errorcodes("αλφ\xBFα")
+
+  ;; calling iteration function with invalid arguments
+  val f = utf8.codes("")
+  assert(f("", 2) == nil)
+  assert(f("", -1) == nil)
+  assert(f("", math.mininteger) == nil)
+}
+
+;; error in initial position for offset
+checkerror("position out of bounds", utf8.offset, "abc", 1, 5)
+checkerror("position out of bounds", utf8.offset, "abc", 1, -4)
+checkerror("position out of bounds", utf8.offset, "", 1, 2)
+checkerror("position out of bounds", utf8.offset, "", 1, -1)
+checkerror("continuation byte", utf8.offset, "𦧺", 1, 2)
+checkerror("continuation byte", utf8.offset, "𦧺", 1, 2)
+checkerror("continuation byte", utf8.offset, "\x80", 1)
+checkerror("continuation byte", utf8.offset, "\x9c", -1)
+
+;; error in indices for len
+checkerror("out of bounds", utf8.len, "abc", 0, 2)
+checkerror("out of bounds", utf8.len, "abc", 1, 4)
+
+do {  ;; missing continuation bytes
+  ;; get what is available
+  val p, e = utf8.offset("\xE0", 1)
+  assert((p == 1) && (e == 1))
+  val p, e = utf8.offset("\xE0\x9e", -1)
+  assert((p == 1) && (e == 2))
+}
+
+var s = "hello World"
+var t = [string.byte(s, 1, -1)]
+loop i in (1, utf8.len(s)) {
+  assert(t@(i) == string.byte(s, i))
+}
+check(s, t)
+
+check("汉字/漢字", [27721, 23383, 47, 28450, 23383])
+
+do {
+  val s = "áéí\128"
+  var t = [utf8.codepoint(s, 1, #s - 1)]
+  assert((#t == 3) && (t@(1) == 225) && (t@(2) == 233) && (t@(3) == 237))
+  checkerror("invalid UTF%-8 code", utf8.codepoint, s, 1, #s)
+  checkerror("out of bounds", utf8.codepoint, s, #s + 1)
+  set t = [utf8.codepoint(s, 4, 3)]
+  assert(#t == 0)
+  checkerror("out of bounds", utf8.codepoint, s, -(#s + 1), 1)
+  checkerror("out of bounds", utf8.codepoint, s, 1, #s + 1)
+  ;; surrogates
+  assert(utf8.codepoint("\u{D7FF}") == (0xD800 - 1))
+  assert(utf8.codepoint("\u{E000}") == (0xDFFF + 1))
+  assert(utf8.codepoint("\u{D800}", 1, 1, true) == 0xD800)
+  assert(utf8.codepoint("\u{DFFF}", 1, 1, true) == 0xDFFF)
+  assert(utf8.codepoint("\u{7FFFFFFF}", 1, 1, true) == 0x7FFFFFFF)
+}
+
+assert(utf8.char() == "")
+assert(utf8.char(0, 97, 98, 99, 1) == "\0abc\1")
+
+assert(utf8.codepoint(utf8.char(0x10FFFF)) == 0x10FFFF)
+assert(utf8.codepoint(utf8.char(0x7FFFFFFF), 1, 1, true) == 0x7FFFFFFF)
+
+checkerror("value out of range", utf8.char, 0x7FFFFFFF + 1)
+checkerror("value out of range", utf8.char, -1)
+
+val func invalid (s) {
+  checkerror("invalid UTF%-8 code", utf8.codepoint, s)
+  assert(!utf8.len(s))
+}
+
+;; UTF-8 representation for 0x11ffff (value out of valid range)
+invalid("\xF4\x9F\xBF\xBF")
+
+;; surrogates
+invalid("\u{D800}")
+invalid("\u{DFFF}")
+
+;; overlong sequences
+invalid("\xC0\x80")  ;; zero
+invalid("\xC1\xBF")  ;; 0x7F (should be coded in 1 byte)
+invalid("\xE0\x9F\xBF")  ;; 0x7FF (should be coded in 2 bytes)
+invalid("\xF0\x8F\xBF\xBF")  ;; 0xFFFF (should be coded in 3 bytes)
+
+;; invalid bytes
+invalid("\x80")  ;; continuation byte
+invalid("\xBF")  ;; continuation byte
+invalid("\xFE")  ;; invalid byte
+invalid("\xFF")  ;; invalid byte
+
+;; empty string
+check("", [])
+
+;; minimum and maximum values for each sequence size
+set s = "\0 \x7F\z
+     \xC2\x80 \xDF\xBF\z
+     \xE0\xA0\x80 \xEF\xBF\xBF\z
+     \xF0\x90\x80\x80  \xF4\x8F\xBF\xBF"
+
+set s = string.gsub(s, " ", "")
+check(s, [0, 0x7F, 0x80, 0x7FF, 0x800, 0xFFFF, 0x10000, 0x10FFFF])
+
+;; again, without strictness
+set s = "\xF0\x90\x80\x80 \xF7\xBF\xBF\xBF\z
+     \xF8\x88\x80\x80\x80 \xFB\xBF\xBF\xBF\xBF\z
+     \xFC\x84\x80\x80\x80\x80 \xFD\xBF\xBF\xBF\xBF\xBF"
+
+set s = string.gsub(s, " ", "")
+check(s, [0x10000, 0x1FFFFF, 0x200000, 0x3FFFFFF, 0x4000000, 0x7FFFFFFF], true)
+
+do {
+  ;; original UTF-8 values
+  var s = "\u{4000000}\u{7FFFFFFF}"
+  assert(s == "\xFC\x84\x80\x80\x80\x80\xFD\xBF\xBF\xBF\xBF\xBF")
+  check(s, [0x4000000, 0x7FFFFFFF], true)
+
+  set s = "\u{200000}\u{3FFFFFF}"
+  assert(#s == 10)
+  check(s, [0x200000, 0x3FFFFFF], true)
+
+  set s = "\u{10000}\u{1fffff}"
+  assert(#s == 8)
+  check(s, [0x10000, 0x1FFFFF], true)
+}
+
+val x = "日本語a-4\0éó"
+check(x, [26085, 26412, 35486, 97, 45, 52, 0, 233, 243])
+
+;; more than 5 continuation bytes
+assert(!utf8.len("\xff\x8f\x8f\x8f\x8f\x8f\x8f\x8f"))
+
+;; Supplementary Characters
+check("𣲷𠜎𠱓𡁻𠵼ab𠺢", [0x23CB7, 0x2070E, 0x20C53, 0x2107B, 0x20D7C, 0x61, 0x62, 0x20EA2])
+
+check("𨳊𩶘𦧺𨳒𥄫𤓓\xF4\x8F\xBF\xBF", [0x28CCA, 0x29D98, 0x269FA, 0x28CD2, 0x2512B, 0x244D3, 0x10ffff])
+
+var i = 0
+loop p, c in string.gmatch(x, "()(" ++ (utf8.charpattern ++ ")")) {
+  set i = i + 1
+  assert(utf8.offset(x, i) == p)
+  assert(utf8.len(x, p) == ((utf8.len(x) - i) + 1))
+  assert(utf8.len(c) == 1)
+  loop j in (1, #c - 1) {
+    assert(utf8.offset(x, 0, (p + j) - 1) == p)
+  }
+}
+
+print('ok')
