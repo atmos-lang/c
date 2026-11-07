@@ -1,0 +1,41 @@
+;; track collections
+
+val M = []
+
+;; import list
+val stderr, collectgarbage = (io.stderr, collectgarbage)
+
+;; the debug version of setmetatable does not create any object (such as
+;; a '__metatable' string), and so it is more appropriate to be used in
+;; a finalizer
+val setmetatable = require("debug").setmetatable
+
+;; (global none)
+
+var active = false
+
+;; each time a table is collected, remark it for finalization on next
+;; cycle
+val mt = []
+func mt.__gc (o) {
+  stderr::write('.')  ;; mark progress
+  if active {
+    setmetatable(o, mt)  ;; remark object for finalization
+  }
+}
+
+func M.start () {
+  if !active {
+    set active = true
+    setmetatable([], mt)  ;; create initial object
+  }
+}
+
+func M.stop () {
+  if active {
+    set active = false
+    collectgarbage()  ;; call finalizer for the last time
+  }
+}
+
+return(M)
