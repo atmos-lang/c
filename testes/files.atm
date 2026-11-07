@@ -1,0 +1,1014 @@
+;; $Id: testes/files.lua $
+;; See Copyright Notice in file lua.h
+
+;; (global *)
+
+val debug = require("debug")
+
+val maxint = math.maxinteger
+
+assert(type(os.getenv("PATH")) == "string")
+
+assert(io.input(io.stdin) == io.stdin)
+assert(!pcall(io.input, "non-existent-file"))
+assert(io.output(io.stdout) == io.stdout)
+
+val func testerr (msg, f, ...) {
+  val stat, err = pcall(f, ...)
+  return((!stat && string.find(err, msg, 1, true)))
+}
+
+val func checkerr (msg, f, ...) {
+  assert(testerr(msg, f, ...))
+}
+
+;; cannot close standard files
+assert(!io.close(io.stdin) && !io.stdout::close() && !io.stderr::close())
+
+;; cannot call close method without an argument (new in 5.3.5)
+checkerr("got no value", io.stdin.close)
+
+assert((type(io.input()) == "userdata") && (io.type(io.output()) == "file"))
+assert((type(io.stdin) == "userdata") && (io.type(io.stderr) == "file"))
+assert(!io.type(8))
+var a = []
+setmetatable(a, [])
+assert(!io.type(a))
+
+assert(getmetatable(io.input()).__name == "FILE*")
+
+var a, b, c = io.open('xuxu_nao_existe')
+assert(!a && (type(b) == "string") && (type(c) == "number"))
+
+set a, b, c = io.open('/a/b/c/d', 'w')
+assert(!a && (type(b) == "string") && (type(c) == "number"))
+
+val file = os.tmpname()
+var f, msg = io.open(file, "w")
+if !f {
+  (Message || print)("'os.tmpname' file cannot be open; skipping file tests")
+} else {  ;;{  most tests here need tmpname
+  f::close()
+
+  print('testing i/o')
+
+  val otherfile = os.tmpname()
+
+  checkerr("invalid mode", io.open, file, "rw")
+  checkerr("invalid mode", io.open, file, "rb+")
+  checkerr("invalid mode", io.open, file, "r+bk")
+  checkerr("invalid mode", io.open, file, "")
+  checkerr("invalid mode", io.open, file, "+")
+  checkerr("invalid mode", io.open, file, "b")
+  assert(io.open(file, "r+b"))::close()
+  assert(io.open(file, "r+"))::close()
+  assert(io.open(file, "rb"))::close()
+
+  assert(os.setlocale('C', 'all'))
+
+  io.input(io.stdin)
+  io.output(io.stdout)
+
+  os.remove(file)
+  assert(!loadfile(file))
+  ;; Lua code cannot use chunks with fixed buffers
+  checkerr("invalid mode", load, "", "", "B")
+  checkerr("", dofile, file)
+  assert(!io.open(file))
+  io.output(file)
+  assert(io.output() != io.stdout)
+
+  if !_port {  ;; invalid seek
+    val status, msg, code = io.stdin::seek("set", 1000)
+    assert(!status && (type(msg) == "string") && (type(code) == "number"))
+  }
+
+  assert(io.output()::seek() == 0)
+  assert(io.write("alo alo")::seek() == string.len("alo alo"))
+  assert(io.output()::seek("cur", -3) == (string.len("alo alo") - 3))
+  assert(io.write("joao"))
+  assert(io.output()::seek("end") == string.len("alo joao"))
+
+  assert(io.output()::seek("set") == 0)
+
+  assert(io.write('"alo"', "{a}\n", "second line\n", "third line \n"))
+  assert(io.write('Xfourth_line'))
+  io.output(io.stdout)
+  collectgarbage()  ;; file should be closed by GC
+  assert((io.input() == io.stdin) && rawequal(io.output(), io.stdout))
+  print('+')
+
+  ;; test GC for files
+  collectgarbage()
+  loop i in (1, 120) {
+    loop i in (1, 5) {
+      io.input(file)
+      assert(io.open(file, 'r'))
+      io.lines(file)
+    }
+    collectgarbage()
+  }
+
+  io.input()::close()
+  io.close()
+
+  assert(os.rename(file, otherfile))
+  assert(!os.rename(file, otherfile))
+
+  io.output(io.open(otherfile, "ab"))
+  assert(io.write("\n\n\t\t  ", 3450, "\n"))
+  io.close()
+
+  do {
+    ;; closing file by scope
+    var F = nil
+    do {
+      pin f = assert(io.open(file, "w"))
+      set F = f
+    }
+    assert(tostring(F) == "file (closed)")
+  }
+  assert(os.remove(file))
+
+  do {
+    ;; test writing/reading numbers
+    pin f = assert(io.open(file, "w"))
+    f::write(maxint, '\n')
+    f::write(string.format("0X%x\n", maxint))
+    f::write("0xABCp-3", '\n')
+    f::write(0, '\n')
+    f::write(-maxint, '\n')
+    f::write(string.format("0x%X\n", -maxint))
+    f::write("-0xABCp-3", '\n')
+    assert(f::close())
+    pin f = assert(io.open(file, "r"))
+    assert(f::read("n") == maxint)
+    assert(f::read("n") == maxint)
+    assert(f::read("n") == 0xABCp-3)
+    assert(f::read("n") == 0)
+    assert(f::read("*n") == -maxint)  ;; test old format (with '*')
+    assert(f::read("n") == -maxint)
+    assert(f::read("*n") == -0xABCp-3)  ;; test old format (with '*')
+  }
+  assert(os.remove(file))
+
+  ;; testing multiple arguments to io.read
+  do {
+    pin f = assert(io.open(file, "w"))
+    f::write("""a line
+another line
+1234
+3.45
+one
+two
+three
+""")
+
+    var l1, l2, l3, l4, n1, n2, c, dummy
+    assert(f::close())
+    pin f = assert(io.open(file, "r"))
+    set l1, l2, n1, n2, dummy = f::read("l", "L", "n", "n")
+    assert((l1 == "a line") && (l2 == "another line\n") && (n1 == 1234) && (n2 == 3.45) && (dummy == nil))
+    assert(f::close())
+    pin f = assert(io.open(file, "r"))
+    set l1, l2, n1, n2, c, l3, l4, dummy = f::read(7, "l", "n", "n", 1, "l", "l")
+    assert((l1 == "a line\n") && (l2 == "another line") && (c == '\n') && (n1 == 1234) && (n2 == 3.45) && (l3 == "one") && (l4 == "two") && (dummy == nil))
+    assert(f::close())
+    pin f = assert(io.open(file, "r"))
+    ;; second item failing
+    set l1, n1, n2, dummy = f::read("l", "n", "n", "l")
+    assert((l1 == "a line") && !n1)
+  }
+  assert(os.remove(file))
+
+  ;; test yielding during 'dofile'
+  set f = assert(io.open(file, "w"))
+  f::write("""val x, z = coroutine.yield(10)
+val y = coroutine.yield(20)
+x + (y * z)
+""")
+
+  assert(f::close())
+  set f = coroutine.wrap(dofile)
+  assert(f(file) == 10)
+  assert(f(100, 101) == 20)
+  assert(f(200) == (100 + (200 * 101)))
+  assert(os.remove(file))
+
+  set f = assert(io.open(file, "w"))
+  ;; test number termination
+  f::write("""-12.3-	-0xffff+  .3|5.E-3X  +234e+13E 0xDEADBEEFDEADBEEFx
+0x1.13Ap+3e
+""")
+
+  ;; very long number
+  f::write("1234")
+  loop i in (1, 1000) {
+    f::write("0")
+  }
+  f::write("\n")
+  ;; invalid sequences (must read and discard valid prefixes)
+  f::write(""".e+	0.e;	--;  0xX;
+""")
+
+  assert(f::close())
+  set f = assert(io.open(file, "r"))
+  assert(f::read("n") == -12.3)
+  assert(f::read(1) == "-")
+  assert(f::read("n") == -0xffff)
+  assert(f::read(2) == "+ ")
+  assert(f::read("n") == 0.3)
+  assert(f::read(1) == "|")
+  assert(f::read("n") == 5e-3)
+  assert(f::read(1) == "X")
+  assert(f::read("n") == 234e13)
+  assert(f::read(1) == "E")
+  assert(f::read("n") == 0Xdeadbeefdeadbeef)
+  assert(f::read(2) == "x\n")
+  assert(f::read("n") == 0x1.13aP3)
+  assert(f::read(1) == "e")
+
+  do {  ;; attempt to read too long number
+    assert(!f::read("n"))  ;; fails
+    val s = f::read("L")  ;; read rest of line
+    assert(string.find(s, "^00*\n$"))  ;; lots of 0's left
+  }
+
+  assert(!f::read("n"))
+  assert(f::read(2) == "e+")
+  assert(!f::read("n"))
+  assert(f::read(1) == ";")
+  assert(!f::read("n"))
+  assert(f::read(2) == "-;")
+  assert(!f::read("n"))
+  assert(f::read(1) == "X")
+  assert(!f::read("n"))
+  assert(f::read(1) == ";")
+  assert(!f::read("n"))  ;; end of file
+  assert(!f::read(0))
+  assert(f::close())
+  assert(os.remove(file))
+
+  ;; test line generators
+  assert(!pcall(io.lines, "non-existent-file"))
+  assert(os.rename(otherfile, file))
+  io.output(otherfile)
+  var n = 0
+  var f = io.lines(file)
+  loop {
+    while(f())
+    set n = n + 1
+  }
+  assert(n == 6)  ;; number of lines in the file
+  checkerr("file is already closed", f)
+  checkerr("file is already closed", f)
+  ;; copy from file to otherfile
+  set n = 0
+  loop l in io.lines(file) {
+    io.write(l, "\n")
+    set n = n + 1
+  }
+  io.close()
+  assert(n == 6)
+  ;; copy from otherfile back to file
+  var f = assert(io.open(otherfile))
+  assert(io.type(f) == "file")
+  io.output(file)
+  assert(!io.output()::read())
+  set n = 0
+  loop l in f::lines() {
+    io.write(l, "\n")
+    set n = n + 1
+  }
+  assert(tostring(f)::sub(1, 5) == "file ")
+  assert(f::close())
+  io.close()
+  assert(n == 6)
+  checkerr("closed file", io.close, f)
+  assert(tostring(f) == "file (closed)")
+  assert(io.type(f) == "closed file")
+  io.input(file)
+  set f = io.open(otherfile)::lines()
+  set n = 0
+  loop l in io.lines() {
+    assert(l == f())
+    set n = n + 1
+  }
+  set f = nil
+  collectgarbage()
+  assert(n == 6)
+  assert(os.remove(otherfile))
+
+  do {  ;; bug in 5.3.1
+    io.output(otherfile)
+    io.write(string.rep("a", 300), "\n")
+    io.close()
+    var t = []
+    loop i in (1, 250) {
+      set t@(i) = 1
+    }
+    set t = [io.lines(otherfile, table.unpack(t))()]
+    ;; everything ok here
+    assert((#t == 250) && (t@(1) == 'a') && (t@(#t) == 'a'))
+    set t@(#t + 1) = 1  ;; one too many
+    checkerr("too many arguments", io.lines, otherfile, table.unpack(t))
+    collectgarbage()  ;; ensure 'otherfile' is closed
+    assert(os.remove(otherfile))
+  }
+
+  io.input(file)
+  do {  ;; test error returns
+    val a, b, c = io.input()::write("xuxu")
+    assert(!a && (type(b) == "string") && (type(c) == "number"))
+  }
+  checkerr("invalid format", io.read, "x")
+  assert(io.read(0) == "")  ;; not eof
+  assert(io.read(5, 'l') == '"alo"')
+  assert(io.read(0) == "")
+  assert(io.read() == "second line")
+  var x = io.input()::seek()
+  assert(io.read() == "third line ")
+  assert(io.input()::seek("set", x))
+  assert(io.read('L') == "third line \n")
+  assert(io.read(1) == "X")
+  assert(io.read(string.len("fourth_line")) == "fourth_line")
+  assert(io.input()::seek("cur", -string.len("fourth_line")))
+  assert(io.read() == "fourth_line")
+  assert(io.read() == "")  ;; empty line
+  assert(io.read('n') == 3450)
+  assert(io.read(1) == '\n')
+  assert(!io.read(0))  ;; end of file
+  assert(!io.read(1))  ;; end of file
+  assert(!io.read(30000))  ;; end of file
+  assert(([io.read(1)])@(2) == undef)
+  assert(!io.read())  ;; end of file
+  assert(([io.read()])@(2) == undef)
+  assert(!io.read('n'))  ;; end of file
+  assert(([io.read('n')])@(2) == undef)
+  assert(io.read('a') == '')  ;; end of file (OK for 'a')
+  assert(io.read('a') == '')  ;; end of file (OK for 'a')
+  collectgarbage()
+  print('+')
+  io.close(io.input())
+  checkerr(" input file is closed", io.read)
+
+  assert(os.remove(file))
+
+  var t = '0123456789'
+  loop i in (1, 10) {
+    set t = t ++ t
+  }
+  assert(string.len(t) == (10 * (2 ** 10)))
+
+  io.output(file)
+  io.write("alo")::write("\n")
+  io.close()
+  checkerr(" output file is closed", io.write)
+  var f = io.open(file, "a+b")
+  io.output(f)
+  collectgarbage()
+
+  assert(io.write(' ' ++ (t ++ ' ')))
+  assert(io.write(';', 'end of file\n'))
+  assert(f::flush())
+  assert(io.flush())
+  f::close()
+  print('+')
+
+  io.input(file)
+  assert(io.read() == "alo")
+  assert(io.read(1) == ' ')
+  assert(io.read(string.len(t)) == t)
+  assert(io.read(1) == ' ')
+  assert(io.read(0))
+  assert(io.read('a') == ';end of file\n')
+  assert(!io.read(0))
+  assert(io.close(io.input()))
+
+  ;; test errors in read/write
+  do {
+    val func ismsg (m) {
+      ;; error message is not a code number
+      return(((type(m) == "string") && !tonumber(m)))
+    }
+
+    ;; read
+    var f = io.open(file, "w")
+    var r, m, c = f::read()
+    assert(!r && ismsg(m) && (type(c) == "number"))
+    assert(f::close())
+    ;; write
+    set f = io.open(file, "r")
+    set r, m, c = f::write("whatever")
+    assert(!r && ismsg(m) && (type(c) == "number"))
+    assert(f::close())
+    ;; lines
+    set f = io.open(file, "w")
+    set r, m = pcall(f::lines())
+    assert((r == false) && ismsg(m))
+    assert(f::close())
+  }
+
+  assert(os.remove(file))
+
+  ;; test for L format
+  io.output(file)
+  io.write("\n\nline\nother")::close()
+  io.input(file)
+  assert(io.read("L") == "\n")
+  assert(io.read("L") == "\n")
+  assert(io.read("L") == "line\n")
+  assert(io.read("L") == "other")
+  assert(!io.read("L"))
+  io.input()::close()
+
+  var f = assert(io.open(file))
+  var s = ""
+  loop l in f::lines("L") {
+    set s = s ++ l
+  }
+  assert(s == "\n\nline\nother")
+  f::close()
+
+  io.input(file)
+  set s = ""
+  loop l in io.lines(nil, "L") {
+    set s = s ++ l
+  }
+  assert(s == "\n\nline\nother")
+  io.input()::close()
+
+  set s = ""
+  loop l in io.lines(file, "L") {
+    set s = s ++ l
+  }
+  assert(s == "\n\nline\nother")
+
+  set s = ""
+  loop l in io.lines(file, "l") {
+    set s = s ++ l
+  }
+  assert(s == "lineother")
+
+  io.output(file)
+  io.write("set a = 10 + 34\nset a = 2 * a\nset a = -a\n")::close()
+  val t = []
+  assert(load(io.lines(file, "L"), nil, nil, t))()
+  assert(t.a == -((10 + 34) * 2))
+
+  do {  ;; testing closing file in line iteration
+
+    ;; get the to-be-closed variable from a loop
+    val func gettoclose (lv) {
+      set lv = lv + 1
+      var stvar = 0  ;; to-be-closed is 3th state variable in the loop
+      loop i in (1, 1000) {
+        val n, v = debug.getlocal(lv, i)
+        if n == "(for state)" {
+          set stvar = stvar + 1
+          if stvar == 3 {
+            return(v)
+          }
+        }
+      }
+    }
+
+    var f
+    loop l in io.lines(file) {
+      set f = gettoclose(1)
+      assert(io.type(f) == "file")
+      break()
+    }
+    assert(io.type(f) == "closed file")
+
+    set f = nil
+    val func foo (name) {
+      loop l in io.lines(name) {
+        set f = gettoclose(1)
+        assert(io.type(f) == "file")
+        error(f)  ;; exit loop with an error
+      }
+    }
+    val st, msg = pcall(foo, file)
+    assert((st == false) && (io.type(msg) == "closed file"))
+  }
+
+  do {
+    print("testing flush")
+    val f = io.output("/dev/null")
+    assert(f::write("abcd"))  ;; write to buffer
+    assert(f::flush())  ;; write to device
+    assert(f::write("abcd"))  ;; write to buffer
+    assert(io.flush())  ;; write to device
+    assert(f::close())
+
+    val f = io.output("/dev/full")
+    assert(f::write("abcd"))  ;; write to buffer
+    assert(!f::flush())  ;; cannot write to device
+    assert(f::write("abcd"))  ;; write to buffer
+    assert(!io.flush())  ;; cannot write to device
+    assert(f::close())
+  }
+
+  ;; test for multiple arguments in 'lines'
+  io.output(file)
+  io.write("0123456789\n")::close()
+  loop a, b in io.lines(file, 1, 1) {
+    if a == "\n" {
+      assert(!b)
+    } else {
+      assert(tonumber(a) == (tonumber(b) - 1))
+    }
+  }
+
+  loop a, b, c in io.lines(file, 1, 2, "a") {
+    assert((a == "0") && (b == "12") && (c == "3456789\n"))
+  }
+
+  loop a, b, c in io.lines(file, "a", 0, 1) {
+    if a == "" {
+      break()
+    }
+    assert((a == "0123456789\n") && !b && !c)
+  }
+  collectgarbage()  ;; to close file in previous iteration
+
+  io.output(file)
+  io.write("00\n10\n20\n30\n40\n")::close()
+  loop a, b in io.lines(file, "n", "n") {
+    if a == 40 {
+      assert(!b)
+    } else {
+      assert(a == (b - 10))
+    }
+  }
+
+  ;; test load x lines
+  io.output(file)
+  io.write("""var y
+= X
+set X =
+(X *
+2) +
+X;
+set X =
+X
+-                                   y;
+""")::close()
+  set _G.X = 1
+  assert(!load((io.lines(file))))
+  collectgarbage()  ;; to close file in previous iteration
+  load((io.lines(file, "L")))()
+  assert(_G.X == 2)
+  load((io.lines(file, 1)))()
+  assert(_G.X == 4)
+  load((io.lines(file, 3)))()
+  assert(_G.X == 8)
+  set _G.X = nil
+
+  print('+')
+
+  val x1 = "string\n\n\\com \"\"''coisas [[estranhas]] ]]'"
+  io.output(file)
+  assert(io.write(string.format("set X2 = %q\n;; comment without ending EOS", x1)))
+  io.close()
+  assert(loadfile(file))()
+  assert(x1 == _G.X2)
+  set _G.X2 = nil
+  print('+')
+  assert(os.remove(file))
+  assert(!os.remove(file))
+  assert(!os.remove(otherfile))
+
+  ;; testing loadfile
+  val func testloadfile (s, expres) {
+    io.output(file)
+    if s {
+      io.write(s)
+    }
+    io.close()
+    val res = assert(loadfile(file))()
+    assert(os.remove(file))
+    assert(res == expres)
+  }
+
+  ;; loading empty file
+  testloadfile(nil, nil)
+
+  ;; loading file with initial comment without end of line
+  testloadfile("# a non-ending comment", nil)
+
+  ;; checking Unicode BOM in files
+  testloadfile("\xEF\xBB\xBF# some comment\n234", 234)
+  testloadfile("\xEF\xBB\xBF239", 239)
+  testloadfile("\xEF\xBB\xBF", nil)  ;; empty file with a BOM
+
+  ;; checking line numbers in files with initial comments
+  testloadfile("# a comment\nrequire('debug').getinfo(1).currentline", 2)
+
+  ;; loading binary file
+  io.output(io.open(file, "wb"))
+  assert(io.write(string.dump(func () {
+    return(10, '\0alo\255', 'hi')
+  })))
+  io.close()
+  set a, b, c = assert(loadfile(file))()
+  assert((a == 10) && (b == "\0alo\255") && (c == "hi"))
+  assert(os.remove(file))
+
+  ;; bug in 5.2.1
+  do {
+    io.output(io.open(file, "wb"))
+    ;; save function with no upvalues
+    assert(io.write(string.dump(func () {
+      return(1)
+    })))
+    io.close()
+    set f = assert(loadfile(file, "b", []))
+    assert((type(f) == "function") && (f() == 1))
+    assert(os.remove(file))
+  }
+
+  ;; loading binary file with initial comment
+  io.output(io.open(file, "wb"))
+  assert(io.write("#this is a comment for a binary file\0\n", string.dump(func () {
+    return(20, '\0\0\0')
+  })))
+  io.close()
+  set a, b, c = assert(loadfile(file))()
+  assert((a == 20) && (b == "\0\0\0") && (c == nil))
+  assert(os.remove(file))
+
+  ;; 'loadfile' with 'env'
+  do {
+    var f = io.open(file, 'w')
+    f::write("""    if (...) { set a = 15; return(b, c, d) } else {
+      _ENV
+    }
+  """)
+
+    f::close()
+    val t = [b=12, c="xuxu", d=print]
+    var f = assert(loadfile(file, 't', t))
+    val b, c, d = f(1)
+    assert((t.a == 15) && (b == 12) && (c == t.c) && (d == print))
+    assert(f() == t)
+    set f = assert(loadfile(file, 't', nil))
+    assert(f() == nil)
+    set f = assert(loadfile(file))
+    assert(f() == _G)
+    assert(os.remove(file))
+  }
+
+  ;; 'loadfile' x modes
+  do {
+    io.open(file, 'w')::write("10")::close()
+    val s, m = loadfile(file, 'b')
+    assert(!s && string.find(m, "a text chunk"))
+    io.open(file, 'w')::write("\27 10")::close()
+    val s, m = loadfile(file, 't')
+    assert(!s && string.find(m, "a binary chunk"))
+    assert(os.remove(file))
+  }
+
+  io.output(file)
+  assert(io.write("qualquer coisa\n"))
+  assert(io.write("mais qualquer coisa"))
+  io.close()
+  assert(io.output(assert(io.open(otherfile, 'wb')))::write("outra coisa\0\1\3\0\0\0\0\255\0")::close())
+
+  val filehandle = assert(io.open(file, 'r+'))
+  val otherfilehandle = assert(io.open(otherfile, 'rb'))
+  assert(filehandle != otherfilehandle)
+  assert(type(filehandle) == "userdata")
+  assert(filehandle::read('l') == "qualquer coisa")
+  io.input(otherfilehandle)
+  assert(io.read(string.len("outra coisa")) == "outra coisa")
+  assert(filehandle::read('l') == "mais qualquer coisa")
+  filehandle::close()
+  assert(type(filehandle) == "userdata")
+  io.input(otherfilehandle)
+  assert(io.read(4) == "\0\1\3\0")
+  assert(io.read(3) == "\0\0\0")
+  assert(io.read(0) == "")  ;; 255 is not eof
+  assert(io.read(1) == "\255")
+  assert(io.read('a') == "\0")
+  assert(!io.read(0))
+  assert(otherfilehandle == io.input())
+  otherfilehandle::close()
+  assert(os.remove(file))
+  assert(os.remove(otherfile))
+  collectgarbage()
+
+  io.output(file)::write(""" 123.4	-56e-2  not a number
+second line
+third line
+
+and the rest of the file
+""")::close()
+  io.input(file)
+  val _, a, b, c, d, e, h, __ = io.read(1, 'n', 'n', 'l', 'l', 'l', 'a', 10)
+  assert(io.close(io.input()))
+  assert((_ == ' ') && !__)
+  assert((type(a) == 'number') && (a == 123.4) && (b == -56e-2))
+  assert((d == 'second line') && (e == 'third line'))
+  assert(h == """
+and the rest of the file
+""")
+  assert(os.remove(file))
+  collectgarbage()
+
+  ;; testing buffers
+  do {
+    var f = assert(io.open(file, "w"))
+    val fr = assert(io.open(file, "r"))
+    assert(f::setvbuf("full", 2000))
+    f::write("x")
+    assert(fr::read("all") == "")  ;; full buffer; output not written yet
+    f::close()
+    fr::seek("set")
+    assert(fr::read("all") == "x")  ;; `close' flushes it
+    set f = assert(io.open(file), "w")
+    assert(f::setvbuf("no"))
+    f::write("x")
+    fr::seek("set")
+    assert(fr::read("all") == "x")  ;; no buffer; output is ready
+    f::close()
+    set f = assert(io.open(file, "a"))
+    assert(f::setvbuf("line"))
+    f::write("x")
+    fr::seek("set", 1)
+    assert(fr::read("all") == "")  ;; line buffer; no output without `\n'
+    f::write("a\n")::seek("set", 1)
+    assert(fr::read("all") == "xa\n")  ;; now we have a whole line
+    f::close()
+    fr::close()
+    assert(os.remove(file))
+  }
+
+  if T && T.nonblock && !_port {
+    print("testing failed write")
+
+    ;; unable to write anything to /dev/full
+    val f = io.open("/dev/full", "w")
+    assert(f::setvbuf("no"))
+    val _, _, err, count = f::write("abcd")
+    assert((err > 0) && (count == 0))
+    assert(f::close())
+
+    ;; receiver will read a "few" bytes (enough to empty a large buffer)
+    val receiver = """    lua -e 'assert(io.stdin:setvbuf("no")); assert(#io.read(1e4) == 1e4)' """
+
+    val f = io.popen(receiver, "w")
+    assert(f::setvbuf("no"))
+    T.nonblock(f)
+
+    ;; able to write a few bytes
+    assert(f::write(string.rep("a", 1e2)))
+
+    ;; Unable to write more bytes than the pipe buffer supports.
+    ;; (In Linux, the pipe buffer size is 64K (2^16). Posix requires at
+    ;; least 512 bytes.)
+    val _, _, err, count = f::write("abcd", string.rep("a", 2 ** 17))
+    assert((err > 0) && (count >= 512) && (count < (2 ** 17)))
+
+    assert(f::close())
+  }
+
+  if !_soft {
+    print("testing large files (> BUFSIZ)")
+    io.output(file)
+    loop i in (1, 5001) {
+      io.write('0123456789123')
+    }
+    io.write('\n12346')::close()
+    io.input(file)
+    var x = io.read('a')
+    io.input()::seek('set', 0)
+    var y = io.read(30001) ++ (io.read(1005) ++ (io.read(0) ++ (io.read(1) ++ io.read(100003))))
+    assert((x == y) && (string.len(x) == ((5001 * 13) + 6)))
+    io.input()::seek('set', 0)
+    set y = io.read()  ;; huge line
+    assert(x == (y ++ ('\n' ++ io.read())))
+    assert(!io.read())
+    io.close(io.input())
+    assert(os.remove(file))
+    set x = nil
+    set y = nil
+  }
+
+  if !_port {
+    var progname
+    do {  ;; get name of running executable
+      val arg = arg || ARG
+      var i = 0
+      loop {
+        while(arg@(i))
+        set i = i - 1
+      }
+      set progname = '"' ++ (arg@(i + 1) ++ '"')
+    }
+    print("testing popen/pclose and execute")
+    ;; invalid mode for popen
+    checkerr("invalid mode", io.popen, "cat", "")
+    checkerr("invalid mode", io.popen, "cat", "r+")
+    checkerr("invalid mode", io.popen, "cat", "rw")
+    do {  ;; basic tests for popen
+      val file = os.tmpname()
+      val f = assert(io.popen("cat - > " ++ file, "w"))
+      f::write("a line")
+      assert(f::close())
+      val f = assert(io.popen("cat - < " ++ file, "r"))
+      assert(f::read("a") == "a line")
+      assert(f::close())
+      assert(os.remove(file))
+    }
+
+    val tests = [["ls > /dev/null", "ok"], ["not-to-be-found-command", "exit"], ["exit 3", "exit", 3], ["exit 129", "exit", 129], ["kill -s HUP $$", "signal", 1], ["kill -s KILL $$", "signal", 9], ["sh -c 'kill -s HUP $$'", "exit"], [progname ++ ' -e " "', "ok"], [progname ++ ' -e "os.exit(0, true)"', "ok"], [progname ++ ' -e "os.exit(20, true)"', "exit", 20]]
+    ;; command,   what,  code
+
+    print("\n(some error messages are expected now)")
+    loop _, v in ipairs(tests) {
+      val x, y, z = io.popen(v@(1))::close()
+      val x1, y1, z1 = os.execute(v@(1))
+      assert((x == x1) && (y == y1) && (z == z1))
+      if v@(2) == "ok" {
+        assert(x && (y == 'exit') && (z == 0))
+      } else {
+        assert(!x && (y == v@(2)))  ;; correct status and 'what'
+        ;; correct code if known (but always different from 0)
+        assert(((v@(3) == nil) && (z > 0)) || (v@(3) == z))
+      }
+    }
+    print("(done)")
+  }
+
+  ;; testing tmpfile
+  set f = io.tmpfile()
+  assert(io.type(f) == "file")
+  f::write("alo")
+  f::seek("set")
+  assert(f::read("a") == "alo")
+}  ;;}
+
+print('+')
+
+print("testing date/time")
+
+assert(os.date("") == "")
+assert(os.date("!") == "")
+assert(os.date("\0\0") == "\0\0")
+assert(os.date("!\0\0") == "\0\0")
+val x = string.rep("a", 10000)
+assert(os.date(x) == x)
+var t = os.time()
+set D = os.date("*t", t)  ;; (global D)
+assert(os.date(string.rep("%d", 1000), t) == string.rep(os.date("%d", t), 1000))
+assert(os.date(string.rep("%", 200)) == string.rep("%", 100))
+
+val func checkDateTable (t) {
+  set D = os.date("*t", t)
+  assert(os.time(D) == t)
+  load(os.date("""assert((D.year == %Y) && (D.month == %m) && (D.day == %d) &&
+    (D.hour == %H) && (D.min == %M) && (D.sec == %S) &&
+    (D.wday == (%w + 1)) && (D.yday == %j))""", t))()
+  set _G.D = nil
+}
+
+do {  ;; testing mktime returning -1
+  val t = os.date("*t", -1)
+  assert(os.time(t) == -1)
+}
+
+checkDateTable(os.time())
+if !_port {
+  ;; assume that time_t can represent these values
+  checkDateTable(0)
+  checkDateTable(1)
+  checkDateTable(1000)
+  checkDateTable(0x7fffffff)
+  checkDateTable(0x80000000)
+}
+
+checkerr("invalid conversion specifier", os.date, "%")
+checkerr("invalid conversion specifier", os.date, "%9")
+checkerr("invalid conversion specifier", os.date, "%")
+checkerr("invalid conversion specifier", os.date, "%O")
+checkerr("invalid conversion specifier", os.date, "%E")
+checkerr("invalid conversion specifier", os.date, "%Ea")
+
+checkerr("not an integer", os.time, [year=1000, month=1, day=1, hour='x'])
+checkerr("not an integer", os.time, [year=1000, month=1, day=1, hour=1.5])
+
+checkerr("missing", os.time, [hour=12])  ;; missing date
+
+if string.packsize("i") == 4 {  ;; 4-byte ints
+  checkerr("field 'year' is out-of-bound", os.time, [year=-0x80000000 + 1899, month=1, day=1])
+
+  checkerr("field 'year' is out-of-bound", os.time, [year=-0x80000000, month=1, day=1])
+
+  if math.maxinteger > (2 ** 31) {  ;; larger lua_integer?
+    checkerr("field 'year' is out-of-bound", os.time, [year=0x80000000 + 1900, month=1, day=1])
+  }
+}
+
+if !_port {
+  ;; test Posix-specific modifiers
+  assert(type(os.date("%Ex")) == 'string')
+  assert(type(os.date("%Oy")) == 'string')
+
+  ;; test large dates (assume at least 4-byte ints and time_t)
+  var t0 = os.time([year=1970, month=1, day=0])
+  var t1 = os.time([year=1970, month=1, day=0, sec=0x80000000 - 1])
+  assert((t1 - t0) == (0x80000000 - 1))
+  set t0 = os.time([year=1970, month=1, day=1])
+  set t1 = os.time([year=1970, month=1, day=1, sec=-0x80000000])
+  assert((t1 - t0) == -0x80000000)
+
+  ;; test out-of-range dates (at least for Unix)
+  if maxint >= (2 ** 62) {  ;; cannot do these tests in Small Lua
+    ;; no arith overflows
+    checkerr("out-of-bound", os.time, [year=-maxint, month=1, day=1])
+    if string.packsize("i") == 4 {  ;; 4-byte ints
+      if testerr("out-of-bound", os.date, "%Y", 2 ** 40) {
+        ;; time_t has 4 bytes and therefore cannot represent year 4000
+        print("  4-byte time_t")
+        checkerr("cannot be represented", os.time, [year=4000, month=1, day=1])
+      } else {
+        ;; time_t has 8 bytes; an int year cannot represent a huge time
+        print("  8-byte time_t")
+        checkerr("cannot be represented", os.date, "%Y", 2 ** 60)
+
+        ;; this is the maximum year
+        assert(tonumber(os.time([year=0x80000000 + 1899, month=12, day=31, hour=23, min=59, sec=59])))
+
+        ;; this is too much
+        checkerr("represented", os.time, [year=0x80000000 + 1899, month=12, day=31, hour=23, min=59, sec=60])
+      }
+
+      ;; internal 'int' fields cannot hold these values
+      checkerr("field 'day' is out-of-bound", os.time, [year=0, month=1, day=2 ** 32])
+
+      checkerr("field 'month' is out-of-bound", os.time, [year=0, month=-(0x80000000 + 1), day=1])
+
+      checkerr("field 'year' is out-of-bound", os.time, [year=0x80000000 + 1900, month=1, day=1])
+    } else {  ;; 8-byte ints
+      ;; assume time_t has 8 bytes too
+      print("  8-byte time_t")
+      assert(tonumber(os.date("%Y", 2 ** 60)))
+
+      ;; but still cannot represent a huge year
+      checkerr("cannot be represented", os.time, [year=2 ** 60, month=1, day=1])
+    }
+  }
+}
+
+do {
+  val D = os.date("*t")
+  val t = os.time(D)
+  if D.isdst == nil {
+    print("no daylight saving information")
+  } else {
+    assert(type(D.isdst) == 'boolean')
+  }
+  set D.isdst = nil
+  val t1 = os.time(D)
+  assert(t == t1)  ;; if isdst is absent uses correct default
+}
+
+val D = os.date("*t")
+set t = os.time(D)
+set D.year = D.year - 1
+var t1 = os.time(D)
+;; allow for leap years
+assert(math.abs((os.difftime(t, t1) / (24 * 3600)) - 365) < 2)
+
+;; should not take more than 1 second to execute these two lines
+set t = os.time()
+set t1 = os.time(os.date("*t"))
+var diff = os.difftime(t1, t)
+assert((0 <= diff) && (diff <= 1))
+set diff = os.difftime(t, t1)
+assert((-1 <= diff) && (diff <= 0))
+
+var t1 = os.time([year=2000, month=10, day=1, hour=23, min=12])
+val t2 = os.time([year=2000, month=10, day=1, hour=23, min=10, sec=19])
+assert(os.difftime(t1, t2) == ((60 * 2) - 19))
+
+;; since 5.3.3, 'os.time' normalizes table fields
+set t1 = [year=2005, month=1, day=1, hour=1, min=0, sec=-3602]
+os.time(t1)
+assert((t1.day == 31) && (t1.month == 12) && (t1.year == 2004) && (t1.hour == 23) && (t1.min == 59) && (t1.sec == 58) && (t1.yday == 366))
+
+io.output(io.stdout)
+val t = os.date('%d %m %Y %H %M %S')
+var d, m, a, h, min, s = string.match(t, "(%d+) (%d+) (%d+) (%d+) (%d+) (%d+)")
+set d = tonumber(d)
+set m = tonumber(m)
+set a = tonumber(a)
+set h = tonumber(h)
+set min = tonumber(min)
+set s = tonumber(s)
+io.write(string.format('test done on %2.2d/%2.2d/%d', d, m, a))
+io.write(string.format(', at %2.2d:%2.2d:%2.2d\n', h, min, s))
+io.write(string.format('%s\n', _VERSION))
