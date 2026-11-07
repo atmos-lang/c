@@ -1,0 +1,588 @@
+
+;; $Id: testes/main.lua $
+;; See Copyright Notice in file lua.h
+
+;; most (all?) tests here assume a reasonable "Unix-like" shell
+if _port {
+  return()
+}
+
+;; use only "double quotes" inside shell scripts (better change to
+;; run on Windows)
+
+print("testing stand-alone interpreter")
+
+assert(os.execute())  ;; machine has a system command
+
+val arg = arg || ARG
+
+val prog = os.tmpname()
+val otherprog = os.tmpname()
+val out = os.tmpname()
+
+var progname
+do {
+  var i = 0
+  loop {
+    while(arg@(i))
+    set i = i - 1
+  }
+  set progname = arg@(i + 1)
+}
+print("progname: " ++ progname)
+
+val func prepfile (s, mod, p) {
+  set mod = (mod && "wb") || "w"  ;; mod true means binary files
+  set p = p || prog  ;; file to write the program
+  val f = io.open(p, mod)
+  f::write(s)
+  assert(f::close())
+}
+
+val func getoutput () {
+  val f = io.open(out)
+  val t = f::read("a")
+  f::close()
+  assert(os.remove(out))
+  return(t)
+}
+
+val func checkprogout (s) {
+  ;; expected result must end with new line
+  assert(string.sub(s, -1) == "\n")
+  val t = getoutput()
+  loop line in string.gmatch(s, ".-\n") {
+    assert(string.find(t, line, 1, true))
+  }
+}
+
+val func checkout (s) {
+  val t = getoutput()
+  if s != t {
+    print(string.format("'%s' - '%s'\n", s, t))
+  }
+  assert(s == t)
+  return(t)
+}
+
+val func RUN (p, ...) {
+  set p = string.gsub(p, "lua", '"' ++ (progname ++ '"'), 1)
+  val s = string.format(p, ...)
+  assert(os.execute(s))
+}
+
+val func NoRun (msg, p, ...) {
+  set p = string.gsub(p, "lua", '"' ++ (progname ++ '"'), 1)
+  var s = string.format(p, ...)
+  set s = string.format("%s >%s 2>&1", s, out)  ;; send output and error to 'out'
+  assert(!os.execute(s))
+  assert(string.find(getoutput(), msg, 1, true))  ;; check error message
+}
+
+RUN('lua -v')
+
+RUN('lua -v > %s', out)
+val release = string.match(getoutput(), "Lua (%d+%.%d+%.%d+)")
+
+print(string.format("(temporary program file used in these tests: %s)", prog))
+
+;; running stdin as a file
+prepfile("")
+RUN('lua - < %s > %s', prog, out)
+checkout("")
+
+prepfile("""  print(
+1, a
+)
+""")
+
+RUN('lua - -- < %s > %s', prog, out)
+checkout("1\tnil\n")
+
+RUN('echo "print(10)\nprint(2)\n" | lua > %s', out)
+checkout("10\n2\n")
+
+;; testing BOM
+prepfile("\xEF\xBB\xBF")
+RUN('lua %s > %s', prog, out)
+checkout("")
+
+prepfile("\xEF\xBB\xBFprint(3)")
+RUN('lua %s > %s', prog, out)
+checkout("3\n")
+
+prepfile("\xEF\xBB\xBF# comment!!\nprint(3)")
+RUN('lua %s > %s', prog, out)
+checkout("3\n")
+
+;; bad BOMs
+prepfile("\xEF", true)
+NoRun("unexpected symbol", 'lua %s', prog)
+
+prepfile("\xEF\xBB", true)
+NoRun("unexpected symbol", 'lua %s', prog)
+
+prepfile("\xEFprint(3)", true)
+NoRun("unexpected symbol", 'lua %s', prog)
+
+prepfile("\xEF\xBBprint(3)", true)
+NoRun("unexpected symbol", 'lua %s', prog)
+
+;; test option '-'
+RUN('echo "print(arg@(1))" | lua - -h > %s', out)
+checkout("-h\n")
+
+;; test environment variables used by Lua
+
+prepfile("print(package.path)")
+
+;; test LUA_PATH
+RUN('env LUA_INIT= LUA_PATH=x lua -- %s > %s', prog, out)
+checkout("x\n")
+
+;; test LUA_PATH_version
+RUN('env LUA_INIT= LUA_PATH_5_5=y LUA_PATH=x lua %s > %s', prog, out)
+checkout("y\n")
+
+;; test LUA_CPATH
+prepfile("print(package.cpath)")
+RUN('env LUA_INIT= LUA_CPATH=xuxu lua %s > %s', prog, out)
+checkout("xuxu\n")
+
+;; test LUA_CPATH_version
+RUN('env LUA_INIT= LUA_CPATH_5_5=yacc LUA_CPATH=x lua %s > %s', prog, out)
+checkout("yacc\n")
+
+;; test LUA_INIT (and its access to 'arg' table)
+prepfile("print(X)")
+RUN('env LUA_INIT="set X = tonumber(arg@(1))" lua %s 3.2 > %s', prog, out)
+checkout("3.2\n")
+
+;; test LUA_INIT_version
+prepfile("print(X)")
+RUN('env LUA_INIT_5_5="set X = 10" LUA_INIT="set X = 3" lua %s > %s', prog, out)
+checkout("10\n")
+
+;; test LUA_INIT for files
+prepfile("set x = x || 10; print(x); set x = x + 1")
+RUN('env LUA_INIT="@%s" lua %s > %s', prog, prog, out)
+checkout("10\n11\n")
+
+;; test errors in LUA_INIT
+NoRun('LUA_INIT:1: msg', 'env LUA_INIT="error(\'msg\')" lua')
+
+print("testing option '-E'")
+
+var defaultpath, defaultCpath
+
+do {
+  prepfile("print(package.path, package.cpath)")
+  RUN('env LUA_INIT="error(10)" LUA_PATH=xxx LUA_CPATH=xxx lua -E %s > %s', prog, out)
+  val output = getoutput()
+  set defaultpath = string.match(output, "^(.-)\t")
+  set defaultCpath = string.match(output, "\t(.-)$")
+
+  ;; running with an empty environment
+  RUN('env -i lua %s > %s', prog, out)
+  val out = getoutput()
+  assert(defaultpath == string.match(output, "^(.-)\t"))
+  assert(defaultCpath == string.match(output, "\t(.-)$"))
+}
+
+;; paths did not change
+assert(!string.find(defaultpath, "xxx") && string.find(defaultpath, "lua") && !string.find(defaultCpath, "xxx") && string.find(defaultCpath, "lua"))
+
+;; (LUA_READLINELIB was introduced in 5.5.1)
+if release >= "5.5.1" {
+  ;; OBS: this test is not valid when Lua is compiled with LUA_USE_READLINE
+  print("testing readline library name")
+  ;; should generate a warning when trying to load inexistent library "xuxu"
+  val env = '''LUA_READLINELIB=xuxu LUA_INIT="warn('@allow')"'''
+  val code = 'echo " " | env %s lua %s -W -i >%s 2>&1'
+  RUN(code, env, "", out)  ;; run code with no extra options
+  if (!string.find(getoutput(), "warning: unable to load readline library 'xuxu'")) {
+
+    error("Is Lua compiled with option LUA_USE_READLINE?")
+  }
+  RUN(code, env, "-E", out)  ;; run again with option -E
+  ;; no warning when LUA_READLINELIB is to be ignored
+  assert(!string.find(getoutput(), "warning"))
+}
+
+;; test replacement of ';;' to default path
+val func convert (p) {
+  prepfile("print(package.path)")
+  RUN('env LUA_PATH="%s" lua %s > %s', p, prog, out)
+  var expected = getoutput()
+  set expected = string.sub(expected, 1, -2)  ;; cut final end of line
+  if string.find(p, ";;") {
+    set p = string.gsub(p, ";;", ";" ++ (defaultpath ++ ";"))
+    set p = string.gsub(p, "^;", "")  ;; remove ';' at the beginning
+    set p = string.gsub(p, ";$", "")  ;; remove ';' at the end
+  }
+  assert(p == expected)
+}
+
+convert(";")
+convert(";;")
+convert("a;;b")
+convert(";;b")
+convert("a;;")
+convert("a;b;;c")
+
+;; test -l over multiple libraries
+prepfile("print(1); set a = 2; [x=15]")
+prepfile(("print(a); print(_G@('%s').x)")::format(prog), false, otherprog)
+RUN('env LUA_PATH="?;;" lua -l %s -l%s -lstring -l io %s > %s', prog, otherprog, otherprog, out)
+checkout("1\n2\n15\n2\n15\n")
+
+;; test explicit global names in -l
+prepfile("print(str.upper('alo alo'), m.max(10, 20))")
+RUN("lua -l 'str=string' '-lm=math' -e 'print(m.sin(0))' %s > %s", prog, out)
+checkout("0.0\nALO ALO\t20\n")
+
+;; test module names with version suffix ("libs/lib2-v2")
+RUN("env LUA_CPATH='./libs/?.so' lua -l lib2-v2 -e 'print(lib2.id())' > %s", out)
+checkout("true\n")
+
+;; test 'arg' table
+var a = """  assert((#arg == 3) && (arg@(1) == 'a') &&
+         (arg@(2) == 'b') && (arg@(3) == 'c'))
+  assert((arg@(-1) == '--') && (arg@(-2) == "-e ") && (arg@(-3) == '%s'))
+  assert((arg@(4) == undef) && (arg@(-4) == undef))
+  val a, b, c = ...
+  assert((... == 'a') && (a == 'a') && (b == 'b') && (c == 'c'))
+"""
+
+set a = string.format(a, progname)
+prepfile(a)
+RUN('lua "-e " -- %s a b c', prog)  ;; "-e " runs an empty command
+
+;; test 'arg' availability in libraries
+prepfile("assert(arg)")
+prepfile("assert(arg)", false, otherprog)
+RUN('env LUA_PATH="?;;" lua -l%s - < %s', prog, otherprog)
+
+;; test messing up the 'arg' table
+RUN('echo "print(...)" | lua -e "set arg@(1) = 100" - > %s', out)
+checkout("100\n")
+NoRun("'arg' is not a table", 'echo "" | lua -e "set arg = 1" -')
+
+;; test error in 'print'
+RUN('echo 10 | lua -e "set print = nil" -i > /dev/null 2> %s', out)
+assert(string.find(getoutput(), "error calling 'print'"))
+
+;; test 'debug.debug'
+RUN('echo "io.stderr::write(1000)\ncont" | lua -e "require(\'debug\').debug()" 2> %s', out)
+checkout("lua_debug> 1000lua_debug> ")
+
+do {  ;; test warning for locals
+  RUN('echo "  		val x" | lua -i > %s 2>&1', out)
+  assert(string.find(getoutput(), "warning: "))
+
+  RUN('echo "set local1 = 10\nlocal1 + 3" | lua -i > %s 2>&1', out)
+  val t = getoutput()
+  assert(!string.find(t, "warning"))
+  assert(string.find(t, "13"))
+}
+
+print("testing warnings")
+
+;; no warnings by default
+RUN('echo "io.stderr::write(1); warn(\'XXX\')" | lua 2> %s', out)
+checkout("1")
+
+prepfile("""warn("@allow")               ;; unknown control, ignored
+warn("@off", "XXX", "@off")  ;; these are not control messages
+warn("@off")                 ;; this one is
+warn("@on", "YYY", "@on")    ;; not control, but warn is off
+warn("@off")                 ;; keep it off
+warn("@on")                  ;; restart warnings
+warn("", "@on")              ;; again, no control, real warning
+warn("@on")                  ;; keep it "started"
+warn("Z", "Z", "Z")          ;; common warning
+""")
+
+RUN('lua -W %s 2> %s', prog, out)
+checkout("""Lua warning: @offXXX@off
+Lua warning: @on
+Lua warning: ZZZ
+""")
+
+prepfile("""warn("@allow")
+;; create two objects to be finalized when closing state
+;; the errors in the finalizers must generate warnings
+set u1 = setmetatable([], [__gc = func () { error("XYZ") }])
+set u2 = setmetatable([], [__gc = func () { error("ZYX") }])
+""")
+
+RUN('lua -W %s 2> %s', prog, out)
+checkprogout("ZYX)\nXYZ)\n")
+
+;; bug since 5.2: finalizer called when closing a state could
+;; subvert finalization order
+prepfile(""";; ensure tables will be collected only at the end of the program
+collectgarbage("stop")
+
+print("creating 1")
+;; this finalizer should be called last
+setmetatable([], [__gc = func () { print(1) }])
+
+print("creating 2")
+setmetatable([], [__gc = func () {
+  print("2")
+  print("creating 3")
+  ;; this finalizer should not be called, as object will be
+  ;; created after 'lua_close' has been called
+  setmetatable([], [__gc = func () { print(3) }])
+  print(collectgarbage() || false)    ;; cannot call collector here
+  os.exit(0, true)
+}])
+""")
+
+RUN('lua -W %s > %s', prog, out)
+checkout("""creating 1
+creating 2
+2
+creating 3
+false
+1
+""")
+
+;; test many arguments
+prepfile("""print(([...])@(30))""")
+RUN('lua %s %s > %s', prog, string.rep(" a", 30), out)
+checkout("a\n")
+
+RUN("""lua "-eprint(1)" "-eset a = 3" -e "print(a)" > %s""", out)
+checkout("1\n3\n")
+
+;; test interactive mode
+prepfile("""((6*2)-6) ;; ===
+set a =
+10
+print(a)
+a""")
+
+RUN("""lua -e"set _PROMPT = ''; set _PROMPT2 = ''" -i < %s > %s""", prog, out)
+checkprogout("6\n10\n10\n\n")
+
+prepfile("set a = \"\"\"b\nc\nd\ne\"\"\"\na")
+RUN("""lua -e"set _PROMPT = ''; set _PROMPT2 = ''" -i -- < %s > %s""", prog, out)
+checkprogout("b\nc\nd\ne\n\n")
+
+;; input interrupted in continuation line
+prepfile("a.\n")
+RUN("""lua -i < %s > /dev/null 2> %s""", prog, out)
+checkprogout("near <eof>\n")
+
+var prompt = "alo"
+prepfile(""" ;;
+set a = 2
+""")
+
+RUN("""lua "-eset _PROMPT = '%s'" -i < %s > %s""", prompt, prog, out)
+var t = getoutput()
+assert(string.find(t, prompt ++ (".*" ++ (prompt ++ (".*" ++ prompt)))))
+
+;; using the prompt default
+prepfile(""" ;;
+set a = 2
+""")
+
+RUN("""lua -i < %s > %s""", prog, out)
+var t = getoutput()
+set prompt = "> "  ;; the default
+assert(string.find(t, prompt ++ (".*" ++ (prompt ++ (".*" ++ prompt)))))
+
+;; non-string prompt
+set prompt = """  var C = 'X';
+   set _PROMPT = setmetatable([], [__tostring = func () {
+     set C = C ++ 'X'; C }])
+"""
+
+prepfile(""" ;;
+set a = 2
+""")
+
+RUN("""lua -e "%s" -i < %s > %s""", prompt, prog, out)
+var t = getoutput()
+;; skip version line and then check the presence of the three prompts
+assert(string.find(t, "^.-\nXX[^\nX]*\n?XXX[^\nX]*\n?XXXX\n?$"))
+
+;; test for error objects
+prepfile("""set debug = require("debug")
+set m = [x=0]
+setmetatable(m, [__tostring = func (x) {
+  tostring(debug.getinfo(4).currentline + x.x)
+}])
+error(m)
+""")
+
+NoRun(progname ++ ": 6\n", """lua %s""", prog)
+
+prepfile("error([])")
+NoRun("error object is a table value", """lua %s""", prog)
+
+;; chunk broken in many lines
+var s = """ ;;
+func f ( x ) {
+  val a = \"\"\"
+xuxu
+\"\"\"
+  val b = "\
+xuxu\n"
+  if x == 11 { return( 1 + 12 , 2 + 20 ) }  ;;; test multiple returns ;;;
+  x + 1
+  ;;\\
+}
+( f( 100 ) )
+assert( a == b )
+do { return( f( 11 ) ) }  """
+
+set s = string.gsub(s, ' ', '\n\n')  ;; change all spaces for newlines
+prepfile(s)
+RUN("""lua -e"set _PROMPT = ''; set _PROMPT2 = ''" -i < %s > %s""", prog, out)
+checkprogout("101\n13\t22\n\n")
+
+prepfile("""#comment in 1st line without \n at the end""")
+RUN('lua %s', prog)
+
+;; first-line comment with binary file
+prepfile("#comment\n" ++ string.dump(load("print(3)")), true)
+RUN('lua %s > %s', prog, out)
+checkout('3\n')
+
+;; close Lua with an open file
+prepfile(string.format("""io.output(%q); io.write('alo')""", out))
+RUN('lua %s', prog)
+checkout('alo')
+
+;; bug in 5.2 beta (extra \0 after version line)
+RUN("""lua -v  -e"print'hello'" > %s""", out)
+set t = getoutput()
+assert(string.find(t, "PUC%-Rio\nhello"))
+
+;; testing os.exit
+prepfile("os.exit(nil, true)")
+RUN('lua %s', prog)
+prepfile("os.exit(0, true)")
+RUN('lua %s', prog)
+prepfile("os.exit(true, true)")
+RUN('lua %s', prog)
+prepfile("os.exit(1, true)")
+NoRun("", "lua %s", prog)  ;; no message
+prepfile("os.exit(false, true)")
+NoRun("", "lua %s", prog)  ;; no message
+
+;; to-be-closed variables in main chunk
+prepfile("""  pin x = setmetatable([],
+        [__close = func (self, err) {
+                     assert(err == nil)
+                     print("Ok")
+                   }])
+  pin e1 = setmetatable([], [__close = func () { print(120) }])
+  os.exit(true, true)
+""")
+
+RUN('lua %s > %s', prog, out)
+checkprogout("120\nOk\n")
+
+;; remove temporary files
+assert(os.remove(prog))
+assert(os.remove(otherprog))
+assert(!os.remove(out))
+
+;; invalid options
+NoRun("unrecognized option '-h'", "lua -h")
+NoRun("unrecognized option '---'", "lua ---")
+NoRun("unrecognized option '-Ex'", "lua -Ex --")
+NoRun("unrecognized option '-vv'", "lua -vv")
+NoRun("unrecognized option '-iv'", "lua -iv")
+NoRun("'-e' needs argument", "lua -e")
+NoRun("syntax error", "lua -e =")
+NoRun("'-l' needs argument", "lua -l")
+NoRun("-i", "lua -- -i")  ;; handles -i as a script name
+
+if T {  ;; test library?
+  print("testing 'not enough memory' to create a state")
+  NoRun("not enough memory", "env MEMLIMIT=100 lua")
+
+  ;; testing 'warn'
+  warn("@store")
+  warn("@123", "456", "789")
+  assert(_WARN == "@123456789")
+  set _WARN = false
+
+  warn("zip", "", " ", "zap")
+  assert(_WARN == "zip zap")
+  set _WARN = false
+  warn("ZIP", "", " ", "ZAP")
+  assert(_WARN == "ZIP ZAP")
+  set _WARN = false
+  warn("@normal")
+}
+
+do {
+  ;; 'warn' must get at least one argument
+  var st, msg = pcall(warn)
+  assert(string.find(msg, "string expected"))
+
+  ;; 'warn' does not leave unfinished warning in case of errors
+  ;; (message would appear in next warning)
+  set st, msg = pcall(warn, "SHOULD NOT APPEAR", [])
+  assert(string.find(msg, "string expected"))
+}
+
+print('+')
+
+print('testing Ctrl C')
+do {
+  ;; interrupt a script
+  val func kill (pid) {
+    return(os.execute(string.format('kill -INT %s 2> /dev/null', pid)))
+  }
+
+  ;; function to run a script in background, returning its output file
+  ;; descriptor and its pid
+  val func runback (luaprg) {
+    ;; shell script to run 'luaprg' in background and echo its pid
+    val shellprg = string.format('%s -e "%s" & echo $!', progname, luaprg)
+    val f = io.popen(shellprg, "r")  ;; run shell script
+    val pid = f::read()  ;; get pid for Lua script
+    print("(if test fails now, it may leave a Lua script running in \z
+            background, pid " ++ (pid ++ ")"))
+    return(f, pid)
+  }
+
+  ;; Lua script that runs protected infinite loop and then prints '42'
+  val f, pid = runback("""    pcall(func () { print(12); loop { while(true) } }); print(42)""")
+
+  ;; wait until script is inside 'pcall'
+  assert(f::read() == "12")
+  kill(pid)  ;; send INT signal to Lua script
+  ;; check that 'pcall' captured the exception and script continued running
+  assert(f::read() == "42")  ;; expected output
+  assert(f::close())
+  print("done")
+
+  ;; Lua script in a long unbreakable search
+  val f, pid = runback("""    print(15); string.find(string.rep('a', 100000), '.*b')""")
+
+  ;; wait (so script can reach the loop)
+  assert(f::read() == "15")
+  assert(os.execute("sleep 1"))
+  ;; must send at least two INT signals to stop this Lua script
+  var n = 100
+  loop i in (0, 100) {  ;; keep sending signals
+    if !kill(pid) {  ;; until it fails
+      set n = i  ;; number of non-failed kills
+      break()
+    }
+  }
+  assert(f::close())
+  assert(n >= 2)
+  print(string.format("done (with %d kills)", n))
+}
+
+print("OK")
