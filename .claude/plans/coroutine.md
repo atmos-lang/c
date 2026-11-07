@@ -128,5 +128,44 @@ keeps calls from the body working without giving each coroutine a big stack.
 
 ### Status
 
-Idea stage; nothing implemented. The C Lua coroutine implementation is
-untouched so far (the branch only converts the test suite).
+Idea stage; nothing implemented for (c). Items (a) and (b) have a
+design and tests (below).
+
+## Design for (a) and (b)
+
+### a. `coroutine.error(co, e1, ..., en)`
+
+Resumes `co` (which must be suspended by a yield) so that the pending
+`coroutine.yield` raises the error values instead of returning. In
+`ldo.c`, `resume` gets a flag: when resuming from a yield in error
+mode, instead of finishing the yield call (`luaD_poscall` / the
+continuation), it raises `luaG_errormsgn(L, n)` with the n values
+already moved onto the coroutine's stack. Raising at that point is
+exactly an error inside the yield call: the enclosing yieldable
+`pcall`/`catch` frames recover it through `precover`, `__close`
+handlers and `defer`s run with the error, a message handler installed
+by an enclosing `xpcall` is called, and an uncaught error kills the
+coroutine and comes back to the caller as `false, e1, ..., en`.
+C API: `lua_resumeerror(L, from, nerr, &nresults)` beside `lua_resume`.
+Library: `coroutine.error(co, ...)` returns what `resume` returns.
+A coroutine that is not suspended by a yield (not started, running,
+normal, dead) is an error: "cannot raise error in a <status> coroutine".
+A yield inside a hook (`CIST_HOOKYIELD`) raises in the Lua frame at
+the hook point.
+
+### b. closing a normal coroutine
+
+A normal coroutine `co` is suspended inside its own call to
+`lua_resume` (a C frame of `co` is live on the C stack below the
+running coroutine), so it cannot be unwound right away.
+`coroutine.close(co)` marks it (`co->closing`) and returns `true`; the
+close happens when `co` regains control: at the end of `lua_resume`,
+if `from` is marked, `lua_closethread(from, from)` runs, which closes
+its pending to-be-closed variables (status OK, no error object) and
+unwinds `from` to its base level (`luaD_throwbaselevel`), so that the
+resumer of `from` sees `resume` return `true` with no values and `from`
+dead. Grandparents are closed when control reaches them. The child
+that was being resumed keeps its own state (suspended or dead).
+
+Tests: `testes/coerror.atm`.
+

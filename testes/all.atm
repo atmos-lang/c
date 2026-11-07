@@ -189,6 +189,7 @@ do {  ;; (
   dofile('catch.atm')
   dofile('exprs.atm')
   dofile('ops.atm')
+  dofile('coerror.atm')
   dofile('math.atm')
   dofile('sort.atm', true)
   ;; (bitwise.lua: dropped, no bitwise operators in Atmos)
