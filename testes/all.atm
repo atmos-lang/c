@@ -1,0 +1,275 @@
+
+;; $Id: testes/all.lua $
+;; See Copyright Notice in file lua.h
+
+;; (global *)
+
+;; (global _soft, _port, _nomsg)
+;; (global T)
+
+val version = "Lua 5.5"
+if _VERSION != version {
+  io.stderr::write("This test suite is for ", version, ", not for ", _VERSION, "\nExiting tests")
+  return()
+}
+
+set _G.ARG = arg  ;; save arg for other tests
+
+;; next variables control the execution of some tests
+;; true means no test (so an undefined variable does not skip a test)
+;; defaults are for Linux; test everything.
+;; Make true to avoid long or memory consuming tests
+set _soft = rawget(_G, "_soft") || false
+;; Make true to avoid non-portable tests
+set _port = rawget(_G, "_port") || false
+;; Make true to avoid messages about tests not performed
+set _nomsg = rawget(_G, "_nomsg") || false
+
+val usertests = rawget(_G, "_U")
+
+if usertests {
+  set _soft = true  ;; avoid tests that take too long
+  set _port = true  ;; avoid non-portable tests
+  set _nomsg = true  ;; avoid messages about tests not performed
+}
+
+;; tests should require debug when needed
+;; (global debug)
+set debug = nil
+
+if usertests {
+  set T = nil  ;; no "internal" tests for user tests
+} else {
+  set T = rawget(_G, "T")  ;; avoid problems with 'strict' module
+}
+
+;;;
+  example of a long [comment],
+  [[spanning several [lines]]]
+
+;;;
+
+print("\n\tStarting Tests")
+
+do {
+  ;; set random seed
+  val random_x, random_y = math.randomseed()
+  print(string.format("random seeds: %d, %d", random_x, random_y))
+}
+
+print("current path:\n****" ++ (package.path ++ "****\n"))
+
+val initclock = os.clock()
+var lastclock = initclock
+var walltime = os.time()
+
+val collectgarbage = collectgarbage
+
+do {  ;; (
+
+  ;; track messages for tests not performed
+  val msgs = []
+  func Message (m) {
+    if !_nomsg {
+      print(m)
+      set msgs@(#msgs + 1) = string.sub(m, 3, -3)
+    }
+  }
+
+  assert(os.setlocale("C"))
+
+  val T, print, format, write, assert, type, unpack, floor = (T, print, string.format, io.write, assert, type, table.unpack, math.floor)
+
+  ;; use K for 1000 and M for 1000000 (not 2^10 -- 2^20)
+  val func F (m) {
+    val func round (m) {
+      set m = m + 0.04999
+      return(format("%.1f", m))  ;; keep one decimal digit
+    }
+    if m < 1000 {
+      return(m)
+    } else {
+      set m = m / 1000
+      if m < 1000 {
+        return(round(m) ++ "K")
+      } else {
+        return(round(m / 1000) ++ "M")
+      }
+    }
+  }
+
+  var Cstacklevel
+
+  var showmem
+  if !T {
+    var max = 0
+    set showmem = func () {
+      val m = collectgarbage("count") * 1024
+      set max = ((m > max) && m) || max
+      print(format("    ---- total memory: %s, max memory: %s ----\n", F(m), F(max)))
+    }
+    set Cstacklevel = func () {
+      return(0)  ;; no info about stack level
+    }
+  } else {
+    set showmem = func () {
+      T.checkmemory()
+      val total, numblocks, maxmem = T.totalmem()
+      val count = collectgarbage("count")
+      print(format("\n    ---- total memory: %s (%.0fK), max use: %s,  blocks: %d\n", F(total), count, F(maxmem), numblocks))
+      print(format("\t(strings:  %d, tables: %d, functions: %d, " ++ "\n\tudata: %d, threads: %d)", T.totalmem("string"), T.totalmem("table"), T.totalmem("function"), T.totalmem("userdata"), T.totalmem("thread")))
+    }
+
+    set Cstacklevel = func () {
+      val _, _, ncalls = T.stacklevel()
+      return(ncalls)  ;; number of C calls
+    }
+  }
+
+  val Cstack = Cstacklevel()
+
+  ;;
+  ;; redefine dofile to run files through dump/undump
+  ;;
+  val func report (n) {
+    print("\n***** FILE '" ++ (n ++ "'*****"))
+  }
+  val olddofile = dofile
+  val func dofile (n, strip) {
+    showmem()
+    val c = os.clock()
+    print(string.format("time: %g (+%g)", c - initclock, c - lastclock))
+    set lastclock = c
+    report(n)
+    var f = assert(loadfile(n))
+    val b = string.dump(f, strip)
+    set f = assert(load(b))
+    return(f())
+  }
+
+  dofile('main.atm')
+
+  ;; trace GC cycles
+  require("tracegc").start()
+
+  report("gc.atm")
+  val f = assert(loadfile('gc.atm'))
+  f()
+
+  dofile('db.atm')
+  assert((dofile('calls.atm') == deep) && deep)
+  set _G.deep = nil
+  olddofile('strings.atm')
+  olddofile('literals.atm')
+  dofile('tpack.atm')
+  assert(dofile('attrib.atm') == 27)
+  dofile('gengc.atm')
+  assert(dofile('locals.atm') == 5)
+  dofile('constructs.atm')
+  dofile('code.atm', true)
+  if !_G._soft {
+    report('big.atm')
+    val f = coroutine.wrap(assert(loadfile('big.atm')))
+    assert(f() == 'b')
+    assert(f() == 'a')
+  }
+  dofile('cstack.atm')
+  dofile('nextvar.atm')
+  dofile('pm.atm')
+  dofile('utf8.atm')
+  dofile('api.atm')
+  dofile('memerr.atm')
+  assert(dofile('events.atm') == 12)
+  dofile('vararg.atm')
+  dofile('closure.atm')
+  dofile('coroutine.atm')
+  ;; (goto.lua: dropped, no goto in Atmos)
+  dofile('errors.atm')
+  dofile('math.atm')
+  dofile('sort.atm', true)
+  ;; (bitwise.lua: dropped, no bitwise operators in Atmos)
+  assert(dofile('verybig.atm', true) == 10)
+  collectgarbage()
+  dofile('files.atm')
+
+  if #msgs > 0 {
+    val m = table.concat(msgs, "\n  ")
+    warn("#tests not performed:\n  ", m, "\n")
+  }
+
+  print("(there should be two warnings now)")
+  warn("@on")
+  warn("#This is ", "an expected", " warning")
+  warn("@off")
+  warn("******** THIS WARNING SHOULD NOT APPEAR **********")
+  warn("******** THIS WARNING ALSO SHOULD NOT APPEAR **********")
+  warn("@on")
+  warn("#This is", " another one")
+
+  ;; no test module should define 'debug'
+  assert(debug == nil)
+
+  val debug = require("debug")
+
+  print(string.format("%d-bit integers, %d-bit floats", string.packsize("j") * 8, string.packsize("n") * 8))
+
+  debug.sethook(func (a) {
+    assert(type(a) == 'string')
+  }, "cr")
+
+  ;; to survive outside block
+  set _G.showmem = showmem
+
+  assert(Cstack == Cstacklevel(), "should be at the same C-stack level it was when started the tests")
+}  ;;)
+
+val _G, showmem, print, format, clock, time, difftime, assert, open, warn = (_G, showmem, print, string.format, os.clock, os.time, os.difftime, assert, io.open, warn)
+
+;; file with time of last performed test
+val fname = (T && "time-debug.txt") || "time.txt"
+var lasttime
+
+if !usertests {
+  ;; open file with time of last performed test
+  val f = io.open(fname)
+  if f {
+    set lasttime = assert(tonumber(f::read('a')))
+    f::close()
+  } else {  ;; no such file; assume it is recording time for first time
+    set lasttime = nil
+  }
+}
+
+;; erase (almost) all globals
+print('cleaning all!!!!')
+loop n in pairs(_G) {
+  if !([___Glob=1, tostring=1])@(n) {
+    set _G@(n) = undef
+  }
+}
+
+collectgarbage()
+collectgarbage()
+collectgarbage()
+collectgarbage()
+collectgarbage()
+collectgarbage()
+showmem()
+
+val clocktime = clock() - initclock
+set walltime = difftime(time(), walltime)
+
+print(format("\n\ntotal time: %.2fs (wall time: %gs)\n", clocktime, walltime))
+
+if !usertests {
+  set lasttime = lasttime || clocktime  ;; if no last time, ignore difference
+  ;; check whether current test time differs more than 5% from last time
+  val diff = (clocktime - lasttime) / lasttime
+  val tolerance = 0.05  ;; 5%
+  if ((diff >= tolerance) || (diff <= -tolerance)) {
+    warn(format("#time difference from previous test: %+.1f%%", diff * 100))
+  }
+  assert(open(fname, "w"))::write(clocktime)::close()
+}
+
+print("final OK !!!")
