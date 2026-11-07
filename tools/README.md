@@ -23,12 +23,15 @@ Conversion rules:
 - `{...}` → `[...]`; `t[k]` → `t@(k)`; `o:m()` → `o::m()`
 - `if/elseif/else` → `if {} else {}` or `ifs { c => {} else => {} }`
 - `while c do` → `loop { while(c) ... }`; `repeat ... until c` →
-  `loop { ... until(c) }`; `for i = a, b` → `loop i in (a, b)`;
-  `for k, v in pairs(t)` → `loop k, v in t`
-- identifiers that are Atmos keywords get a `_` suffix (e.g. `val_`)
-- `global` declarations become comments (no Atmos equivalent)
-- `goto`/labels, bitwise operators, `for` with steps, `<close>` variables:
-  manual conversion (goto and bitwise tests are dropped)
+  `loop { ... until(c) }`; `for i = a, b [, s]` → `loop i in (a, b [, s])`;
+  `for k, v in e` → `loop k, v in e` (Lua iterator protocol)
+- `local x <close>` → `pin x`
+- identifiers that are Atmos keywords get a `_` suffix (e.g. `val_`); table
+  fields with keyword names are written `@("name")=`
+- `global function f` → `func f`; `global x = e` → `set x = e`; other
+  `global` declarations become comments
+- `goto`/labels, bitwise operators, named varargs (`...t`): manual
+  conversion (goto and bitwise tests are dropped)
 
 Other manual adjustments needed by the test suite:
 

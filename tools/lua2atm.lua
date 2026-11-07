@@ -72,14 +72,26 @@ local function lex (src)
       i = i + #num
     elseif c == '"' or c == "'" then
       local j = i + 1
+      local l = line
       while true do
         local d = src:sub(j,j)
         assert(d ~= "" and d ~= "\n", "unfinished string at line " .. line)
-        if d == "\\" then j = j + 2
+        if d == "\\" then
+          local n2 = src:sub(j+1,j+1)
+          if n2 == "z" then  -- skip following whitespace (with newlines)
+            j = j + 2
+            while src:sub(j,j):match("%s") do
+              if src:sub(j,j) == "\n" then line = line + 1 end
+              j = j + 1
+            end
+          else
+            if n2 == "\n" then line = line + 1 end
+            j = j + 2
+          end
         elseif d == c then break
         else j = j + 1 end
       end
-      add("string", src:sub(i, j), line)
+      add("string", src:sub(i, j), l)
       i = j + 1
     elseif c == '[' and src:match("^%[=*%[", i) then
       local lvl = src:match("^%[(=*)%[", i)
@@ -266,13 +278,27 @@ function P:statement ()
     end
   elseif t == "global" then
     self:next()
-    local text = {}
-    local l0 = self:peek(-1).line
-    while self:line() == l0 and not self:check("eof") do
-      text[#text+1] = self:next().val
+    if self:accept("function") then  -- global function: as a funcstat
+      local name = { self:expect("name").val }
+      local f = self:funcbody(line, false)
+      return { tag="funcstat", name=name, method=false, func=f, line=line,
+               lastline=f.lastline }
     end
-    local str = table.concat(text, " "):gsub("< ", "<"):gsub(" >", ">"):gsub(" ,", ",")
-    return { tag="global", text=str, line=line, lastline=l0 }
+    local attr = self:attrib()
+    if self:check("*") then  -- 'global *'
+      self:next()
+      return { tag="global", text="*", line=line, lastline=line }
+    end
+    local names = {}
+    repeat
+      names[#names+1] = self:expect("name").val
+      self:attrib()
+    until not self:accept(",")
+    local es
+    if self:accept("=") then es = self:explist() end
+    local text = (attr and ("<" .. attr .. "> ") or "") .. table.concat(names, ", ")
+    return { tag="global", text=text, names=names, es=es, line=line,
+             lastline=self:peek(-1).line }
   elseif t == "return" then
     return self:retstat()
   elseif t == "break" then
@@ -563,7 +589,11 @@ local function ptable (e)
     if it.key then
       t[i] = "@(" .. pexpr(it.key) .. ")=" .. pexpr(it.val)
     elseif it.name then
-      t[i] = it.name .. "=" .. pexpr(it.val)
+      if ATMKEYS[it.name] then  -- keyword as field name
+        t[i] = '@("' .. it.name .. '")=' .. pexpr(it.val)
+      else
+        t[i] = it.name .. "=" .. pexpr(it.val)
+      end
     else
       t[i] = pexpr(it.val)
     end
@@ -735,7 +765,7 @@ local function pstat (s, indent, stats, idx)
     local kind = "val"
     for i, n in ipairs(s.names) do
       if s.attrs[i] == "close" then
-        emit(indent .. todo("<close> variable '" .. n .. "'"))
+        kind = "pin"  -- to-be-closed variable
       elseif s.attrs[i] ~= "const" and assigned(stats, idx + 1, n) then
         kind = "var"
       end
@@ -756,7 +786,8 @@ local function pstat (s, indent, stats, idx)
     line1(str)
   elseif t == "localfunc" then
     local f = s.func
-    if references(f.body, s.name) then  -- recursive: needs a visible local
+    if references(f.body, s.name) or assigned(stats, idx + 1, s.name) then
+      -- recursive (needs a visible local) or reassigned later
       emit(indent .. "var " .. pname(s.name))
       local head = pfunction(f, "set " .. pname(s.name) .. " = func")
       open(head)
@@ -827,31 +858,30 @@ local function pstat (s, indent, stats, idx)
       close()
     end
   elseif t == "fornum" then
-    if s.e3 then
-      emit(indent .. todo("for loop with step"))
-    end
-    open("loop " .. pname(s.var) .. " in (" .. pexpr(s.e1) .. ", " .. pexpr(s.e2) .. ") {")
+    -- numeric loop: loop i in (a, b [, step]) (same semantics as Lua's for)
+    local range = pexpr(s.e1) .. ", " .. pexpr(s.e2)
+    if s.e3 then range = range .. ", " .. pexpr(s.e3) end
+    open("loop " .. pname(s.var) .. " in (" .. range .. ") {")
     pblock(s.body, indent .. "  ")
     close()
   elseif t == "forin" then
-    local itr
-    local e = s.es[1]
-    if #s.es == 1 and e.tag == "call" and e.f.tag == "name" and
-       (e.f.name == "pairs" or e.f.name == "ipairs") and #e.args == 1 then
-      itr = pexpr(e.args[1])
-    elseif #s.es == 1 then
-      itr = pexpr(e)
-    else
-      emit(indent .. todo("generic for with explicit iterator triple"))
-      itr = pexplist(s.es)
-    end
+    -- iterator expressions (pairs(t), ipairs(t), f, s, c) are kept as
+    -- is: 'loop ... in' uses the Lua iterator protocol
+    local itr = pexplist(s.es)
     local names = {}
     for i, n in ipairs(s.names) do names[i] = pname(n) end
     open("loop " .. table.concat(names, ", ") .. " in " .. itr .. " {")
     pblock(s.body, indent .. "  ")
     close()
   elseif t == "global" then
-    line1(";; (global " .. s.text .. ")")
+    if s.es then  -- global declaration with initialization: an assignment
+      local names = {}
+      for i, n in ipairs(s.names) do names[i] = pname(n) end
+      line1("set " .. table.concat(names, ", ") .. " = " .. pexplist(s.es) ..
+            "  ;; (global " .. s.text .. ")")
+    else
+      line1(";; (global " .. s.text .. ")")
+    end
   elseif t == "goto" then
     line1(todo("goto " .. s.name))
   elseif t == "label" then
