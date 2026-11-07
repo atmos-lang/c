@@ -1,0 +1,746 @@
+;; $Id: testes/errors.lua $
+;; See Copyright Notice in file lua.h
+
+print("testing errors")
+
+val debug = require("debug")
+
+;; avoid problems with 'strict' module (which may generate other error messages)
+val mt = getmetatable(_G) || []
+val oldmm = mt.__index
+set mt.__index = nil
+
+val func checkerr (msg, f, ...) {
+  val st, err = pcall(f, ...)
+  assert(!st && string.find(err, msg))
+}
+
+val func doit (s) {
+  val f, msg = load(s)
+  if !f {
+    return(msg)
+  }
+  val cond, msg = pcall(f)
+  return((!cond) && msg)
+}
+
+val func checkmessage (prog, msg, debug) {
+  val m = doit(prog)
+  if debug {
+    print(m, msg)
+  }
+  assert(string.find(m, msg, 1, true))
+}
+
+val func checksyntax (prog, extra, token, line) {
+  val msg = doit(prog)
+  if !string.find(token, "^<%a") && !string.find(token, "^char%(") {
+    set token = "'" ++ (token ++ "'")
+  }
+  set token = string.gsub(token, "(%p)", "%%%1")
+  val pt = string.format("""^%%[string ".*"%%]:%d: .- near %s$""", line, token)
+  assert(string.find(msg, pt))
+  assert(string.find(msg, msg, 1, true))
+}
+
+;; test error message with no extra info
+assert(doit("error('hi', 0)") == 'hi')
+
+;; test nil error message
+assert(doit("error()") == "<no error object>")
+
+;; test common errors/errors that crashed in the past
+assert(doit("table.unpack([], 1, n=2**30)"))
+assert(doit("set a = math.sin()"))
+assert(!doit("tostring(1)") && doit("tostring()"))
+assert(doit("tonumber()"))
+assert(doit("loop { until(1) }; = a"))
+assert(doit("assert(false)"))
+assert(doit("assert(nil)"))
+assert(doit("func a (..., ...) {}"))
+assert(doit("func a (, ...) {}"))
+assert(doit("var t = []; set t = t@(#t) + 1"))
+
+checksyntax("""  val a = [4
+
+""", "']' expected (to close '[' at line 1)", "<eof>", 3)
+
+if !T {
+  (Message || print)('\n >>> testC not active: skipping tests for messages in C <<<\n')
+} else {
+  print("testing memory error message")
+  val a = []
+  loop i in (1, 10000) {  ;; preallocate array
+    set a@(i) = true
+  }
+  collectgarbage()
+  T.totalmem(T.totalmem() + 10000)
+  ;; force a memory error (by a small margin)
+  val st, msg = pcall(func () {
+    loop i in (1, 100000) {
+      set a@(i) = tostring(i)
+    }
+  })
+  T.totalmem(0)
+  assert(!st && (msg == ("not enough" ++ " memory")))
+
+  ;; stack space for luaL_traceback (bug in 5.4.6)
+  val res = T.testC("""    # push 16 elements on the stack
+    pushnum 1; pushnum 1; pushnum 1; pushnum 1; pushnum 1;
+    pushnum 1; pushnum 1; pushnum 1; pushnum 1; pushnum 1;
+    pushnum 1; pushnum 1; pushnum 1; pushnum 1; pushnum 1;
+    pushnum 1;
+    # traceback should work with 4 remaining slots
+    traceback xuxu 1;
+    return 1
+  """)
+
+  assert(string.find(res, "xuxu.-main chunk"))
+
+  do {  ;; tests for error messages about extra arguments from __call
+    val func createobj (n) {
+      ;; function that raises an error on its n-th argument
+      val code = string.format("argerror %d 'msg'", n)
+      val func_ = T.makeCfunc(code)
+      ;; create a chain of 2 __call objects
+      var M = setmetatable([], [__call=func_])
+      set M = setmetatable([], [__call=M])
+      ;; put it as a method for a new object
+      return([foo=M])
+    }
+
+    set _G.a = createobj(1)  ;; error in first (extra) argument
+    checkmessage("a::foo()", "bad extra argument #1")
+
+    set _G.a = createobj(2)  ;; error in second (extra) argument
+    checkmessage("a::foo()", "bad extra argument #2")
+
+    set _G.a = createobj(3)  ;; error in self (after two extra arguments)
+    checkmessage("a::foo()", "bad self")
+
+    set _G.a = createobj(4)  ;; error in first regular argument (after self)
+    checkmessage("a::foo()", "bad argument #1")
+  }
+}
+
+;; tests for better error messages
+
+checkmessage("set a = [] + 1", "arithmetic")
+checkmessage("set a = [] < 1", "attempt to compare")
+checkmessage("set a = [] <= 1", "attempt to compare")
+
+checkmessage("set aaa = 1; set bbbb = 2; set aaa = math.sin(3) + bbbb(3)", "global 'bbbb'")
+checkmessage("set aaa = []; do { val aaa = 1 }; aaa::bbbb(3)", "method 'bbbb'")
+checkmessage("val a = []; a.bbbb(3)", "field 'bbbb'")
+assert(!string.find(doit("set aaa = [13]; val bbbb = 1; aaa@(bbbb)(3)"), "'bbbb'"))
+checkmessage("set aaa = [13]; val bbbb = 1; aaa@(bbbb)(3)", "number")
+checkmessage("set aaa = (1) ++ []", "a table value")
+
+checkmessage("val func foo (...) { val t = table.pack(...); t.xx + 1 }; foo()", "field 'xx'")
+
+;; bug in 5.4.6
+checkmessage("set a = [_ENV = []]; print(a._ENV.x + 1)", "field 'x'")
+
+;; a similar bug, since 5.4.0
+checkmessage("print(('_ENV').x + 1)", "field 'x'")
+
+set _G.aaa, _G.bbbb = nil
+
+;; calls
+checkmessage("val a; a(13)", "local 'a'")
+checkmessage("""  var a = setmetatable([], [__add = 34])
+  set a = a + 1
+""", "metamethod 'add'")
+checkmessage("""  var a = setmetatable([], [__lt = []])
+  set a = a > a
+""", "metamethod 'lt'")
+
+;; tail calls
+checkmessage("val a = []; return(a.bbbb(3))", "field 'bbbb'")
+checkmessage("set aaa = []; do { val aaa = 1 }; return(aaa::bbbb(3))", "method 'bbbb'")
+
+checkmessage("set aaa = #print", "length of a function value")
+checkmessage("set aaa = #3", "length of a number value")
+
+set _G.aaa = nil
+
+checkmessage("aaa.bbb::ddd(9)", "global 'aaa'")
+checkmessage("val aaa = [bbb=1]; aaa.bbb::ddd(9)", "field 'bbb'")
+checkmessage("val aaa = [bbb=[]]; aaa.bbb::ddd(9)", "method 'ddd'")
+checkmessage("var a, b, c; (func () { set a = b + 1.1 })()", "upvalue 'b'")
+assert(!doit("val aaa = [bbb=[ddd=next]]; aaa.bbb::ddd(nil)"))
+
+;; upvalues being indexed do not go to the stack
+checkmessage("var a, b, cc; (func () { set a = cc@(1) })()", "upvalue 'cc'")
+checkmessage("var a, b, cc; (func () { set a.x = 1 })()", "upvalue 'a'")
+
+checkmessage("val _ENV = [x=[]]; set a = a + 1", "global 'a'")
+
+checkmessage("set BB = 1; val aaa = []; set x = aaa + BB", "local 'aaa'")
+checkmessage("set aaa = []; set x = 3.3 / aaa", "global 'aaa'")
+checkmessage("set aaa = 2; set BB = nil; set x = aaa * BB", "global 'BB'")
+checkmessage("set aaa = []; set x = -aaa", "global 'aaa'")
+
+;; short circuit
+checkmessage("set aaa = 1; var aaa, bbbb = (2, 3); set aaa = math.sin(1) && bbbb(3)", "local 'bbbb'")
+checkmessage("set aaa = 1; var aaa, bbbb = (2, 3); set aaa = bbbb(1) || aaa(3)", "local 'bbbb'")
+checkmessage("val a, b, c, f = (1, 1, 1); f((a && b) || c)", "local 'f'")
+checkmessage("val a, b, c = (1, 1, 1); ((a && b) || c)()", "call a number value")
+assert(!string.find(doit("set aaa = []; set x = (aaa || aaa) + (aaa && aaa)"), "'aaa'"))
+assert(!string.find(doit("set aaa = []; (aaa || aaa)()"), "'aaa'"))
+
+checkmessage("print(print < 10)", "function with number")
+checkmessage("print(print < print)", "two function values")
+checkmessage("print('10' < 10)", "string with number")
+checkmessage("print(10 < '23')", "number with string")
+
+;; float->integer conversions
+checkmessage("string.sub('a', 2.0 ** 100)", "has no integer representation")
+checkmessage("string.rep('a', 3.3)", "has no integer representation")
+checkmessage("set aaa = 24 // 0", "divide by zero")
+checkmessage("set aaa = 1 % 0", "'n%0'")
+
+;; type error for an object which is neither in an upvalue nor a register.
+;; The following code will try to index the value 10 that is stored in
+;; the metatable, without moving it to a register.
+checkmessage("val a = setmetatable([], [__index = 10]).x", "attempt to index a number value")
+
+;; numeric for loops
+checkmessage("loop i in ([], 10) {}", "table")
+checkmessage("loop i in (io.stdin, 10) {}", "FILE")
+checkmessage("loop i in ([], 10) {}", "initial value")
+checkmessage("loop i in (1, 'x', 10) {}", "string")
+checkmessage("loop i in (1, [], 10) {}", "limit")
+checkmessage("loop i in (1, []) {}", "limit")
+checkmessage("loop i in (1, 10, print) {}", "step")
+checkmessage("loop i in (1, 10, print) {}", "function")
+
+;; passing light userdata instead of full userdata
+set _G.D = debug
+checkmessage("""  ;; create light udata
+  val x = D.upvalueid(func () { debug }, 1)
+  D.setuservalue(x, [])
+""", "light userdata")
+set _G.D = nil
+
+do {  ;; named objects (field '__name')
+  checkmessage("math.sin(io.input())", "(number expected, got FILE*)")
+  set _G.XX = setmetatable([], [__name="My Type"])
+  assert(string.find(tostring(XX), "^My Type"))
+  checkmessage("io.input(XX)", "(FILE* expected, got My Type)")
+  checkmessage("XX + 1", "on a My Type value")
+  checkmessage("XX < XX", "two My Type values")
+  checkmessage("[] < XX", "table with My Type")
+  checkmessage("XX < io.stdin", "My Type with FILE*")
+  set _G.XX = nil
+
+  if T {  ;; extra tests for 'luaL_tolstring'
+    ;; bug in 5.4.3; 'luaL_tolstring' with negative indices
+    val x = setmetatable([], [__name="TABLE"])
+    assert(T.testC("Ltolstring -1; return 1", x) == tostring(x))
+
+    val a, b = T.testC("pushint 10; Ltolstring -2; return 2", x)
+    assert((a == 10) && (b == tostring(x)))
+
+    setmetatable(x, [__tostring=func (o) {
+      assert(o == x)
+      return("ABC")
+    }])
+    val a, b, c = T.testC("pushint 10; Ltolstring -2; return 3", x)
+    assert((a == x) && (b == 10) && (c == "ABC"))
+  }
+}
+
+;; global functions
+checkmessage("(io.write || print)([])", "io.write")
+checkmessage("(collectgarbage || print)([])", "collectgarbage")
+
+;; errors in functions without debug info
+do {
+  var f
+  set f = func (a) {
+    return(a + 1)
+  }
+  set f = assert(load(string.dump(f, true)))
+  assert(f(3) == 4)
+  checkerr("^%?:%?:", f, [])
+
+  ;; code with a move to a local var ('OP_MOV A B' with A<B)
+  set f = func () {
+    var a
+    set a = []
+    return(a + 2)
+  }
+  ;; no debug info (so that 'a' is unknown)
+  set f = assert(load(string.dump(f, true)))
+  ;; symbolic execution should not get lost
+  checkerr("^%?:%?:.*table value", f)
+}
+
+;; tests for field accesses after RK limit
+var t = []
+loop i in (1, 1000) {
+  set t@(i) = "set aaa = x" ++ i
+}
+var s = table.concat(t, "; ")
+set t = nil
+checkmessage(s ++ "; set aaa = bbb + 1", "global 'bbb'")
+checkmessage("val _ENV = _ENV;" ++ (s ++ "; set aaa = bbb + 1"), "global 'bbb'")
+checkmessage(s ++ "; val t = []; set aaa = t.bbb + 1", "field 'bbb'")
+;; cannot use 'self' opcode
+checkmessage(s ++ "; val t = []; t::bbb()", "field 'bbb'")
+
+checkmessage("""set aaa = 9
+loop { until(3 == 3) }
+val x = math.sin(math.cos(3))
+if math.sin(1) == x { return(math.sin(1)) }   ;; tail call
+val a, b = (1, [
+  [x = 'a' ++ ('b' ++ 'c'), y = 'b', z = x],
+  [1, 2, 3, 4, 5] || ((3 + 3) <= (3 + 3)),
+  (3 + 1) > (3 + 1),
+  [d = x && aaa@(x || y)]])
+""", "global 'aaa'")
+
+checkmessage("""val x, y = ([], 1)
+if math.sin(1) == 0 { return(3) }    ;; return
+x.a()""", "field 'a'")
+
+checkmessage("""set prefix = nil
+set insert = nil
+loop {
+  while(1)
+  val a
+  if nil { break() }
+  insert(prefix, a)
+}""", "global 'insert'")
+
+checkmessage("""  ;; tail call
+  return(math.sin("a"))
+""", "sin")
+
+checkmessage("""collectgarbage("nooption")""", "invalid option")
+
+checkmessage('''set x = print ++ "a"''', "concatenate")
+checkmessage("""set x = "a" ++ false""", "concatenate")
+checkmessage("""set x = [] ++ 2""", "concatenate")
+
+checkmessage("getmetatable(io.stdin).__gc()", "no value")
+
+checkmessage("""var Var
+val func main () {
+  NoSuchName(func () { set Var = 0 })
+}
+main()
+""", "global 'NoSuchName'")
+print('+')
+
+set aaa = []
+setmetatable(aaa, [__index=string])
+checkmessage("aaa::sub()", "bad self")
+checkmessage("string.sub('a', [])", "#2")
+checkmessage("('a')::sub([])", "#1")
+
+checkmessage("table.sort([1, 2, 3], table.sort)", "'table.sort'")
+checkmessage("string.gsub('s', 's', setmetatable)", "'setmetatable'")
+
+set _G.aaa = nil
+
+;; tests for errors in coroutines
+
+var f
+set f = func (n) {
+  val c = coroutine.create(f)
+  val a, b = coroutine.resume(c)
+  return(b)
+}
+assert(string.find(f(), "C stack overflow"))
+
+checkmessage("coroutine.yield()", "outside a coroutine")
+
+set f = coroutine.wrap(func () {
+  table.sort([1, 2, 3], coroutine.yield)
+})
+checkerr("yield across", f)
+
+;; testing size of 'source' info; size of buffer for that info is
+;; LUA_IDSIZE, declared as 60 in luaconf. Get one position for '\0'.
+val idsize = 60 - 1
+val func checksize (source) {
+  ;; syntax error
+  var _, msg = load("= x", source)
+  set msg = string.match(msg, "^([^:]*):")  ;; get source (1st part before ':')
+  assert(msg::len() <= idsize)
+}
+
+loop i in (60 - 10, 60 + 10) {  ;; check border cases around 60
+  checksize("@" ++ string.rep("x", i))  ;; file names
+  checksize(string.rep("x", i - 10))  ;; string sources
+  checksize("=" ++ string.rep("x", i))  ;; exact sources
+}
+
+;; testing line error
+
+val func lineerror (s, l, w) {
+  val err, msg = pcall(load(s))
+  val line = tonumber(string.match(msg, ":(%d+):"))
+  assert(((line == l) || (!line && !l)) && string.find(msg, w))
+}
+
+lineerror("val a\n loop i in (1, 'a') { \n print(i) \n }", 2, "limit")
+lineerror("\n val a \n loop k, v in 3 \n { \n print(k) \n }", 3, "to call")
+lineerror("\n\n loop k, v in \n 3 \n { \n print(k) \n }", 4, "to call")
+lineerror("func a.x.y () {\nset a = a + 1\n}", 1, "index")
+
+lineerror("set a = \na\n+\n[]", 3, "arithmetic")
+lineerror("set a = \n3\n+\n(\n4\n/\nprint)", 6, "arithmetic")
+lineerror("set a = \nprint\n+\n(\n4\n/\n7)", 3, "arithmetic")
+
+lineerror("set a\n=\n-\n\nprint\n;", 3, "arithmetic")
+
+lineerror("""a (     ;; <<
+23)
+""", 1, "call")
+
+lineerror("""val a = [x = 13]
+a.x (     ;; <<
+23
+)
+""", 2, "call")
+
+lineerror("""val a = [x = 13]
+a.x (
+23 + a
+)
+""", 3, "arithmetic")
+
+val p = """  func g () { f() }
+  func f (x) { error('a', XX) }
+g()
+"""
+
+set XX = 3
+lineerror((p), 3, "a")
+set XX = 0
+lineerror((p), false, "a")
+set XX = 1
+lineerror((p), 2, "a")
+set XX = 2
+lineerror((p), 1, "a")
+set _G.XX, _G.g, _G.f = nil
+
+lineerror("""val b = false
+if !b {
+  error('test')
+}""", 3, "test")
+
+lineerror("""val b = false
+if !b {
+  if !b {
+    if !b {
+      error('test')
+    }
+  }
+}""", 5, "test")
+
+lineerror("""set _ENV = 1
+func foo () {
+  val a = 10
+  a
+}
+""", 2, "index")
+
+;; bug in 5.4.0
+lineerror("""  val a = 0
+  val b = 1
+  val c = b % a
+""", 3, "perform")
+
+do {
+  ;; Force a negative estimate for base line. Error in instruction 2
+  ;; (after VARARGPREP, GETGLOBAL), with first absolute line information
+  ;; (forced by too many lines) in instruction 0.
+  val s = string.format("%s __A.x", string.rep("\n", 300))
+  lineerror(s, 301, "index")
+}
+
+val func stxlineerror (s, l, w) {
+  val err, msg = load(s)
+  val line = tonumber(string.match(msg, ":(%d+):"))
+  assert(((line == l) || (!line && !l)) && string.find(msg, w, 1, true))
+}
+
+stxlineerror("""val a = 1
+set a = 2
+""", 2, "const variable")
+
+stxlineerror("""val a = 1
+set = 2
+""", 2, "expected")
+
+if !_soft {
+  ;; several tests that exhaust the Lua stack
+  collectgarbage()
+  print("testing stack overflow")
+  var C = 0
+  ;; get line where stack overflow will happen
+  val l = debug.getinfo(1, "l").currentline + 1
+  var auxy
+  set auxy = func () {  ;; produce a stack overflow
+    set C = C + 1
+    auxy()
+  }
+  func YY () {
+    collectgarbage("stop")  ;; avoid running finalizers without stack space
+    auxy()
+    collectgarbage("restart")
+  }
+
+  val func checkstackmessage (m) {
+    print("(expected stack overflow after " ++ (C ++ " calls)"))
+    set C = 0  ;; prepare next count
+    return((string.find(m, "stack overflow")))
+  }
+  ;; repeated stack overflows (to check stack recovery)
+  assert(checkstackmessage(doit('YY()')))
+  assert(checkstackmessage(doit('YY()')))
+  assert(checkstackmessage(doit('YY()')))
+
+  set _G.YY = nil
+
+  ;; error lines in stack overflow
+  var l1
+  val func g (x) {
+    set l1 = debug.getinfo(x, "l").currentline + 2
+    collectgarbage("stop")  ;; avoid running finalizers without stack space
+    auxy()
+    collectgarbage("restart")
+  }
+  val _, stackmsg = xpcall(g, debug.traceback, 1)
+  print('+')
+  val stack = []
+  loop line in string.gmatch(stackmsg, "[^\n]*") {
+    val curr = string.match(line, ":(%d+):")
+    if curr {
+      table.insert(stack, tonumber(curr))
+    }
+  }
+  var i = 1
+  loop {
+    while(stack@(i) != l1)
+    assert(stack@(i) == l)
+    set i = i + 1
+  }
+  assert(i > 15)
+
+  ;; error in error handling
+  val res, msg = xpcall(error, error)
+  assert(!res && (msg == 'error in error handling'))
+  print('+')
+
+  var f
+  set f = func (x) {
+    if x == 0 {
+      error('a\n')
+    } else {
+      val func aux () {
+        return(f(x - 1))
+      }
+      val a, b = xpcall(aux, aux)
+      return(a, b)
+    }
+  }
+  f(3)
+
+  var loop_
+  set loop_ = func (x, y, z) {
+    return(1 + loop_(x, y, z))
+  }
+
+  val res, msg = xpcall(loop_, func (m) {
+    assert(string.find(m, "stack overflow"))
+    checkerr("error handling", loop_)
+    assert(math.sin(0) == 0)
+    return(15)
+  })
+  assert(msg == 15)
+
+  val func f () {
+    loop i in (999900, 1000000, 1) {
+      table.unpack([], 1, i)
+    }
+  }
+  checkerr("too many results", f)
+}
+
+do {  ;; errors in error handle that not necessarily go forever
+  val func err (n) {  ;; function to be used as message handler
+    ;; generate an error unless n is zero, so that there is a limited
+    ;; loop of errors
+    ifs {  ;; some other error?
+      type(n) != "number" => {
+        return(n)  ;; report it
+      }
+      n == 0 => {
+        return("END")  ;; that will be the final message
+      }
+      else => {  ;; does the loop
+        error(n - 1)
+      }
+    }
+  }
+
+  val res, msg = xpcall(error, err, 170)
+  assert(!res && (msg == "END"))
+
+  ;; too many levels
+  val res, msg = xpcall(error, err, 300)
+  assert(!res && (msg == "C stack overflow"))
+}
+
+do {
+  ;; non string messages
+  val t = []
+  var res, msg = pcall(func () {
+    error(t)
+  })
+  assert(!res && (msg == t))
+
+  set res, msg = pcall(func () {
+    error(nil)
+  })
+  assert(!res && (msg == "<no error object>"))
+
+  val func f () {
+    error([msg='x'])
+  }
+  set res, msg = xpcall(f, func (r) {
+    return([msg=r.msg ++ 'y'])
+  })
+  assert(msg.msg == 'xy')
+
+  ;; 'assert' with extra arguments
+  set res, msg = pcall(assert, false, "X", t)
+  assert(!res && (msg == "X"))
+
+  ;; 'assert' with no message
+  set res, msg = pcall(func () {
+    assert(false)
+  })
+  val line = string.match(msg, "%w+%.atm:(%d+): assertion failed!$")
+  assert(tonumber(line) == (debug.getinfo(1, "l").currentline - 2))
+
+  ;; 'assert' with non-string messages
+  set res, msg = pcall(assert, false, t)
+  assert(!res && (msg == t))
+
+  set res, msg = pcall(assert, nil, nil)
+  assert(!res && (type(msg) == "string"))
+
+  ;; 'assert' without arguments
+  set res, msg = pcall(assert)
+  assert(!res && string.find(msg, "value expected"))
+}
+
+;; xpcall with arguments
+var a, b, c = xpcall(string.find, error, "alo", "al")
+assert(a && (b == 1) && (c == 2))
+set a, b, c = xpcall(string.find, func (x) {
+  return([])
+}, true, "al")
+assert(!a && (type(b) == "table") && (c == nil))
+
+print("testing tokens in error messages")
+checksyntax("syntax error", "", "error", 1)
+checksyntax("= 1.000", "", "1.000", 1)
+checksyntax("= 'aa'", "", "'aa'", 1)
+checksyntax("loop { while(**) }", "", "**", 1)
+checksyntax("loop i in => {}", "", "=>", 1)
+
+;; test invalid non-printable char in a chunk
+checksyntax("a\1a = 1", "", "<\\1>", 1)
+
+;; test 255 as first char in a chunk
+checksyntax("\255a = 1", "", "<\\255>", 1)
+
+doit('set I = load("set a = 9 +"); set aaa = 3')
+assert((_G.aaa == 3) && !_G.I)
+set _G.I, _G.aaa = nil
+print('+')
+
+var lim = 1000
+if _soft {
+  set lim = 100
+}
+loop i in (1, lim) {
+  doit('set a = ')
+  doit('set a = 4 + nil')
+}
+
+;; testing syntax limits
+
+val func testrep (init, rep, close, repc, finalresult) {
+  val func gencode (n) {
+    return(init ++ (string.rep(rep, n) ++ (close ++ string.rep(repc, n))))
+  }
+  val res, msg = load(gencode(100))  ;; 100 levels is OK
+  assert(res)
+  if (finalresult) {
+    assert(res() == finalresult)
+  }
+  val res, msg = load(gencode(500))  ;; 500 levels not ok
+  assert(!res && (string.find(msg, "too many") || string.find(msg, "overflow")))
+}
+
+testrep("val a", ",a", ";", "")  ;; local variables
+testrep("val a", ",a", "= 1", "")  ;; local variables initialized
+testrep("val a", ",a", "= f()", "")  ;; local variables initialized
+testrep("var a; set a", ",a", "= 1", "")  ;; multiple assignment
+testrep("var a; set a =", "[", "0", "]")  ;; constructors
+testrep("", "(", "2", ")", 2)  ;; parentheses
+;; nested calls  (a(a(a(a(...)))))
+testrep("val func a (x) { x }; ", "a(", "2.2", ")", 2.2)
+testrep("", "do { ", "", " }")
+testrep("", "loop { while(a) ", "", " }")
+testrep("val a; ", "if a {} else { ", "", " }")
+testrep("", "func foo () { ", "", " }")
+testrep("val a = ''; ", "a ++ ", "'a'", "", "a")
+testrep("val a = 1; ", "a ** ", "a", "", 1)
+
+checkmessage("set a = f(x" ++ (string.rep(",x", 260) ++ ")"), "too many registers")
+
+;; testing other limits
+
+;; upvalues
+val lim = 127
+var s = "val func fooA () {\n  var "
+loop j in (1, lim) {
+  set s = s ++ ("a" ++ (j ++ ", "))
+}
+set s = s ++ "b, c\n"
+set s = s ++ "val func fooB () {\n  var "
+loop j in (1, lim) {
+  set s = s ++ ("b" ++ (j ++ ", "))
+}
+set s = s ++ "b\n"
+set s = s ++ "func fooC () { b + c"
+var c = 1 + 2
+loop j in (1, lim) {
+  set s = s ++ (" + a" ++ (j ++ (" + b" ++ j)))
+  set c = c + 2
+}
+set s = s ++ "\n}  } }"
+val a, b = load(s)
+assert((c > 255) && string.find(b, "too many upvalues") && string.find(b, "line 5"))
+
+;; local variables
+set s = "\nfunc foo () {\n  var "
+loop j in (1, 200) {
+  set s = s ++ ("a" ++ (j ++ ", "))
+}
+set s = s ++ "b\n"
+val a, b = load(s)
+assert(string.find(b, "line 2") && string.find(b, "too many local variables"))
+
+set mt.__index = oldmm
+
+print('OK')
