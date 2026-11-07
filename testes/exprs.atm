@@ -35,7 +35,7 @@ do {
   ;; method calls and juxtaposed arguments
   val o = [m = \(self, v){ v }]
   assert(o::m(do { 4 }) == 4)
-  assert(o::m(f(), do { val v = 5; v }) == nil)  ;; 'v' is the 2nd argument: f()
+  assert(o::m(f(), do { val v = 5; v }) == 10)  ;; the 2nd argument is f()
   val func g (a) { val b = 2; second(a, do { val c = 3; a + b + c }) }
   assert(g(1) == 6)
 }

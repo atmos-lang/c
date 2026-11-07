@@ -82,3 +82,19 @@ What is not supported is more than one value:
 - `defer` and `catch` must also produce values when implemented
   (`catch` evaluates to the caught error or the block value).
 - Pipes (`->`, `-->`) are expressions as well.
+
+## Compound expressions with live temporaries
+
+A compound statement used as an expression (`f(do { ... })`,
+`x() + if c { a } else { b }`, items of a constructor, indices) is
+parsed while temporaries are live (the function and arguments being
+collected, operands already in registers). Its value register and the
+locals declared inside are allocated at the level of the active locals
+(`luaY_nvarstack`), which is below those temporaries. `compoundexp`
+(`lparser.c`) covers the temporaries with hidden locals named `(temp)`
+for the duration of the statement, so that `freereg == nvarstack` holds
+inside and everything is allocated above them; the hidden locals are
+removed afterwards and the value is left just above the temporaries.
+They are visible to `debug.getlocal` while the statement runs, like
+Lua's `(for state)`, and count toward the 200-locals limit.
+Tests: `testes/exprs.atm`.

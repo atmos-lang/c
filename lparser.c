@@ -1490,6 +1490,33 @@ static int loopstat (LexState *ls, expdesc *v);
 
 
 /*
+** Compound statement used as an expression. Its value register and
+** the locals it declares are allocated at the level of the active
+** locals ('luaY_nvarstack'), so temporaries that are live at this
+** point (a function and arguments being collected, operands in
+** registers) would be overwritten. Cover those temporaries with hidden
+** locals while the statement is parsed, so that everything inside is
+** allocated above them; the hidden locals disappear afterwards.
+*/
+static void compoundexp (LexState *ls, expdesc *v,
+                         int (*stat) (LexState *ls, expdesc *v)) {
+  FuncState *fs = ls->fs;
+  int ntemps = fs->freereg - luaY_nvarstack(fs);
+  if (ntemps == 0)  /* no live temporaries? */
+    stat(ls, v);
+  else {
+    int nactvar = fs->nactvar;
+    int i;
+    for (i = 0; i < ntemps; i++)
+      new_localvarliteral(ls, "(temp)");
+    adjustlocalvars(ls, ntemps);  /* hidden locals in the temporaries */
+    stat(ls, v);  /* value in 'v', above the temporaries */
+    removevars(fs, nactvar);  /* remove hidden locals */
+  }
+}
+
+
+/*
 ** Parenthesized list: '(' explist ')' (the '(' is current).
 ** Returns the number of expressions; a single expression is
 ** "parenthesized" (truncated to one value).
@@ -1597,10 +1624,10 @@ static void primaryexp (LexState *ls, expdesc *v) {
       lambda(ls, v, line);
       return;
     }
-    case TK_IF: ifstat(ls, v); return;
-    case TK_IFS: ifsstat(ls, v); return;
-    case TK_DO: dostat(ls, v); return;
-    case TK_LOOP: loopstat(ls, v); return;
+    case TK_IF: compoundexp(ls, v, ifstat); return;
+    case TK_IFS: compoundexp(ls, v, ifsstat); return;
+    case TK_DO: compoundexp(ls, v, dostat); return;
+    case TK_LOOP: compoundexp(ls, v, loopstat); return;
     default: {
       luaX_syntaxerror(ls, "unexpected symbol");
     }
@@ -2360,6 +2387,8 @@ static void localstat (LexState *ls, int line) {
   int nexps;
   expdesc e;
   lu_byte kind;
+  TString *names[MAXVARS];
+  int i;
   switch (ls->t.token) {
     case TK_VAL: kind = RDKCONST; break;
     case TK_PIN: kind = RDKTOCLOSE; break;
@@ -2371,8 +2400,6 @@ static void localstat (LexState *ls, int line) {
     localfunc(ls, line);
     return;
   }
-  TString *names[MAXVARS];
-  int i;
   do {  /* for each variable */
     luaY_checklimit(fs, nvars + 1, MAXVARS, "local variables");
     names[nvars++] = str_checkname(ls);  /* get its name */

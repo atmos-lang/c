@@ -60,19 +60,14 @@ cannot cross it and each execution allocates a closure. Option B
 `luaV_execute` invocation) is designed in catch.md and replaces only
 `catchexp` and `luaB_catch`.
 
-## 6. Compound expressions with live temporaries (bug)
+## 6. Compound expressions with live temporaries (done)
 
-`do`/`if`/`loop` used as expressions take their value register at the
-level of the active locals (`luaY_nvarstack`), as if no temporaries
-were live. Inside call arguments or after an operand in a register
-(`print(do { 1 })`, `f() + do { ... }`) the block value overwrites the
-temporary (`print` becomes `1`: "attempt to call a number value").
-Locals declared inside such a block would also get registers below the
-temporaries. Fix idea: at the entry of a value block, when
-`freereg > nvarstack`, declare hidden locals covering the temporaries
-(as `(for state)` does) so that the invariant `freereg == nvarstack`
-holds inside; they disappear with the block. See catch.md for the
-related fixes already made.
+`do`/`if`/`ifs`/`loop` used as expressions took their value register at
+the level of the active locals, overwriting live temporaries
+(`print(do { 1 })`, `f() + do { ... }`). Fixed: `compoundexp` in
+`lparser.c` declares hidden `(temp)` locals covering the temporaries
+while the statement is parsed (see expressions.md). Tests:
+`testes/exprs.atm`.
 
 ## 7. Tail calls
 
