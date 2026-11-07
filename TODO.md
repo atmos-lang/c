@@ -11,6 +11,9 @@
 - c. Bounded stack for coroutines? Pass `N` in `coroutine.create`?
   (What is `N` exactly: number of stack slots? C calls? Lua call depth?)
   For tasks, `N` could be inferred.
+  - Can we have stackless tasks? They would not accept nested yields
+    (a yield only from the task body itself, not from called functions).
+    Possible?
 
 ## 2. Tail calls
 
