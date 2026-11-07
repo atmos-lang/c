@@ -1,0 +1,349 @@
+;; $Id: testes/closure.lua $
+;; See Copyright Notice in file lua.h
+
+;; (global *)
+
+print("testing closures")
+
+do {  ;; bug in 5.4.7
+  set _ENV@(true) = 10
+  val func aux () {
+    return(_ENV@(1 < 2))
+  }
+  assert(aux() == 10)
+  set _ENV@(true) = nil
+}
+
+var A, B = (0, [g=10])
+var f
+set f = func (x) {
+  val a = []
+  loop i in (1, 1000) {
+    var y = 0
+    do {
+      set a@(i) = func () {
+        set B.g = B.g + 1
+        set y = y + x
+        return(y + A)
+      }
+    }
+  }
+  val func dummy () {
+    return(a@(A))
+  }
+  collectgarbage()
+  set A = 1
+  assert(dummy() == a@(1))
+  set A = 0
+  assert(a@(1)() == x)
+  assert(a@(3)() == x)
+  collectgarbage()
+  assert(B.g == 12)
+  return(a)
+}
+
+var a = f(10)
+;; force a GC in this level
+val x = [@(1)=[]]  ;; to detect a GC
+setmetatable(x, [__mode='kv'])
+loop {  ;; repeat until GC
+  while(x@(1))
+  val a = A ++ (A ++ (A ++ A))  ;; create garbage
+  set A = A + 1
+}
+assert(a@(1)() == (20 + A))
+assert(a@(1)() == (30 + A))
+assert(a@(2)() == (10 + A))
+collectgarbage()
+assert(a@(2)() == (20 + A))
+assert(a@(2)() == (30 + A))
+assert(a@(3)() == (20 + A))
+assert(a@(8)() == (10 + A))
+assert(getmetatable(x).__mode == 'kv')
+assert(B.g == 19)
+
+;; testing equality
+set a = []
+
+loop i in (1, 5) {
+  set a@(i) = func (x) {
+    return(i + a + _ENV)
+  }
+}
+assert((a@(3) != a@(4)) && (a@(4) != a@(5)))
+
+do {
+  val func a (x) {
+    return(math.sin(_ENV@(x)))
+  }
+  val func f () {
+    return(a)
+  }
+  assert(f() == f())
+}
+
+;; testing closures with 'for' control variable
+set a = []
+loop i in (1, 10) {
+  set a@(i) = func () {
+    return(i)
+  }
+  if i == 3 {
+    break()
+  }
+}
+assert(a@(4) == undef)
+assert(a@(2)() == 2)
+assert(a@(3)() == 3)
+
+set a = []
+var t = ["a", "b"]
+loop i in (1, #t) {
+  var k = t@(i)
+  set a@(i) = [@("set")=func (x) {
+    set k = x
+  }, get=func () {
+    return(i, k)
+  }]
+  if i == 2 {
+    break()
+  }
+}
+a@(1).set(10)
+var r, s = a@(2).get()
+assert((r == 2) && (s == 'b'))
+set r, s = a@(1).get()
+assert((r == 1) && (s == 10))
+a@(2).set('a')
+set r, s = a@(2).get()
+assert((r == 2) && (s == "a"))
+
+;; testing closures with 'for' control variable x break
+var f
+loop i in (1, 3) {
+  set f = func () {
+    return(i)
+  }
+  break()
+}
+assert(f() == 1)
+
+loop k in (1, #t) {
+  val v = t@(k)
+  set f = func () {
+    return(k, v)
+  }
+  break()
+}
+assert(([f()])@(1) == 1)
+assert(([f()])@(2) == "a")
+
+;; testing closure x break x return x errors
+
+var b
+func f (x) {
+  var first = 1
+  loop {
+    while(1)
+    if (x == 3) && !first {
+      return()
+    }
+    var a = 'xuxu'
+    set b = func (op, y) {
+      if op == 'set' {
+        set a = x + y
+      } else {
+        return(a)
+      }
+    }
+    ifs {
+      x == 1 => {
+        do {
+          break()
+        }
+      }
+      x == 2 => {
+        return()
+      }
+      else => {
+        if x != 3 {
+          error()
+        }
+      }
+    }
+    set first = nil
+  }
+}
+
+loop i in (1, 3) {
+  f(i)
+  assert(b('get') == 'xuxu')
+  b('set', 10)
+  assert(b('get') == (10 + i))
+  set b = nil
+}
+
+pcall(f, 4)
+assert(b('get') == 'xuxu')
+b('set', 10)
+assert(b('get') == 14)
+
+var y, w
+;; testing multi-level closure
+func f (x) {
+  return(func (y) {
+    return(func (z) {
+      return(w + x + y + z)
+    })
+  })
+}
+
+set y = f(10)
+set w = 1.345
+assert(y(20)(30) == (60 + w))
+
+;; testing closures x break
+do {
+  var X, Y
+  val a = math.sin(0)
+
+  loop {
+    while(a)
+    val b = 10
+    set X = func () {
+      return(b)  ;; closure with upvalue
+    }
+    if a {
+      break()
+    }
+  }
+
+  do {
+    val b = 20
+    set Y = func () {
+      return(b)  ;; closure with upvalue
+    }
+  }
+
+  ;; upvalues must be different
+  assert((X() == 10) && (Y() == 20))
+}
+
+;; testing closures x repeat-until
+
+var a = []
+var i = 1
+loop {
+  val x = i
+  set a@(i) = func () {
+    set i = x + 1
+    return(x)
+  }
+  until((i > 10) || (a@(i)() != x))
+}
+assert((i == 11) && (a@(1)() == 1) && (a@(3)() == 3) && (i == 4))
+
+;; testing closures created in 'then' and 'else' parts of 'if's
+set a = []
+loop i in (1, 10) {
+  ifs {
+    (i % 3) == 0 => {
+      var y = 0
+      set a@(i) = func (x) {
+        val t = y
+        set y = x
+        return(t)
+      }
+    }
+    (i % 3) == 1 => {
+      ;; (Lua: goto L1 jumps over an error)
+      var y = 1
+      set a@(i) = func (x) {
+        val t = y
+        set y = x
+        return(t)
+      }
+    }
+    (i % 3) == 2 => {
+      ;; (Lua: gotos l4 -> l4a -> l4b, jumping over errors)
+      var y = 2
+      val t = func (x) {
+        val t = y
+        set y = x
+        return(t)
+      }
+      set a@(i) = t
+    }
+
+  }
+}
+
+loop i in (1, 10) {
+  assert((a@(i)(i * 10) == (i % 3)) && (a@(i)() == (i * 10)))
+}
+
+print('+')
+
+;; test for correctly closing upvalues in tail calls of vararg functions
+val func t () {
+  val func c (a, b) {
+    assert((a == "test") && (b == "OK"))
+  }
+  val func v (f, ...) {
+    c("test", ((f() != 1) && "FAILED") || "OK")
+  }
+  val x = 1
+  return(v(func () {
+    return(x)
+  }))
+}
+t()
+
+;; test for debug manipulation of upvalues
+val debug = require('debug')
+
+var foo1, foo2, foo3
+do {
+  val a, b, c = (3, 5, 7)
+  set foo1 = func () {
+    return(a + b)
+  }
+  set foo2 = func () {
+    return(b + a)
+  }
+  do {
+    val a = 10
+    set foo3 = func () {
+      return(a + b)
+    }
+  }
+}
+
+assert(debug.upvalueid(foo1, 1))
+assert(debug.upvalueid(foo1, 2))
+assert(!debug.upvalueid(foo1, 3))
+assert(debug.upvalueid(foo1, 1) == debug.upvalueid(foo2, 2))
+assert(debug.upvalueid(foo1, 2) == debug.upvalueid(foo2, 1))
+assert(debug.upvalueid(foo3, 1))
+assert(debug.upvalueid(foo1, 1) != debug.upvalueid(foo3, 1))
+assert(debug.upvalueid(foo1, 2) == debug.upvalueid(foo3, 2))
+
+assert(debug.upvalueid(string.gmatch("x", "x"), 1) != nil)
+
+assert((foo1() == (3 + 5)) && (foo2() == (5 + 3)))
+debug.upvaluejoin(foo1, 2, foo2, 2)
+assert((foo1() == (3 + 3)) && (foo2() == (5 + 3)))
+assert(foo3() == (10 + 5))
+debug.upvaluejoin(foo3, 2, foo2, 1)
+assert(foo3() == (10 + 5))
+debug.upvaluejoin(foo3, 2, foo2, 2)
+assert(foo3() == (10 + 3))
+
+assert(!pcall(debug.upvaluejoin, foo1, 3, foo2, 1))
+assert(!pcall(debug.upvaluejoin, foo1, 1, foo2, 3))
+assert(!pcall(debug.upvaluejoin, foo1, 0, foo2, 1))
+assert(!pcall(debug.upvaluejoin, print, 1, foo2, 1))
+assert(!pcall(debug.upvaluejoin, [], 1, foo2, 1))
+assert(!pcall(debug.upvaluejoin, foo1, 1, print, 1))
+
+print('OK')
