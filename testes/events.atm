@@ -1,0 +1,621 @@
+;; $Id: testes/events.lua $
+;; See Copyright Notice in file lua.h
+
+print('testing metatables')
+
+val debug = require('debug')
+
+set X = 20
+set B = 30
+
+set _ENV = setmetatable([], [__index=_G])
+
+collectgarbage()
+
+set X = X + 10
+assert((X == 30) && (_G.X == 20))
+set B = false
+assert(B == false)
+set _ENV.B = undef
+assert(B == 30)
+
+assert(getmetatable([]) == nil)
+assert(getmetatable(4) == nil)
+assert(getmetatable(nil) == nil)
+set a = [name="NAME"]
+setmetatable(a, [__metatable="xuxu", __tostring=func (x) {
+  return(x.name)
+}])
+assert(getmetatable(a) == "xuxu")
+assert(tostring(a) == "NAME")
+;; cannot change a protected metatable
+assert(pcall(setmetatable, a, []) == false)
+set a.name = "gororoba"
+assert(tostring(a) == "gororoba")
+
+var a, t = ([10, 20, 30, x="10", y="20"], [])
+assert(setmetatable(a, t) == a)
+assert(getmetatable(a) == t)
+assert(setmetatable(a, nil) == a)
+assert(getmetatable(a) == nil)
+assert(setmetatable(a, t) == a)
+
+func f (t, i, e) {
+  assert(!e)
+  val p = rawget(t, "parent")
+  return((p && (p@(i) + 3)), "dummy return")
+}
+
+set t.__index = f
+
+set a.parent = [z=25, x=12, @(4)=24]
+assert((a@(1) == 10) && (a.z == 28) && (a@(4) == 27) && (a.x == "10"))
+
+collectgarbage()
+
+set a = setmetatable([], t)
+func f (t, i, v) {
+  rawset(t, i, v - 3)
+}
+setmetatable(t, t)  ;; causes a bug in 5.1 !
+set t.__newindex = f
+set a@(1) = 30
+set a.x = "101"
+set a@(5) = 200
+assert((a@(1) == 27) && (a.x == 98) && (a@(5) == 197))
+
+do {  ;; bug in Lua 5.3.2
+  val mt = []
+  set mt.__newindex = mt
+  val t = setmetatable([], mt)
+  set t@(1) = 10  ;; will segfault on some machines
+  assert(mt@(1) == 10)
+}
+
+var c = []
+set a = setmetatable([], t)
+set t.__newindex = c
+set t.__index = c
+set a@(1) = 10
+set a@(2) = 20
+set a@(3) = 90
+loop i in (4, 20) {
+  set a@(i) = i * 10
+}
+assert((a@(1) == 10) && (a@(2) == 20) && (a@(3) == 90))
+loop i in (4, 20) {
+  assert(a@(i) == (i * 10))
+}
+assert(next(a) == nil)
+
+do {
+  var a
+  set a = setmetatable([], [__index=setmetatable([], [__index=setmetatable([], [__index=func (_, n) {
+
+    return(a@(n - 3) + 4, "lixo")
+  }])])])
+  set a@(0) = 20
+  loop i in (0, 10) {
+    assert(a@(i * 3) == (20 + (i * 4)))
+  }
+}
+
+do {  ;; newindex
+  var foi
+  val a = []
+  loop i in (1, 10) {
+    set a@(i) = 0
+    set a@('a' ++ i) = 0
+  }
+  setmetatable(a, [__newindex=func (t, k, v) {
+    set foi = true
+    rawset(t, k, v)
+  }])
+  set foi = false
+  set a@(1) = 0
+  assert(!foi)
+  set foi = false
+  set a.a1 = 0
+  assert(!foi)
+  set foi = false
+  set a.a11 = 0
+  assert(foi)
+  set foi = false
+  set a@(11) = 0
+  assert(foi)
+  set foi = false
+  set a@(1) = undef
+  assert(!foi)
+  set a@(1) = undef
+  set foi = false
+  set a@(1) = nil
+  assert(foi)
+}
+
+setmetatable(t, nil)
+func f (t, ...) {
+  return(t, [...])
+}
+set t.__call = f
+
+do {
+  var x, y = a(table.unpack(['a', 1]))
+  assert((x == a) && (y@(1) == 'a') && (y@(2) == 1) && (y@(3) == undef))
+  set x, y = a()
+  assert((x == a) && (y@(1) == undef))
+}
+
+var b = setmetatable([], t)
+setmetatable(b, t)
+
+func f (op) {
+  return(func (...) {
+    set cap = [@(0)=op, ...]
+    return((...))
+  })
+}
+set t.__add = f("add")
+set t.__sub = f("sub")
+set t.__mul = f("mul")
+set t.__div = f("div")
+set t.__idiv = f("idiv")
+set t.__mod = f("mod")
+set t.__unm = f("unm")
+set t.__pow = f("pow")
+set t.__len = f("len")
+set t.__band = f("band")
+set t.__bor = f("bor")
+set t.__bxor = f("bxor")
+set t.__shl = f("shl")
+set t.__shr = f("shr")
+set t.__bnot = f("bnot")
+set t.__lt = f("lt")
+set t.__le = f("le")
+
+val func checkcap (t) {
+  assert((#cap + 1) == #t)
+  loop i in (1, #t) {
+    assert(cap@(i - 1) == t@(i))
+    assert(math.type(cap@(i - 1)) == math.type(t@(i)))
+  }
+}
+
+;; Some tests are done inside small anonymous functions to ensure
+;; that constants go to constant table even in debug compilation,
+;; when the constant table is very small.
+assert((b + 5) == b)
+checkcap(["add", b, 5])
+assert((5.2 + b) == 5.2)
+checkcap(["add", 5.2, b])
+assert((b + '5') == b)
+checkcap(["add", b, '5'])
+assert((5 + b) == 5)
+checkcap(["add", 5, b])
+assert(('5' + b) == '5')
+checkcap(["add", '5', b])
+set b = b - 3
+assert(getmetatable(b) == t)
+checkcap(["sub", b, 3])
+assert((5 - a) == 5)
+checkcap(["sub", 5, a])
+assert(('5' - a) == '5')
+checkcap(["sub", '5', a])
+assert((a * a) == a)
+checkcap(["mul", a, a])
+assert((a / 0) == a)
+checkcap(["div", a, 0])
+assert((a / 0.0) == a)
+checkcap(["div", a, 0.0])
+assert((a % 2) == a)
+checkcap(["mod", a, 2])
+assert((a // (1 / 0)) == a)
+checkcap(["idiv", a, 1 / 0])
+;; (bitwise metamethods are not tested: no bitwise operators in Atmos)
+assert(-a == a)
+checkcap(["unm", a, a])
+assert((a ** 4.0) == a)
+checkcap(["pow", a, 4.0])
+assert((a ** '4') == a)
+checkcap(["pow", a, '4'])
+assert((4 ** a) == 4)
+checkcap(["pow", 4, a])
+assert(('4' ** a) == '4')
+checkcap(["pow", '4', a])
+assert(#a == a)
+checkcap(["len", a, a])
+;; (bnot/shl/shr are not tested: no bitwise operators in Atmos)
+
+;; for comparison operators, all results are true
+assert(5.0 > a)
+checkcap(["lt", a, 5.0])
+assert(a >= 10)
+checkcap(["le", 10, a])
+assert(a <= -10.0)
+checkcap(["le", a, -10.0])
+assert(a < -10)
+checkcap(["lt", a, -10])
+
+;; test for rawlen
+set t = setmetatable([1, 2, 3], [__len=func () {
+  return(10)
+}])
+assert((#t == 10) && (rawlen(t) == 3))
+assert(rawlen("abc") == 3)
+assert(!pcall(rawlen, io.stdin))
+assert(!pcall(rawlen, 34))
+assert(!pcall(rawlen))
+
+;; rawlen for long strings
+assert(rawlen(string.rep('a', 1000)) == 1000)
+
+set t = []
+set t.__lt = func (a, b, c) {
+  collectgarbage()
+  assert(c == nil)
+  if type(a) == 'table' {
+    set a = a.x
+  }
+  if type(b) == 'table' {
+    set b = b.x
+  }
+  return(a < b, "dummy")
+}
+
+set t.__le = func (a, b, c) {
+  assert(c == nil)
+  if type(a) == 'table' {
+    set a = a.x
+  }
+  if type(b) == 'table' {
+    set b = b.x
+  }
+  return(a <= b, "dummy")
+}
+
+set t.__eq = func (a, b, c) {
+  assert(c == nil)
+  if type(a) == 'table' {
+    set a = a.x
+  }
+  if type(b) == 'table' {
+    set b = b.x
+  }
+  return(a == b, "dummy")
+}
+
+func Op (x) {
+  return(setmetatable([x=x], t))
+}
+
+val func test_ (a, b, c) {
+  assert(!(Op(1) < Op(1)) && (Op(1) < Op(2)) && !(Op(2) < Op(1)))
+  assert(!(1 < Op(1)) && (Op(1) < 2) && !(2 < Op(1)))
+  assert(!(Op('a') < Op('a')) && (Op('a') < Op('b')) && !(Op('b') < Op('a')))
+  assert(!('a' < Op('a')) && (Op('a') < 'b') && !(Op('b') < Op('a')))
+  assert((Op(1) <= Op(1)) && (Op(1) <= Op(2)) && !(Op(2) <= Op(1)))
+  assert((Op('a') <= Op('a')) && (Op('a') <= Op('b')) && !(Op('b') <= Op('a')))
+  assert(!(Op(1) > Op(1)) && !(Op(1) > Op(2)) && (Op(2) > Op(1)))
+  assert(!(Op('a') > Op('a')) && !(Op('a') > Op('b')) && (Op('b') > Op('a')))
+  assert((Op(1) >= Op(1)) && !(Op(1) >= Op(2)) && (Op(2) >= Op(1)))
+  assert((1 >= Op(1)) && !(1 >= Op(2)) && (Op(2) >= 1))
+  assert((Op('a') >= Op('a')) && !(Op('a') >= Op('b')) && (Op('b') >= Op('a')))
+  assert(('a' >= Op('a')) && !(Op('a') >= 'b') && (Op('b') >= Op('a')))
+  assert((Op(1) == Op(1)) && (Op(1) != Op(2)))
+  assert((Op('a') == Op('a')) && (Op('a') != Op('b')))
+  assert((a == a) && (a != b))
+  assert(Op(3) == c)
+}
+
+test_(Op(1), Op(2), Op(3))
+
+do {  ;; test nil as false
+  val x = setmetatable([12], [__eq=func (a, b) {
+    return((a@(1) == b@(1)) || nil)
+  }])
+  assert(!(x == [20]))
+  assert(x == [12])
+}
+
+;; test `partial order'
+
+val func rawSet (x) {
+  val y = []
+  loop _, k in pairs(x) {
+    set y@(k) = 1
+  }
+  return(y)
+}
+
+val func Set (x) {
+  return(setmetatable(rawSet(x), t))
+}
+
+set t.__lt = func (a, b) {
+  loop k in pairs(a) {
+    if !b@(k) {
+      return(false)
+    }
+    set b@(k) = undef
+  }
+  return(next(b) != nil)
+}
+
+set t.__le = func (a, b) {
+  loop k in pairs(a) {
+    if !b@(k) {
+      return(false)
+    }
+  }
+  return(true)
+}
+
+assert(Set([1, 2, 3]) < Set([1, 2, 3, 4]))
+assert(!(Set([1, 2, 3, 4]) < Set([1, 2, 3, 4])))
+assert((Set([1, 2, 3, 4]) <= Set([1, 2, 3, 4])))
+assert((Set([1, 2, 3, 4]) >= Set([1, 2, 3, 4])))
+assert(!(Set([1, 3]) <= Set([3, 5])))
+assert(!(Set([1, 3]) <= Set([3, 5])))
+assert(!(Set([1, 3]) >= Set([3, 5])))
+
+set t.__eq = func (a, b) {
+  loop k in pairs(a) {
+    if !b@(k) {
+      return(false)
+    }
+    set b@(k) = undef
+  }
+  return(next(b) == nil)
+}
+
+val s = Set([1, 3, 5])
+assert(s == Set([3, 5, 1]))
+assert(!rawequal(s, Set([3, 5, 1])))
+assert(rawequal(s, s))
+assert(Set([1, 3, 5, 1]) == rawSet([3, 5, 1]))
+assert(rawSet([1, 3, 5, 1]) == Set([3, 5, 1]))
+assert(Set([1, 3, 5]) != Set([3, 5, 1, 6]))
+
+;; '__eq' is not used for table accesses
+set t@(Set([1, 3, 5])) = 1
+assert(t@(Set([1, 3, 5])) == undef)
+
+do {  ;; test invalidating flags
+  val mt = [__eq=true]
+  val a = setmetatable([10], mt)
+  val b = setmetatable([10], mt)
+  set mt.__eq = nil
+  assert(a != b)  ;; no metamethod
+  set mt.__eq = func (x, y) {
+    return(x@(1) == y@(1))
+  }
+  assert(a == b)  ;; must use metamethod now
+}
+
+if !T {
+  (Message || print)('\n >>> testC not active: skipping tests for \z
+userdata <<<\n')
+} else {
+  val u1 = T.newuserdata(0, 1)
+  val u2 = T.newuserdata(0, 1)
+  val u3 = T.newuserdata(0, 1)
+  assert((u1 != u2) && (u1 != u3))
+  debug.setuservalue(u1, 1)
+  debug.setuservalue(u2, 2)
+  debug.setuservalue(u3, 1)
+  debug.setmetatable(u1, [__eq=func (a, b) {
+    return(debug.getuservalue(a) == debug.getuservalue(b))
+  }])
+  debug.setmetatable(u2, [__eq=func (a, b) {
+    return(true)
+  }])
+  assert((u1 == u3) && (u3 == u1) && (u1 != u2))
+  assert((u2 == u1) && (u2 == u3) && (u3 == u2))
+  assert(u2 != [])  ;; different types cannot be equal
+  assert(rawequal(u1, u1) && !rawequal(u1, u3))
+
+  val mirror = []
+  debug.setmetatable(u3, [__index=mirror, __newindex=mirror])
+  loop i in (1, 10) {
+    set u3@(i) = i
+  }
+  loop i in (1, 10) {
+    assert(u3@(i) == i)
+  }
+}
+
+set t.__concat = func (a, b, c) {
+  assert(c == nil)
+  if type(a) == 'table' {
+    set a = a.val
+  }
+  if type(b) == 'table' {
+    set b = b.val
+  }
+  if A {
+    return(a ++ b)
+  } else {
+    return(setmetatable([@("val")=a ++ b], t))
+  }
+}
+
+set c = [@("val")="c"]
+setmetatable(c, t)
+set d = [@("val")="d"]
+setmetatable(d, t)
+
+set A = true
+assert((c ++ d) == 'cd')
+assert((0 ++ ("a" ++ ("b" ++ (c ++ (d ++ ("e" ++ ("f" ++ ((5 + 3) ++ "g")))))))) == "0abcdef8g")
+
+set A = false
+assert((c ++ (d ++ (c ++ d))).val == 'cdcd')
+set x = c ++ d
+assert((getmetatable(x) == t) && (x.val == 'cd'))
+set x = 0 ++ ("a" ++ ("b" ++ (c ++ (d ++ ("e" ++ ("f" ++ "g"))))))
+assert(x.val == "0abcdefg")
+
+do {
+  ;; bug since 5.4.1 (test needs T)
+  val mt = setmetatable([__newindex=[]], [__mode='v'])
+  val t = setmetatable([], mt)
+
+  if T {
+    T.allocfailnext()
+  }
+
+  ;; seg. fault
+  loop i in (1, 10) {
+    set t@(i) = 1
+  }
+}
+
+do {  ;; bug since 5.4
+  val parent = []
+  set parent.__newindex = parent
+  collectgarbage()
+  val child = setmetatable([], parent)
+  set child.__newindex = [x="hello"]
+  collectgarbage("step")
+  assert(parent.__newindex.x == "hello")
+}
+
+;; concat metamethod x numbers (bug in 5.1.1)
+set c = []
+var x
+setmetatable(c, [__concat=func (a, b) {
+  assert(((type(a) == "number") && (b == c)) || ((type(b) == "number") && (a == c)))
+  return(c)
+}])
+assert(((c ++ 5) == c) && ((5 ++ c) == c))
+assert(((4 ++ (c ++ 5)) == c) && ((4 ++ (5 ++ (6 ++ (7 ++ c)))) == c))
+
+;; test comparison compatibilities
+var t1, t2, c, d
+set t1 = []
+set c = []
+setmetatable(c, t1)
+set d = []
+set t1.__eq = func () {
+  return(true)
+}
+set t1.__lt = func () {
+  return(true)
+}
+set t1.__le = func () {
+  return(false)
+}
+setmetatable(d, t1)
+assert((c == d) && (c < d) && !(d <= c))
+set t2 = []
+set t2.__eq = t1.__eq
+set t2.__lt = t1.__lt
+setmetatable(d, t2)
+assert((c == d) && (c < d) && !(d <= c))
+
+;; test for several levels of calls
+var i
+val tt = [__call=func (t, ...) {
+  val args = table.pack(...)
+  set i = i + 1
+  if t.f {
+    return(t.f(table.unpack(args, 1, args.n)))
+  } else {
+    return([table.unpack(args, 1, args.n)])
+  }
+}]
+
+
+var a = setmetatable([], tt)
+val b = setmetatable([f=a], tt)
+val c = setmetatable([f=b], tt)
+
+set i = 0
+set x = c(3, 4, 5)
+assert((i == 3) && (x@(1) == 3) && (x@(3) == 5))
+
+assert(_G.X == 20)
+
+set _G.X, _G.B = nil
+
+print('+')
+
+val _g = _G
+set _ENV = setmetatable([], [__index=func (_, k) {
+  return(_g@(k))
+}])
+
+set a = []
+rawset(a, "x", 1, 2, 3)
+assert((a.x == 1) && (rawget(a, "x", 3) == 1))
+
+print('+')
+
+;; testing metatables for basic types
+set mt = [__index=func (a, b) {
+  return(a + b)
+}, __len=func (x) {
+  return(math.floor(x))
+}]
+debug.setmetatable(10, mt)
+assert(getmetatable(-2) == mt)
+assert((10)@(3) == 13)
+assert((10)@("3") == 13)
+assert(#3.45 == 3)
+debug.setmetatable(23, nil)
+assert(getmetatable(-2) == nil)
+
+debug.setmetatable(true, mt)
+assert(getmetatable(false) == mt)
+set mt.__index = func (a, b) {
+  return(a || b)
+}
+assert((true)@(false) == true)
+assert((false)@(false) == false)
+debug.setmetatable(false, nil)
+assert(getmetatable(true) == nil)
+
+debug.setmetatable(nil, mt)
+assert(getmetatable(nil) == mt)
+set mt.__add = func (a, b) {
+  return((a || 1) + (b || 2))
+}
+assert((10 + nil) == 12)
+assert((nil + 23) == 24)
+assert((nil + nil) == 3)
+debug.setmetatable(nil, nil)
+assert(getmetatable(nil) == nil)
+
+debug.setmetatable(nil, [])
+
+;; loops in delegation
+set a = []
+setmetatable(a, a)
+set a.__index = a
+set a.__newindex = a
+assert(!pcall(func (a, b) {
+  return(a@(b))
+}, a, 10))
+assert(!pcall(func (a, b, c) {
+  set a@(b) = c
+}, a, 10, true))
+
+;; bug in 5.1
+var T, K, V = nil
+set grandparent = []
+set grandparent.__newindex = func (t, k, v) {
+  set T = t
+  set K = k
+  set V = v
+}
+
+set parent = []
+set parent.__newindex = parent
+setmetatable(parent, grandparent)
+
+set child = setmetatable([], parent)
+set child.foo = 10  ;;> CRASH (on some machines)
+assert((T == parent) && (K == "foo") && (V == 10))
+
+print('OK')
+
+return(12)
