@@ -34,9 +34,9 @@ print("testing large programs (>64k)")
 ;; template to create a very big test file
 val prog = """$
 
-local a,b
+var a, b
 
-b = {$1$
+set b = [$1$
   b30009 = 65534,
   b30010 = 65535,
   b30011 = 65536,
@@ -55,40 +55,40 @@ b = {$1$
   b30024 = -0xffffff,
   b30025 = 15012.5,
   $2$
-};
+]
 
-assert(b.a50008 == 25004 and b["a11"] == -5.5)
-assert(b.a33007 == -16503.5 and b.a50009 == -25004.5)
-assert(b["b"..30024] == -0xffffff)
+assert((b.a50008 == 25004) && (b@("a11") == -5.5))
+assert((b.a33007 == -16503.5) && (b.a50009 == -25004.5))
+assert(b@("b" ++ 30024) == -0xffffff)
 
-function b:xxx (a,b) return a+b end
-assert(b:xxx(10, 12) == 22)   -- pushself with non-constant index
-b["xxx"] = undef
+func b::xxx (a, b) { a + b }
+assert(b::xxx(10, 12) == 22)   ;; pushself with non-constant index
+set b@("xxx") = undef
 
-local s = 0; local n=0
-for a,b in pairs(b) do s=s+b; n=n+1 end
--- with 32-bit floats, exact value of 's' depends on summation order
-assert(81800000.0 < s and s < 81860000 and n == 70001)
+var s = 0; var n = 0
+loop a, b in pairs(b) { set s = s + b; set n = n + 1 }
+;; with 32-bit floats, exact value of 's' depends on summation order
+assert((81800000.0 < s) && (s < 81860000) && (n == 70001))
 
-a = nil; b = nil
-print'+'
+set a = nil; set b = nil
+print('+')
 
-local function f(x) b=x end
+val func f (x) { set b = x }
 
-a = f{$3$} or 10
+set a = f([$3$]) || 10
 
-assert(a==10)
-assert(b[1] == "a10" and b[2] == 5 and b[#b-1] == "a50009")
+assert(a == 10)
+assert((b@(1) == "a10") && (b@(2) == 5) && (b@(#b - 1) == "a50009"))
 
 
-function xxxx (x) return b[x] end
+func xxxx (x) { b@(x) }
 
 assert(xxxx(3) == "a11")
 
-a = nil; b=nil
-xxxx = nil
+set a = nil; set b = nil
+set xxxx = nil
 
-return 10
+10
 
 """
 

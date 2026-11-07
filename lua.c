@@ -608,22 +608,21 @@ static int pushline (lua_State *L, int firstline) {
 ** has either compiled chunk or original line (if compilation failed).
 */
 static int addreturn (lua_State *L) {
-  const char *line = lua_tostring(L, -1);  /* original line */
-  const char *retline = lua_pushfstring(L, "return %s;", line);
-  int status = luaL_loadbufferx(L, retline, strlen(retline), "=stdin", "t");
-  if (status == LUA_OK)
-    lua_remove(L, -2);  /* remove modified line */
-  else
-    lua_pop(L, 2);  /* pop result from 'luaL_loadbufferx' and modified line */
+  size_t len;
+  const char *line = lua_tolstring(L, -1, &len);  /* original line */
+  int status = luaL_loadbufferx(L, line, len, "=stdin", "t");
+  if (status != LUA_OK)
+    lua_pop(L, 1);  /* pop result from 'luaL_loadbufferx' */
   return status;
 }
 
 
 static void checklocal (const char *line) {
-  static const size_t szloc = sizeof("local") - 1;
+  static const size_t szloc = sizeof("val") - 1;
   static const char space[] = " \t";
   line += strspn(line, space);  /* skip spaces */
-  if (strncmp(line, "local", szloc) == 0 &&  /* "local"? */
+  if ((strncmp(line, "val", szloc) == 0 || strncmp(line, "var", szloc) == 0 ||
+       strncmp(line, "pin", szloc) == 0) &&  /* local declaration? */
       strchr(space, *(line + szloc)) != NULL) {  /* followed by a space? */
     lua_writestringerror("%s\n",
       "warning: locals do not survive across lines in interactive mode");

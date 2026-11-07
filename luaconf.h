@@ -226,10 +226,10 @@
 
 #if !defined(LUA_PATH_DEFAULT)
 #define LUA_PATH_DEFAULT  \
-		LUA_LDIR "?.lua;"  LUA_LDIR "?\\init.lua;" \
-		LUA_CDIR "?.lua;"  LUA_CDIR "?\\init.lua;" \
-		LUA_SHRDIR "?.lua;"  LUA_SHRDIR "?\\init.lua;" \
-		".\\?.lua;" ".\\?\\init.lua"
+		LUA_LDIR "?.atm;"  LUA_LDIR "?\\init.atm;" \
+		LUA_CDIR "?.atm;"  LUA_CDIR "?\\init.atm;" \
+		LUA_SHRDIR "?.atm;"  LUA_SHRDIR "?\\init.atm;" \
+		".\\?.atm;" ".\\?\\init.atm"
 #endif
 
 #if !defined(LUA_CPATH_DEFAULT)
@@ -247,9 +247,9 @@
 
 #if !defined(LUA_PATH_DEFAULT)
 #define LUA_PATH_DEFAULT  \
-		LUA_LDIR "?.lua;"  LUA_LDIR "?/init.lua;" \
-		LUA_CDIR "?.lua;"  LUA_CDIR "?/init.lua;" \
-		"./?.lua;" "./?/init.lua"
+		LUA_LDIR "?.atm;"  LUA_LDIR "?/init.atm;" \
+		LUA_CDIR "?.atm;"  LUA_CDIR "?/init.atm;" \
+		"./?.atm;" "./?/init.atm"
 #endif
 
 #if !defined(LUA_CPATH_DEFAULT)

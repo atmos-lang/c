@@ -1,6 +1,6 @@
 /*
 ** $Id: llex.h $
-** Lexical Analyzer
+** Lexical Analyzer (Atmos)
 ** See Copyright Notice in lua.h
 */
 
@@ -31,19 +31,23 @@
 */
 enum RESERVED {
   /* terminal symbols denoted by reserved words */
-  TK_AND = FIRST_RESERVED, TK_BREAK,
-  TK_DO, TK_ELSE, TK_ELSEIF, TK_END, TK_FALSE, TK_FOR, TK_FUNCTION,
-  TK_GLOBAL, TK_GOTO, TK_IF, TK_IN, TK_LOCAL, TK_NIL, TK_NOT, TK_OR,
-  TK_REPEAT, TK_RETURN, TK_THEN, TK_TRUE, TK_UNTIL, TK_WHILE,
+  TK_AWAIT = FIRST_RESERVED, TK_BREAK, TK_CATCH, TK_DEFER, TK_DO,
+  TK_ELSE, TK_EMIT, TK_ESCAPE, TK_FALSE, TK_FUNC, TK_IF, TK_IFS, TK_IN,
+  TK_LOOP, TK_MATCH, TK_NIL, TK_ON, TK_PAR, TK_PIN, TK_PUB, TK_RETURN,
+  TK_SET, TK_SPAWN, TK_TASK, TK_TASKS, TK_TEST, TK_THREAD, TK_THROW,
+  TK_TOGGLE, TK_TRUE, TK_UNTIL, TK_VAL, TK_VAR, TK_WATCHING, TK_WHERE,
+  TK_WHILE, TK_WITH,
   /* other terminal symbols */
-  TK_IDIV, TK_CONCAT, TK_DOTS, TK_EQ, TK_GE, TK_LE, TK_NE,
-  TK_SHL, TK_SHR,
-  TK_DBCOLON, TK_EOS,
-  TK_FLT, TK_INT, TK_NAME, TK_STRING
+  TK_IDIV, TK_POW, TK_CAT, TK_DOTS, TK_EQ, TK_NE, TK_GE, TK_LE,
+  TK_AND, TK_OR, TK_NOT, TK_IS, TK_ISNOT, TK_XIN, TK_XNOTIN,
+  TK_SEQ, TK_SNE, TK_SGE, TK_SLE, TK_ARROW,
+  TK_LPIPE1, TK_LPIPE2, TK_RPIPE1, TK_RPIPE2, TK_DBCOLON,
+  TK_EOS,
+  TK_FLT, TK_INT, TK_NAME, TK_STRING, TK_TAG, TK_CLK
 };
 
 /* number of reserved words */
-#define NUM_RESERVED	(cast_int(TK_WHILE-FIRST_RESERVED + 1))
+#define NUM_RESERVED	(cast_int(TK_WITH-FIRST_RESERVED + 1))
 
 
 typedef union {
@@ -56,6 +60,7 @@ typedef union {
 typedef struct Token {
   int token;
   SemInfo seminfo;
+  int sep;  /* separator count (newlines and ';') before the token */
 } Token;
 
 
@@ -65,6 +70,9 @@ typedef struct LexState {
   int current;  /* current character (charint) */
   int linenumber;  /* input line counter */
   int lastline;  /* line of last token 'consumed' */
+  int sep;  /* separator counter: incremented by newlines and ';' */
+  int lastsep;  /* 'sep' of last token 'consumed' */
+  int blockline;  /* line of the last statement of the last block */
   Token t;  /* current token */
   Token lookahead;  /* look ahead token */
   struct FuncState *fs;  /* current function (parser) */
@@ -76,7 +84,6 @@ typedef struct LexState {
   TString *source;  /* current source name */
   TString *envn;  /* environment variable name */
   TString *brkn;  /* "break" name (used as a label) */
-  TString *glbn;  /* "global" name (when not a reserved word) */
 } LexState;
 
 
@@ -88,6 +95,7 @@ LUAI_FUNC void luaX_next (LexState *ls);
 LUAI_FUNC int luaX_lookahead (LexState *ls);
 LUAI_FUNC l_noret luaX_syntaxerror (LexState *ls, const char *s);
 LUAI_FUNC const char *luaX_token2str (LexState *ls, int token);
+LUAI_FUNC TString *luaX_tokenname (LexState *ls, int token);
 
 
 #endif
