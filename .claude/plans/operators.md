@@ -7,7 +7,15 @@ runtime `lua-atmos/atmos/atmos/x.lua` (`is`, `gte`, `eq`, `iter`,
 `xin`, `cat`); tests `tst/exec.lua` ("CALL / METHOD / PIPE", "WHERE",
 match cases), `tst/expr.lua` (operator lambdas).
 
-Status today (this repo): all these tokens exist in the lexer
+Status: implemented except `where` (`lparser.c`: `opcall`, pipes,
+`matchstat`, `oplambda`, keyword pipe forms `kwopen`; `lbaselib.c`:
+`_G["??"]`, `_G["=>="]`, `_G["==="]`, `_G["?>"]`; `ltm.c`: `++` on
+tables). `testes/ops.atm` passes. Limitation: a parenthesized tuple
+piped with `-->` keeps all its values in statement and declaration
+contexts (`(10,20) --> f(30)` is `f(10,20,30)`); inside a call's
+argument list a tuple is a single value, so there it pipes one value.
+
+Status before (this repo): all these tokens existed in the lexer
 (`TK_IS`, `TK_ISNOT`, `TK_XIN`, `TK_XNOTIN`, `TK_SEQ`, `TK_SNE`,
 `TK_SGE`, `TK_SLE`, `TK_LPIPE1/2`, `TK_RPIPE1/2`, `TK_WHERE`,
 `TK_MATCH`) and the parser rejects them with "operator/statement not

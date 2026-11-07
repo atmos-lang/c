@@ -170,10 +170,59 @@ void luaT_trybinTM (lua_State *L, const TValue *p1, const TValue *p2,
 ** The use of 'p1' after 'callbinTM' is safe because, when a tag
 ** method is not found, 'callbinTM' cannot change the stack.
 */
+/*
+** Atmos '++' on tables: append the array part of 'src' (1..#src) to
+** 't' and copy its other fields (later fields win).
+*/
+static void concatinto (lua_State *L, Table *t, Table *src,
+                                      lua_Unsigned *len) {
+  lua_Unsigned n = luaH_getn(L, src);
+  lua_Unsigned i;
+  StkId key;
+  for (i = 1; i <= n; i++) {  /* array part */
+    TValue v;
+    luaH_getint(src, l_castU2S(i), &v);
+    luaH_setint(L, t, l_castU2S(++*len), &v);
+    luaC_barrierback(L, obj2gco(t), &v);
+  }
+  key = L->top.p;  /* two slots for 'luaH_next' (assume EXTRA_STACK) */
+  setnilvalue(s2v(key));
+  L->top.p += 2;
+  while (luaH_next(L, src, key)) {  /* other fields */
+    TValue *k = s2v(key);
+    if (!(ttisinteger(k) && 1 <= ivalue(k) && l_castS2U(ivalue(k)) <= n)) {
+      luaH_set(L, t, k, s2v(key + 1));
+      luaC_barrierback(L, obj2gco(t), s2v(key + 1));
+    }
+  }
+  L->top.p -= 2;
+}
+
+
+static void concattables (lua_State *L, StkId p1) {
+  ptrdiff_t pos = savestack(L, p1);
+  Table *t;
+  lua_Unsigned len = 0;
+  luaD_checkstack(L, 3);  /* result and iteration slots */
+  p1 = restorestack(L, pos);
+  t = luaH_new(L);
+  sethvalue2s(L, L->top.p, t);  /* anchor the new table */
+  L->top.p++;
+  concatinto(L, t, hvalue(s2v(p1)), &len);
+  concatinto(L, t, hvalue(s2v(p1 + 1)), &len);
+  L->top.p--;
+  sethvalue2s(L, p1, t);  /* result in the place of the first operand */
+}
+
+
 void luaT_tryconcatTM (lua_State *L) {
   StkId p1 = L->top.p - 2;  /* first argument */
-  if (l_unlikely(callbinTM(L, s2v(p1), s2v(p1 + 1), p1, TM_CONCAT) < 0))
-    luaG_concaterror(L, s2v(p1), s2v(p1 + 1));
+  if (l_unlikely(callbinTM(L, s2v(p1), s2v(p1 + 1), p1, TM_CONCAT) < 0)) {
+    if (ttistable(s2v(p1)) && ttistable(s2v(p1 + 1)))
+      concattables(L, p1);  /* Atmos: '++' on two tables */
+    else
+      luaG_concaterror(L, s2v(p1), s2v(p1 + 1));
+  }
 }
 
 

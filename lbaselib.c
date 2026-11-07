@@ -172,6 +172,150 @@ static int tagmatch (lua_State *L, int e, int x) {
 
 
 /*
+** Atmos operators as functions, registered in the global table under
+** the operator's name ('_G["??"]'), called by the compiled code.
+*/
+
+static int luaB_is (lua_State *L) {  /* a ?? b */
+  lua_settop(L, 2);
+  lua_pushboolean(L, tagmatch(L, 1, 2));
+  return 1;
+}
+
+
+/*
+** 'a =>= b' ("sup"): same type and metatable, and 'a == b', or 'a' is a
+** dot-prefix of the string 'b', or every field of the table 'a' is
+** '=>=' the corresponding field of 'b'. Indices must be absolute.
+*/
+static int gte (lua_State *L, int a, int b, int depth) {
+  int ta = lua_type(L, a);
+  if (ta != lua_type(L, b))
+    return 0;
+  if (lua_compare(L, a, b, LUA_OPEQ))
+    return 1;
+  if (!lua_getmetatable(L, a)) lua_pushnil(L);
+  if (!lua_getmetatable(L, b)) lua_pushnil(L);
+  if (!lua_rawequal(L, -1, -2)) {
+    lua_pop(L, 2);
+    return 0;
+  }
+  lua_pop(L, 2);
+  if (ta == LUA_TSTRING) {
+    size_t la, lb;
+    const char *sa = lua_tolstring(L, a, &la);
+    const char *sb = lua_tolstring(L, b, &lb);
+    return (lb > la && memcmp(sa, sb, la) == 0 && sb[la] == '.');
+  }
+  else if (ta == LUA_TTABLE) {
+    int top = lua_gettop(L);
+    if (depth > 100)
+      luaL_error(L, "structural comparison too deep");
+    luaL_checkstack(L, 4, "structural comparison");
+    lua_pushnil(L);
+    while (lua_next(L, a)) {  /* key at top+1, value at top+2 */
+      int ok;
+      lua_pushvalue(L, top + 1);
+      lua_gettable(L, b);  /* b[k] at top+3 */
+      ok = gte(L, top + 2, top + 3, depth + 1);
+      lua_pop(L, 2);
+      if (!ok) {
+        lua_pop(L, 1);
+        return 0;
+      }
+    }
+    return 1;
+  }
+  else
+    return 0;
+}
+
+
+static int luaB_sup (lua_State *L) {  /* a =>= b */
+  lua_settop(L, 2);
+  lua_pushboolean(L, gte(L, 1, 2, 0));
+  return 1;
+}
+
+
+static int luaB_deq (lua_State *L) {  /* a === b */
+  lua_settop(L, 2);
+  lua_pushboolean(L, gte(L, 1, 2, 0) && gte(L, 2, 1, 0));
+  return 1;
+}
+
+
+/*
+** 'v ?> t' ("in"): iterate 't' as a loop would ('__pairs', a generator
+** function, or a table: its array part and then the other fields);
+** true if 'v =>= value' or 'v =>= key' for a non-numeric key.
+*/
+static int xinpair (lua_State *L, int k, int val) {
+  if (lua_type(L, k) == LUA_TNUMBER)
+    return gte(L, 1, val, 0);
+  else
+    return gte(L, 1, k, 0) || gte(L, 1, val, 0);
+}
+
+
+static int luaB_xin (lua_State *L) {  /* v ?> t */
+  int res = 0;
+  lua_settop(L, 2);
+  if (luaL_getmetafield(L, 2, "__pairs") != LUA_TNIL) {  /* 3: metamethod */
+    lua_pushvalue(L, 2);
+    lua_call(L, 1, 3);  /* 3: f, 4: s, 5: control */
+    for (;;) {
+      lua_pushvalue(L, 3);
+      lua_pushvalue(L, 4);
+      lua_pushvalue(L, 5);
+      lua_call(L, 2, 2);  /* 6: key, 7: value */
+      if (lua_isnil(L, 6)) break;
+      if (lua_isnil(L, 7) ? gte(L, 1, 6, 0) : xinpair(L, 6, 7)) {
+        res = 1;
+        break;
+      }
+      lua_copy(L, 6, 5);
+      lua_settop(L, 5);
+    }
+  }
+  else if (lua_type(L, 2) == LUA_TFUNCTION ||
+           luaL_getmetafield(L, 2, "__call") != LUA_TNIL) {  /* generator */
+    lua_settop(L, 2);
+    for (;;) {
+      lua_pushvalue(L, 2);
+      lua_call(L, 0, 1);  /* 3: value */
+      if (lua_isnil(L, 3)) break;
+      if (gte(L, 1, 3, 0)) {
+        res = 1;
+        break;
+      }
+      lua_settop(L, 2);
+    }
+  }
+  else if (lua_type(L, 2) == LUA_TTABLE) {
+    lua_Integer n = luaL_len(L, 2);
+    lua_Integer i;
+    for (i = 1; i <= n && !res; i++) {  /* array part */
+      lua_geti(L, 2, i);
+      res = gte(L, 1, 3, 0);
+      lua_settop(L, 2);
+    }
+    lua_pushnil(L);
+    while (!res && lua_next(L, 2)) {  /* 3: key, 4: value */
+      lua_Integer k;
+      if (!(lua_isinteger(L, 3) && (k = lua_tointeger(L, 3)) >= 1 && k <= n))
+        res = xinpair(L, 3, 4);
+      lua_settop(L, 3);
+    }
+  }
+  else
+    return luaL_error(L, "attempt to iterate a %s value", luaL_typename(L, 2));
+  lua_pushboolean(L, res);
+  return 1;
+}
+
+
+/*
 ** 'catch(cnd, f)': calls 'f' in protected mode. Returns 'true' plus
 ** the results of 'f', or 'false' plus the error values when 'cnd'
 ** matches them: 'true' matches anything; 'false' nothing; a function
@@ -644,6 +788,10 @@ static const luaL_Reg base_funcs[] = {
   {"error", luaB_error},
   {"errorn", luaB_errorn},
   {"catch", luaB_catch},
+  {"??", luaB_is},
+  {"=>=", luaB_sup},
+  {"===", luaB_deq},
+  {"?>", luaB_xin},
   {"throw", luaB_throw},
   {"getmetatable", luaB_getmetatable},
   {"ipairs", luaB_ipairs},

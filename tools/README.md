@@ -64,8 +64,17 @@ Semantics assumed for the Atmos implementation (the tests rely on them):
 - `pin x = v` is a to-be-closed variable (Lua `<close>`); `nil`/`false`
   are allowed; `escape`/`break` close pending variables
 - `return(...)` of a call is a proper tail call
-- `a ++ b` concatenates tables when both are tables; a table with a
-  non-table operand is an error
+- `a ++ b` concatenates tables when both are tables (array parts
+  appended, other fields merged, the right side winning); a table with
+  a non-table operand is an error
+- `??`/`!?`, `=>=`/`=<=`/`===`/`=!=` and `?>`/`!>` call the functions
+  `_G["??"]`, `_G["=>="]`, `_G["==="]`, `_G["?>"]` (tag hierarchy,
+  structural comparison, membership as in the reference)
+- pipes: `x -> f(a)` is `f(x, a)`, `f(a) <- x` is `f(a, x)`; single
+  pipes bind tighter than unary/binary operators, double pipes looser;
+  `return`/`break`/`until`/`while`/`escape` accept `<-`/`<--` forms
+- `match h { c => b ... else => b }` tests `h ?? c` (or calls a lambda
+  case with `h`); `\+`, `\#`, `\===` are operator lambdas
 - error messages, variable-kind names (global/local/upvalue/field/method/
   constant) and syntax-error formats are Lua's
 - `catch CND { }` evaluates to `true, values` or `false, e1, ..., en`;

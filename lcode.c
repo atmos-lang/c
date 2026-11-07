@@ -377,6 +377,11 @@ static void removelastinstruction (FuncState *fs) {
 }
 
 
+void luaK_removelastinstruction (FuncState *fs) {
+  removelastinstruction(fs);
+}
+
+
 /*
 ** Emit instruction 'i', checking for array sizes and saving also its
 ** line information. Return 'i' position.

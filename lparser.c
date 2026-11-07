@@ -69,6 +69,14 @@ static int statement (LexState *ls, expdesc *v);
 static void expr (LexState *ls, expdesc *v);
 static int exprlist (LexState *ls, expdesc *v);
 static void statlist (LexState *ls, expdesc *v, int *n);
+static void primaryexp (LexState *ls, expdesc *v);
+static int suffixloop (LexState *ls, expdesc *v, int nocall);
+static void unaryexp (LexState *ls, expdesc *v);
+static void binloop (LexState *ls, expdesc *v);
+static void singlepipes (LexState *ls, expdesc *v);
+static void lambda (LexState *ls, expdesc *e, int line);
+static UnOpr getunopr (int op);
+static BinOpr getbinopr (int op);
 
 
 static l_noret error_expected (LexState *ls, int token) {
@@ -592,6 +600,98 @@ static void buildvar (LexState *ls, TString *varname, expdesc *var) {
 static void singlevar (LexState *ls, expdesc *var) {
   buildvar(ls, str_checkname(ls), var);
 }
+
+
+/*
+** {======================================================================
+** Atmos operators '??' '!?' '?>' '!>' '===' '=!=' '=>=' '=<=' are calls
+** to functions registered in the global table under the operator's
+** name: 'a ?? b' is '_ENV["??"](a, b)' (see lbaselib.c).
+** =======================================================================
+*/
+
+typedef struct AtmOp {
+  const char *name;  /* name of the function in '_ENV' */
+  lu_byte swap;  /* call with the operands swapped */
+  lu_byte negate;  /* negate the result */
+} AtmOp;
+
+
+static const AtmOp *getatmop (int token) {
+  static const AtmOp ops[] = {
+    {"??", 0, 0}, {"??", 0, 1}, {"?>", 0, 0}, {"?>", 0, 1},
+    {"===", 0, 0}, {"===", 0, 1}, {"=>=", 0, 0}, {"=>=", 1, 0}
+  };
+  switch (token) {
+    case TK_IS: return &ops[0];
+    case TK_ISNOT: return &ops[1];
+    case TK_XIN: return &ops[2];
+    case TK_XNOTIN: return &ops[3];
+    case TK_SEQ: return &ops[4];
+    case TK_SNE: return &ops[5];
+    case TK_SGE: return &ops[6];
+    case TK_SLE: return &ops[7];
+    default: return NULL;
+  }
+}
+
+
+/* free register 'r' if it is the temporary on the top of the stack */
+static void freetemp (FuncState *fs, int r) {
+  if (r >= luaY_nvarstack(fs) && r == fs->freereg - 1)
+    fs->freereg--;
+}
+
+
+static void movereg (FuncState *fs, int dst, int src) {
+  if (dst != src)
+    luaK_codeABC(fs, OP_MOVE, dst, src, 0);
+}
+
+
+/* store expression 'e' into register 'reg' */
+static void storereg (FuncState *fs, int reg, expdesc *e) {
+  expdesc var;
+  init_exp(&var, VLOCAL, 0);  /* fake local variable at 'reg' */
+  var.u.var.ridx = cast_byte(reg);
+  var.u.var.vidx = 0;
+  luaK_storevar(fs, &var, e);
+}
+
+
+/*
+** Code the call '_ENV[op](a, b)' (or '(b, a)') for an Atmos operator
+** with both operands already parsed; the result replaces 'a'. The
+** temporaries of the operands are reused as the base of the call, so
+** that no register is left allocated below the result.
+*/
+static void opcall (LexState *ls, expdesc *a, expdesc *b, const AtmOp *op,
+                    int line) {
+  FuncState *fs = ls->fs;
+  expdesc fn;
+  int ra = luaK_exp2anyreg(fs, a);
+  int rb = luaK_exp2anyreg(fs, b);
+  int base, pa, pb;
+  freetemp(fs, rb);
+  freetemp(fs, ra);
+  base = fs->freereg;
+  luaK_reserveregs(fs, 3);  /* function and two arguments */
+  pa = op->swap ? base + 2 : base + 1;
+  pb = op->swap ? base + 1 : base + 2;
+  /* copy the operand higher in the stack first: its register may be
+     the destination of the other copy */
+  if (rb > ra) { movereg(fs, pb, rb); movereg(fs, pa, ra); }
+  else { movereg(fs, pa, ra); movereg(fs, pb, rb); }
+  buildvar(ls, luaX_newstring(ls, op->name, strlen(op->name)), &fn);
+  storereg(fs, base, &fn);
+  init_exp(a, VCALL, luaK_codeABC(fs, OP_CALL, base, 3, 2));
+  luaK_fixline(fs, line);
+  fs->freereg = cast_byte(base + 1);  /* one result */
+  if (op->negate)
+    luaK_prefix(fs, OPR_NOT, a, line);
+}
+
+/* }====================================================================== */
 
 
 /*
@@ -1308,7 +1408,45 @@ static void body (LexState *ls, expdesc *e, int ismethod, int line) {
 
 
 /*
-** Lambda: '\' [NAME | '(' parlist ')'] funcblock
+** Operator as a function: '\+' is '\(a,b){ a + b }'; '\#' and '\!'
+** take one parameter ('\-' is binary).
+*/
+static void oplambda (LexState *ls, int line) {
+  FuncState *fs = ls->fs;
+  int tok = ls->t.token;
+  BinOpr bop = getbinopr(tok);
+  const AtmOp *aop = getatmop(tok);
+  UnOpr uop = (tok == '#' || tok == TK_NOT) ? getunopr(tok) : OPR_NOUNOPR;
+  int nparams = (uop != OPR_NOUNOPR) ? 1 : 2;
+  expdesc a, b;
+  if (bop == OPR_NOBINOPR && aop == NULL && uop == OPR_NOUNOPR)
+    luaX_syntaxerror(ls, "lambda error: invalid operator");
+  luaX_next(ls);  /* skip operator */
+  new_localvarliteral(ls, "a");
+  if (nparams == 2)
+    new_localvarliteral(ls, "b");
+  adjustlocalvars(ls, nparams);
+  fs->f->numparams = cast_byte(nparams);
+  luaK_reserveregs(fs, nparams);
+  init_exp(&a, VLOCAL, 0);
+  a.u.var.ridx = 0; a.u.var.vidx = 0;
+  init_exp(&b, VLOCAL, 0);
+  b.u.var.ridx = 1; b.u.var.vidx = 1;
+  if (uop != OPR_NOUNOPR)
+    luaK_prefix(fs, uop, &a, line);
+  else if (bop != OPR_NOBINOPR) {
+    luaK_infix(fs, bop, &a);
+    luaK_posfix(fs, bop, &a, &b, line);
+  }
+  else
+    opcall(ls, &a, &b, aop, line);
+  tailreturn(ls, &a, 1);
+  fs->f->lastlinedefined = ls->linenumber;
+}
+
+
+/*
+** Lambda: '\' [NAME | '(' parlist ')'] funcblock | '\' operator
 */
 static void lambda (LexState *ls, expdesc *e, int line) {
   FuncState new_fs;
@@ -1317,21 +1455,25 @@ static void lambda (LexState *ls, expdesc *e, int line) {
   new_fs.f = addprototype(ls);
   new_fs.f->linedefined = line;
   open_func(ls, &new_fs, &bl);
-  if (testnext(ls, '(')) {
-    parlist(ls);
-    checknext(ls, ')');
-  }
+  if (ls->t.token != '(' && ls->t.token != '{' && ls->t.token != TK_NAME)
+    oplambda(ls, line);  /* operator as a function */
   else {
-    FuncState *fs = ls->fs;
-    if (ls->t.token == TK_NAME)
-      new_localvar(ls, str_checkname(ls));
-    else
-      new_localvarliteral(ls, "it");
-    adjustlocalvars(ls, 1);
-    fs->f->numparams = 1;
-    luaK_reserveregs(fs, 1);
+    if (testnext(ls, '(')) {
+      parlist(ls);
+      checknext(ls, ')');
+    }
+    else {
+      FuncState *fs = ls->fs;
+      if (ls->t.token == TK_NAME)
+        new_localvar(ls, str_checkname(ls));
+      else
+        new_localvarliteral(ls, "it");
+      adjustlocalvars(ls, 1);
+      fs->f->numparams = 1;
+      luaK_reserveregs(fs, 1);
+    }
+    funcblock(ls, line);
   }
-  funcblock(ls, line);
   codeclosure(ls, e);
   close_func(ls);
   leavelevel(ls);
@@ -1487,6 +1629,7 @@ static int ifstat (LexState *ls, expdesc *v);
 static int ifsstat (LexState *ls, expdesc *v);
 static int dostat (LexState *ls, expdesc *v);
 static int loopstat (LexState *ls, expdesc *v);
+static int matchstat (LexState *ls, expdesc *v);
 
 
 /*
@@ -1628,6 +1771,7 @@ static void primaryexp (LexState *ls, expdesc *v) {
     case TK_IFS: compoundexp(ls, v, ifsstat); return;
     case TK_DO: compoundexp(ls, v, dostat); return;
     case TK_LOOP: compoundexp(ls, v, loopstat); return;
+    case TK_MATCH: compoundexp(ls, v, matchstat); return;
     default: {
       luaX_syntaxerror(ls, "unexpected symbol");
     }
@@ -1651,7 +1795,7 @@ static int is_prefix (expdesc *v) {
 /*
 ** Suffixes: '.' NAME | '@' index | '::' NAME funcargs | funcargs
 */
-static void suffixloop (LexState *ls, expdesc *v) {
+static int suffixloop (LexState *ls, expdesc *v, int nocall) {
   FuncState *fs = ls->fs;
   for (;;) {
     switch (ls->t.token) {
@@ -1690,6 +1834,7 @@ static void suffixloop (LexState *ls, expdesc *v) {
       }
       case TK_DBCOLON: {  /* '::' NAME funcargs */
         expdesc key;
+        if (nocall) return 1;  /* stop at the call */
         luaX_next(ls);
         codestring(&key, str_checkfield(ls));
         luaK_self(fs, v, &key);
@@ -1700,12 +1845,13 @@ static void suffixloop (LexState *ls, expdesc *v) {
       }
       case '(': case TK_STRING: case '[': case TK_TAG: case '\\': {
         if (!sameline(ls) || !is_prefix(v))
-          return;  /* a new statement */
+          return 0;  /* a new statement */
+        if (nocall) return 1;  /* stop at the call */
         luaK_exp2nextreg(fs, v);
         funcargs(ls, v);
         break;
       }
-      default: return;
+      default: return 0;
     }
   }
 }
@@ -1713,8 +1859,201 @@ static void suffixloop (LexState *ls, expdesc *v) {
 
 static void suffixedexp (LexState *ls, expdesc *v) {
   primaryexp(ls, v);
-  suffixloop(ls, v);
+  suffixloop(ls, v, 0);
 }
+
+
+/*
+** {======================================================================
+** Pipes: 'v -> f(args)' is 'f(v, args)'; 'f(args) <- v' is 'f(args, v)'.
+** Single pipes ('->' '<-') bind tighter than unary and binary
+** operators; double pipes ('-->' '<--') bind looser.
+** =======================================================================
+*/
+
+/*
+** Registers r..r+n-1 hold 'n' piped values and r+n..r+n+k-1 the
+** function (and 'self') of the call: rotate them so that the function
+** comes first ('k' registers above are used as temporaries).
+*/
+static void rotatecall (FuncState *fs, int r, int n, int k) {
+  int i;
+  luaK_reserveregs(fs, k);
+  for (i = 0; i < k; i++)
+    movereg(fs, r + n + k + i, r + n + i);
+  for (i = n - 1; i >= 0; i--)
+    movereg(fs, r + k + i, r + i);
+  for (i = 0; i < k; i++)
+    movereg(fs, r + i, r + n + k + i);
+  fs->freereg = cast_byte(r + n + k);
+}
+
+
+/*
+** 'v -> target': the 'n' piped values are on the top of the stack;
+** parse the target and call it with the values before its arguments.
+*/
+static void pipeprepend (LexState *ls, expdesc *v, int n) {
+  FuncState *fs = ls->fs;
+  int r = fs->freereg - n;  /* first piped value */
+  int line = ls->linenumber;
+  expdesc f;
+  int k;  /* 1 for a function, 2 for a method (with 'self') */
+  switch (ls->t.token) {
+    case TK_INT: case TK_FLT: case TK_STRING: case TK_NIL:
+    case TK_TRUE: case TK_FALSE:
+      luaX_syntaxerror(ls, "pipe target must be callable");
+    default: break;
+  }
+  primaryexp(ls, &f);
+  if (suffixloop(ls, &f, 1) && ls->t.token == TK_DBCOLON) {  /* method? */
+    expdesc key;
+    luaX_next(ls);
+    codestring(&key, str_checkfield(ls));
+    luaK_self(fs, &f, &key);  /* method and 'self' on the top */
+    k = 2;
+  }
+  else {
+    luaK_exp2nextreg(fs, &f);  /* function on the top */
+    k = 1;
+  }
+  rotatecall(fs, r, n, k);
+  init_exp(&f, VNONRELOC, r);  /* function at 'r', values after it */
+  if (ls->t.token == '(' || (sameline(ls) && check_call_arg(ls)))
+    funcargs(ls, &f);  /* more arguments */
+  else {  /* call with the piped values only */
+    init_exp(&f, VCALL, luaK_codeABC(fs, OP_CALL, r, n + k, 2));
+    luaK_fixline(fs, line);
+    fs->freereg = cast_byte(r + 1);
+  }
+  *v = f;
+}
+
+
+/*
+** Operand of a double pipe: an expression without double pipes, or a
+** parenthesized tuple; returns the number of values.
+*/
+static int pipeoperand (LexState *ls, expdesc *v) {
+  if (ls->t.token == '(') {
+    int n = parenlist(ls, v);
+    if (n > 1)
+      return n;
+    suffixloop(ls, v, 0);
+    singlepipes(ls, v);
+    binloop(ls, v);
+    return 1;
+  }
+  unaryexp(ls, v);
+  binloop(ls, v);
+  return 1;
+}
+
+
+/*
+** 'target <- v': 'target' is already parsed (possibly a call just
+** coded, which is reopened); parse the piped value(s) and call with
+** them after the arguments.
+*/
+static void pipeappend (LexState *ls, expdesc *f, int multi) {
+  FuncState *fs = ls->fs;
+  int base, nparams;
+  int line = ls->linenumber;
+  expdesc e;
+  if (f->k == VCALL && f->u.info == fs->pc - 1) {  /* just-coded call? */
+    Instruction *inst = &fs->f->code[f->u.info];
+    int nargs = GETARG_B(*inst) - 1;
+    base = GETARG_A(*inst);
+    if (nargs < 0) {  /* open call: truncate its last argument */
+      Instruction *last = &fs->f->code[f->u.info - 1];
+      lua_assert(GET_OPCODE(*last) == OP_CALL ||
+                 GET_OPCODE(*last) == OP_VARARG);
+      SETARG_C(*last, 2);  /* one value */
+      nargs = GETARG_A(*last) - base;
+    }
+    luaK_removelastinstruction(fs);  /* reopen the call */
+    fs->freereg = cast_byte(base + 1 + nargs);
+  }
+  else {
+    luaK_exp2nextreg(fs, f);
+    base = f->u.info;
+  }
+  if (multi)
+    pipeoperand(ls, &e);
+  else
+    suffixedexp(ls, &e);
+  if (hasmultret(e.k)) {
+    luaK_setmultret(fs, &e);
+    nparams = LUA_MULTRET;  /* open call */
+  }
+  else {
+    luaK_exp2nextreg(fs, &e);
+    nparams = fs->freereg - (base + 1);
+  }
+  init_exp(f, VCALL, luaK_codeABC(fs, OP_CALL, base, nparams + 1, 2));
+  luaK_fixline(fs, line);
+  fs->freereg = cast_byte(base + 1);
+}
+
+
+static void singlepipes (LexState *ls, expdesc *v) {
+  for (;;) {
+    if (testnext(ls, TK_RPIPE1)) {
+      luaK_exp2nextreg(ls->fs, v);
+      pipeprepend(ls, v, 1);
+    }
+    else if (testnext(ls, TK_LPIPE1))
+      pipeappend(ls, v, 0);
+    else return;
+  }
+}
+
+
+/* 'n' values on the top of the stack (the last described by 'v') */
+static void doublepipes (LexState *ls, expdesc *v, int n) {
+  for (;;) {
+    if (testnext(ls, TK_RPIPE2)) {
+      luaK_exp2nextreg(ls->fs, v);
+      pipeprepend(ls, v, n);
+      n = 1;
+    }
+    else if (testnext(ls, TK_LPIPE2)) {
+      pipeappend(ls, v, 1);
+      n = 1;
+    }
+    else return;
+  }
+}
+
+
+static void pipeexp (LexState *ls, expdesc *v) {
+  suffixedexp(ls, v);
+  singlepipes(ls, v);
+}
+
+
+/*
+** Keyword statements take their arguments as 'kw(...)' or piped:
+** 'kw <- e' / 'kw <-- e'. A piped parenthesized argument is parsed as
+** the call form. Returns 1 if the parentheses are there (consuming
+** the opening one).
+*/
+static int kwopen (LexState *ls) {
+  if (testnext(ls, TK_LPIPE1) || testnext(ls, TK_LPIPE2)) {
+    if (ls->t.token != '(')
+      return 0;  /* bare argument */
+  }
+  checknext(ls, '(');
+  return 1;
+}
+
+
+static void kwclose (LexState *ls, int paren) {
+  if (paren)
+    checknext(ls, ')');
+}
+
+/* }====================================================================== */
 
 
 static UnOpr getunopr (int op) {
@@ -1763,7 +2102,7 @@ static void unaryexp (LexState *ls, expdesc *v) {
     unaryexp(ls, v);
     luaK_prefix(ls->fs, uop, v, line);
   }
-  else suffixedexp(ls, v);
+  else pipeexp(ls, v);
   leavelevel(ls);
 }
 
@@ -1774,33 +2113,38 @@ static void unaryexp (LexState *ls, expdesc *v) {
 ** associative; mixing different operators requires parentheses.
 */
 static void binloop (LexState *ls, expdesc *v) {
-  BinOpr op = getbinopr(ls->t.token);
-  BinOpr first = op;
-  while (op != OPR_NOBINOPR) {
+  int tok = ls->t.token;
+  int first = tok;  /* all operators in a chain must be the same */
+  for (;;) {
+    BinOpr op = getbinopr(tok);
+    const AtmOp *aop = getatmop(tok);
     expdesc v2;
     int line = ls->linenumber;
-    if (op != first)
+    if (op == OPR_NOBINOPR && aop == NULL)
+      break;
+    if (tok != first)
       luaX_syntaxerror(ls, "mixed operators require parentheses");
     luaX_next(ls);  /* skip operator */
-    luaK_infix(ls->fs, op, v);
-    unaryexp(ls, &v2);
-    luaK_posfix(ls->fs, op, v, &v2, line);
-    op = getbinopr(ls->t.token);
+    if (aop == NULL) {  /* Lua operator */
+      luaK_infix(ls->fs, op, v);
+      unaryexp(ls, &v2);
+      luaK_posfix(ls->fs, op, v, &v2, line);
+    }
+    else {  /* Atmos operator: function call */
+      unaryexp(ls, &v2);
+      opcall(ls, v, &v2, aop, line);
+    }
+    tok = ls->t.token;
   }
-  switch (ls->t.token) {  /* unsupported operators */
-    case TK_IS: case TK_ISNOT: case TK_XIN: case TK_XNOTIN:
-    case TK_SEQ: case TK_SNE: case TK_SGE: case TK_SLE:
-    case TK_LPIPE1: case TK_LPIPE2: case TK_RPIPE1: case TK_RPIPE2:
-    case TK_WHERE:
-      luaX_syntaxerror(ls, "operator not implemented");
-    default: break;
-  }
+  if (tok == TK_WHERE)
+    luaX_syntaxerror(ls, "operator not implemented");
 }
 
 
 static void expr (LexState *ls, expdesc *v) {
   unaryexp(ls, v);
   binloop(ls, v);
+  doublepipes(ls, v, 1);
 }
 
 
@@ -1811,10 +2155,18 @@ static void expr (LexState *ls, expdesc *v) {
 static int exprlist (LexState *ls, expdesc *v) {
   if (ls->t.token == '(') {
     int n = parenlist(ls, v);
-    if (n > 1)
-      return n;  /* multiple values */
-    suffixloop(ls, v);  /* continue the expression */
+    if (n > 1) {  /* multiple values */
+      if (ls->t.token == TK_RPIPE2) {  /* piped into a call */
+        luaK_exp2nextreg(ls->fs, v);
+        doublepipes(ls, v, n);
+        return 1;
+      }
+      return n;
+    }
+    suffixloop(ls, v, 0);  /* continue the expression */
+    singlepipes(ls, v);
     binloop(ls, v);
+    doublepipes(ls, v, 1);
     return 1;
   }
   else {
@@ -2006,10 +2358,11 @@ static void breakstat (LexState *ls, int line) {
   /* breakstat -> BREAK '(' [explist] ')' */
   BlockCnt *bl = loopblock(ls, "break");
   expdesc nilv;
+  int paren;
   luaX_next(ls);  /* skip 'break' */
-  checknext(ls, '(');
+  paren = kwopen(ls);
   init_exp(&nilv, VNIL, 0);
-  if (ls->t.token != ')') {
+  if (!paren || ls->t.token != ')') {
     expdesc e;
     expr(ls, &e);
     while (testnext(ls, ',')) {
@@ -2021,7 +2374,7 @@ static void breakstat (LexState *ls, int line) {
   }
   else if (bl->resreg >= 0)
     store_value(ls, bl->resreg, &nilv);
-  checknext(ls, ')');
+  kwclose(ls, paren);
   breakjump(ls, bl, line);
 }
 
@@ -2032,8 +2385,9 @@ static void untilstat (LexState *ls, int line) {
   BlockCnt *bl = loopblock(ls, "until");
   expdesc e, c;
   int jf;
+  int paren;
   luaX_next(ls);  /* skip 'until' */
-  checknext(ls, '(');
+  paren = kwopen(ls);
   expr(ls, &e);
   luaK_exp2anyreg(fs, &e);  /* condition value (to be the loop value) */
   c = e;
@@ -2043,7 +2397,7 @@ static void untilstat (LexState *ls, int line) {
   storeextra(ls, bl, &e);  /* true: loop value is extra or condition */
   breakjump(ls, bl, line);
   luaK_patchtohere(fs, jf);
-  checknext(ls, ')');
+  kwclose(ls, paren);
 }
 
 
@@ -2053,8 +2407,9 @@ static void whilestat (LexState *ls, int line) {
   BlockCnt *bl = loopblock(ls, "while");
   expdesc nilv;
   int jf, jt;
+  int paren;
   luaX_next(ls);  /* skip 'while' */
-  checknext(ls, '(');
+  paren = kwopen(ls);
   jf = cond(ls);  /* jump if false */
   jt = luaK_jump(fs);  /* true: continue loop */
   luaK_patchtohere(fs, jf);
@@ -2062,7 +2417,7 @@ static void whilestat (LexState *ls, int line) {
   storeextra(ls, bl, &nilv);  /* false: loop value is extra or nil */
   breakjump(ls, bl, line);
   luaK_patchtohere(fs, jt);
-  checknext(ls, ')');
+  kwclose(ls, paren);
 }
 
 
@@ -2072,8 +2427,9 @@ static void escapestat (LexState *ls, int line) {
   BlockCnt *bl;
   TString *tag;
   expdesc tv;
+  int paren;
   luaX_next(ls);  /* skip 'escape' */
-  checknext(ls, '(');
+  paren = kwopen(ls);
   check(ls, TK_TAG);
   tag = ls->t.seminfo.ts;
   for (bl = fs->bl; bl != NULL; bl = bl->previous) {
@@ -2088,7 +2444,7 @@ static void escapestat (LexState *ls, int line) {
   else
     codestring(&tv, tag);
   storeextra(ls, bl, &tv);
-  checknext(ls, ')');
+  kwclose(ls, paren);
   bl->hasescape = 1;
   newgotoentry(ls, tag, line);
 }
@@ -2171,6 +2527,107 @@ static int ifsstat (LexState *ls, expdesc *v) {
   }
   check_match(ls, '}', '{', line);
   luaK_patchtohere(fs, escapelist);
+  value_result(ls, reg, v);
+  return 1;
+}
+
+
+/*
+** Branch of a 'match': '{' block '}', an expression, or a lambda
+** called with the head (in register 'head').
+*/
+static void callhead (LexState *ls, expdesc *f, int head) {
+  FuncState *fs = ls->fs;
+  int base;
+  luaK_exp2nextreg(fs, f);
+  base = f->u.info;
+  luaK_reserveregs(fs, 1);
+  movereg(fs, base + 1, head);
+  init_exp(f, VCALL, luaK_codeABC(fs, OP_CALL, base, 2, 2));
+  fs->freereg = cast_byte(base + 1);
+}
+
+
+static void matchbranch (LexState *ls, int reg, int head) {
+  if (ls->t.token == '{')
+    block(ls, reg);
+  else {
+    expdesc e;
+    int line = ls->linenumber;
+    if (testnext(ls, '\\')) {  /* lambda: called with the head */
+      lambda(ls, &e, line);
+      callhead(ls, &e, head);
+    }
+    else
+      expr(ls, &e);
+    store_value(ls, reg, &e);
+    ls->blockline = ls->lastline;
+  }
+}
+
+
+/*
+** match -> MATCH expr '{' { case '=>' branch } [ELSE '=>' branch] '}'
+** A case is an expression ('head ?? case') or a lambda (called with
+** the head). The head is kept in a hidden local; the value of the
+** chosen branch replaces it.
+*/
+static int matchstat (LexState *ls, expdesc *v) {
+  FuncState *fs = ls->fs;
+  BlockCnt bl;
+  expdesc h;
+  int reg;  /* register for the head and then for the value */
+  int escapelist = NO_JUMP;
+  int haselse = 0;
+  int line;
+  luaX_next(ls);  /* skip 'match' */
+  enterblock(fs, &bl, 0);
+  reg = luaY_nvarstack(fs);
+  expr(ls, &h);
+  luaK_exp2nextreg(fs, &h);
+  new_localvarliteral(ls, "(match)");  /* hidden local holding the head */
+  adjustlocalvars(ls, 1);
+  line = ls->linenumber;
+  checknext(ls, '{');
+  while (ls->t.token != '}') {
+    if (testnext(ls, TK_ELSE)) {
+      checknext(ls, TK_ARROW);
+      matchbranch(ls, reg, reg);
+      haselse = 1;
+      break;
+    }
+    else {
+      expdesc c;
+      int condfalse;
+      int cline = ls->linenumber;
+      if (testnext(ls, '\\')) {  /* lambda case */
+        lambda(ls, &c, cline);
+        callhead(ls, &c, reg);
+      }
+      else {  /* 'head ?? case' */
+        expdesc hc;
+        expr(ls, &c);
+        init_exp(&hc, VNONRELOC, reg);
+        opcall(ls, &hc, &c, getatmop(TK_IS), cline);
+        c = hc;
+      }
+      luaK_goiftrue(fs, &c);
+      condfalse = c.f;
+      checknext(ls, TK_ARROW);
+      matchbranch(ls, reg, reg);
+      luaK_concat(fs, &escapelist, luaK_jump(fs));
+      luaK_fixline(fs, ls->blockline);  /* jump "belongs" to the branch */
+      luaK_patchtohere(fs, condfalse);
+    }
+  }
+  if (!haselse) {
+    expdesc e;
+    init_exp(&e, VVOID, 0);
+    store_value(ls, reg, &e);  /* no case: nil */
+  }
+  check_match(ls, '}', '{', line);
+  luaK_patchtohere(fs, escapelist);
+  leaveblock(fs);
   value_result(ls, reg, v);
   return 1;
 }
@@ -2482,14 +2939,20 @@ static void retstat (LexState *ls) {
   int nret;  /* number of values being returned */
   int first = luaY_nvarstack(fs);  /* first slot to be returned */
   int line = ls->linenumber;
+  int paren;
   if (fs->iscatch)
     luaK_semerror(ls, "cannot use 'return' inside 'catch'");
   luaX_next(ls);  /* skip 'return' */
-  checknext(ls, '(');
-  if (ls->t.token == ')')
+  paren = kwopen(ls);
+  if (paren && ls->t.token == ')')
     nret = 0;  /* return no values */
   else {
-    nret = explist(ls, &e);  /* optional return values */
+    if (paren)
+      nret = explist(ls, &e);  /* optional return values */
+    else {
+      expr(ls, &e);  /* 'return <- e' */
+      nret = 1;
+    }
     if (hasmultret(e.k)) {
       luaK_setmultret(fs, &e);
       if (e.k == VCALL && nret == 1 && !fs->bl->insidetbc) {  /* tail call? */
@@ -2507,7 +2970,8 @@ static void retstat (LexState *ls) {
       }
     }
   }
-  check_match(ls, ')', '(', line);
+  if (paren)
+    check_match(ls, ')', '(', line);
   luaK_ret(fs, first, nret);
 }
 
@@ -2565,7 +3029,7 @@ static int statement (LexState *ls, expdesc *v) {
     case TK_AWAIT:
     case TK_EMIT: case TK_SPAWN: case TK_TOGGLE: case TK_PAR:
     case TK_WATCHING: case TK_THREAD: case TK_TASK: case TK_TASKS:
-    case TK_TEST: case TK_MATCH: case TK_PUB: {
+    case TK_TEST: case TK_PUB: {
       luaX_syntaxerror(ls, "statement not implemented");
       break;
     }
