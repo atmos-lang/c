@@ -1,0 +1,333 @@
+;; $Id: testes/memerr.lua $
+;; See Copyright Notice in file lua.h
+
+val func checkerr (msg, f, ...) {
+  val stat, err = pcall(f, ...)
+  assert(!stat && string.find(err, msg))
+}
+
+if T == nil {
+  (Message || print)('\n >>> testC not active: skipping memory error tests <<<\n')
+  return()
+}
+
+print("testing memory-allocation errors")
+
+val debug = require("debug")
+
+val pack = table.pack
+
+;; standard error message for memory errors
+val MEMERRMSG = "not enough memory"
+
+;; memory error in panic function
+T.totalmem(T.totalmem() + 10000)  ;; set low memory limit (+10k)
+assert(T.checkpanic("newuserdata 20000") == MEMERRMSG)
+T.totalmem(0)  ;; restore high limit
+
+;; {==================================================================
+;; Testing memory limits
+;; ===================================================================
+
+checkerr("block too big", T.newuserdata, math.maxinteger)
+collectgarbage()
+val f = load("val a = []; loop i in (1, 100000) { set a@(i) = i }")
+T.alloccount(10)
+checkerr(MEMERRMSG, f)
+T.alloccount()  ;; remove limit
+
+;; preallocate stack space
+var deep
+set deep = func (n) {
+  if n > 0 {
+    deep(n - 1)
+  }
+}
+
+;; test memory errors; increase limit for maximum memory by steps,
+;; so that we get memory errors in all allocations of a given
+;; task, until there is enough memory to complete the task without
+;; errors.
+val func testbytes (s, f) {
+  collectgarbage()
+  var M = T.totalmem()
+  val oldM = M
+  var a, b = nil
+  loop {
+    while(true)
+    collectgarbage()
+    collectgarbage()
+    deep(4)
+    T.totalmem(M)
+    set a, b = T.testC("pcall 0 1 0; pushstatus; return 2", f)
+    T.totalmem(0)  ;; remove limit
+    if a && (b == "OK") {  ;; stop when no more errors
+      break()
+    }
+    if (b != "OK") && (b != MEMERRMSG) {  ;; not a memory error?
+      error(a, 0)  ;; propagate it
+    }
+    set M = M + 7  ;; increase memory limit
+  }
+  print(string.format("minimum memory for %s: %d bytes", s, M - oldM))
+  return(a)
+}
+
+;; test memory errors; increase limit for number of allocations one
+;; by one, so that we get memory errors in all allocations of a given
+;; task, until there is enough allocations to complete the task without
+;; errors.
+
+val func testalloc (s, f) {
+  collectgarbage()
+  var M = 0
+  var a, b = nil
+  loop {
+    while(true)
+    collectgarbage()
+    collectgarbage()
+    deep(4)
+    T.alloccount(M)
+    set a, b = T.testC("pcall 0 1 0; pushstatus; return 2", f)
+    T.alloccount()  ;; remove limit
+    if a && (b == "OK") {  ;; stop when no more errors
+      break()
+    }
+    if (b != "OK") && (b != MEMERRMSG) {  ;; not a memory error?
+      error(a, 0)  ;; propagate it
+    }
+    set M = M + 1  ;; increase allocation limit
+  }
+  print(string.format("minimum allocations for %s: %d allocations", s, M))
+  return(M)
+}
+
+val func testamem (s, f) {
+  val aloc = testalloc(s, f)
+  val res = testbytes(s, f)
+  return([aloc=aloc, res=res])
+}
+
+val b = testamem("function call", func () {
+  return(10)
+})
+assert((b.res == 10) && (b.aloc == 0))
+
+testamem("state creation", func () {
+  val st = T.newstate()
+  if st {  ;; close new state
+    T.closestate(st)
+  }
+  return(st)
+})
+
+testamem("empty-table creation", func () {
+  return([])
+})
+
+testamem("string creation", func () {
+  return("XXX" ++ "YYY")
+})
+
+testamem("coroutine creation", func () {
+  return(coroutine.create(print))
+})
+
+do {  ;; vararg tables
+  val func pack (...) {
+    val t = table.pack(...)
+    return(t)
+  }
+  val b = testamem("vararg table", func () {
+    return(pack(10, 20, 30, 40, "hello"))
+  })
+  ;; (Lua: 'b.aloc == 3' for the implicit vararg table)
+  ;; table optimized away
+  val func sel (n, ...) {
+    val arg = table.pack(...)
+    return(arg@(n) + arg.n)
+  }
+  val b = testamem("optimized vararg table", func () {
+    return(sel(2.0, 20, 30))
+  })
+  assert((b.res == 32) && (b.aloc == 0))  ;; no memory needed for this case
+}
+
+;; testing to-be-closed variables
+testamem("to-be-closed variables", func () {
+  var flag
+  do {
+    pin x = setmetatable([], [__close=func () {
+      set flag = true
+    }])
+    set flag = false
+    val x = []
+  }
+  return(flag)
+})
+
+;; testing threads
+
+;; get main thread from registry
+val mt = T.testC("rawgeti R !M; return 1")
+assert((type(mt) == "thread") && (coroutine.running() == mt))
+
+var expand
+set expand = func (n, s) {
+  if n == 0 {
+    return("")
+  }
+  return(string.format("T.doonnewstack(%q)\n", s ++ (";\n collectgarbage(); " ++ expand(n - 1, s))))
+}
+
+set G = 0
+collectgarbage()
+load(expand(20, "set G = G + 1"))()
+assert(G == 20)
+collectgarbage()
+set G = nil
+
+testamem("running code on new thread", func () {
+  return(T.doonnewstack("val x = 1") == 0)  ;; try to create thread
+})
+
+do {  ;; external strings
+  val str = string.rep("a", 100)
+  testamem("creating external strings", func () {
+    return(T.externstr(str))
+  })
+}
+
+;; testing memory x compiler
+
+testamem("loadstring", func () {
+  return(load("set x = 1"))  ;; try to do load a string
+})
+
+val testprog = """val func foo () { return() }
+val t = ["x"]
+set AA = "aaa"
+loop i in (1, #t) { set AA = AA ++ t@(i) }
+true
+"""
+
+;; testing memory x dofile
+set _G.AA = nil
+val t = os.tmpname()
+val f = assert(io.open(t, "w"))
+f::write(testprog)
+f::close()
+testamem("dofile", func () {
+  val a = loadfile(t)
+  return(a && a())
+})
+assert(os.remove(t))
+assert(_G.AA == "aaax")
+
+;; other generic tests
+
+testamem("gsub", func () {
+  val a, b = string.gsub("alo alo", "(a)", func (x) {
+    return(x ++ 'b')
+  })
+  return((a == 'ablo ablo'))
+})
+
+testamem("dump/undump", func () {
+  var a = load(testprog)
+  val b = a && string.dump(a)
+  set a = b && load(b)
+  return(a && a())
+})
+
+set _G.AA = nil
+
+val t = os.tmpname()
+testamem("file creation", func () {
+  val f = assert(io.open(t, 'w'))
+  assert(!io.open("nomenaoexistente"))
+  io.close(f)
+  return(!loadfile('nomenaoexistente'))
+})
+assert(os.remove(t))
+
+testamem("table creation", func () {
+  val a, lim = ([], 10)
+  loop i in (1, lim) {
+    set a@(i) = i
+    set a@(i ++ 'a') = []
+  }
+  return(((type(a@(lim ++ 'a')) == 'table') && (a@(lim) == lim)))
+})
+
+testamem("constructors", func () {
+  val a = [10, 20, 30, 40, 50, a=1, b=2, c=3, d=4, e=5]
+  return(((type(a) == 'table') && (a.e == 5)))
+})
+
+val a = 1
+var close = nil
+testamem("closure creation", func () {
+  func close (b) {
+    return(func (x) {
+      return(b + x)
+    })
+  }
+  return((close(2)(4) == 6))
+})
+
+testamem("using coroutines", func () {
+  val a = coroutine.wrap(func () {
+    coroutine.yield(string.rep("a", 10))
+    return([])
+  })
+  assert(string.len(a()) == 10)
+  return(a())
+})
+
+do {  ;; auxiliary buffer
+  val lim = 100
+  val a = []
+  loop i in (1, lim) {
+    set a@(i) = "01234567890123456789"
+  }
+  testamem("auxiliary buffer", func () {
+    return((#table.concat(a, ",") == (((20 * lim) + lim) - 1)))
+  })
+}
+
+testamem("growing stack", func () {
+  var foo
+  set foo = func (n) {
+    if n == 0 {
+      return(1)
+    } else {
+      return(1 + foo(n - 1))
+    }
+  }
+  return(foo(100))
+})
+
+collectgarbage()
+collectgarbage()
+;; (global io, T, setmetatable, collectgarbage, print)
+
+var Count = 0
+testamem("finalizers", func () {
+  var X = false
+  var obj = setmetatable([], [__gc=func () {
+    set X = true
+  }])
+  set obj = nil
+  T.resetCI()  ;; remove extra CallInfos
+  T.reallocstack(18)  ;; remove extra stack slots
+  set Count = Count + 1
+  io.stderr::write(Count, "\n")
+  T.trick(io)
+  collectgarbage()
+  return(X)
+})
+
+;; }==================================================================
+
+print("Ok")
