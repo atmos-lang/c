@@ -79,7 +79,7 @@ Two options.
 - Message handlers of an enclosing `xpcall` do not see caught errors
   (`pcall` resets `errfunc`), as expected.
 
-### (B) try regions in the VM (recommended)
+### (B) try regions in the VM (planned alternative)
 
 Three opcodes and a per-thread stack of active regions.
 
@@ -127,10 +127,12 @@ Three opcodes and a per-thread stack of active regions.
   demand) and popped when frames are unwound by errors or
   `coroutine.close` (`luaE_resetthread` drops all regions).
 
-Recommendation: (B). `catch` becomes a real block like `do :X {}`:
-`break`/`escape`/`return` work through it, no allocation, and the
-error values stay on the stack end to end. (A) is a quick fallback
-with the known reference limitation.
+Decision: (A) first, because it is simpler and matches the reference;
+(B) is the alternative to switch to when `break`/`escape`/`return`
+across `catch` (or the closure cost) matter. With (B), `catch` becomes
+a real block like `do :X {}` and the error values stay on the stack end
+to end. Switching replaces `catchexp` (parser) and `luaB_catch`; the
+tests stay, minus the "jumps across catch are errors" cases.
 
 ## `defer`
 

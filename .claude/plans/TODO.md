@@ -51,7 +51,16 @@ planned as option (B)). Errors carry n values on the stack
 `__close` gets value 1. Tests: `testes/throw.atm`. Next: `catch`/`throw`
 syntax and `defer` in the parser on top of it.
 
-## 5. Compound expressions with live temporaries (bug)
+## 5. `catch` as VM try regions (option B)
+
+`catch` is a closure plus a protected call (option A in
+[catch.md](catch.md)), so `break`/`escape`/`return`/`until`/`while`
+cannot cross it and each execution allocates a closure. Option B
+(`OP_TRY`/`OP_ENDTRY`/`OP_CATCH`, per-thread region stack, `setjmp` per
+`luaV_execute` invocation) is designed in catch.md and replaces only
+`catchexp` and `luaB_catch`.
+
+## 6. Compound expressions with live temporaries (bug)
 
 `do`/`if`/`loop` used as expressions take their value register at the
 level of the active locals (`luaY_nvarstack`), as if no temporaries
@@ -65,7 +74,7 @@ temporaries. Fix idea: at the entry of a value block, when
 holds inside; they disappear with the block. See catch.md for the
 related fixes already made.
 
-## 6. Tail calls
+## 7. Tail calls
 
 - Tail call optimization is bad for error messages / tracebacks
   (`(...tail calls...)`). Could it be disabled? Or made explicit
