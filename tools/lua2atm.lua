@@ -305,18 +305,22 @@ end
 
 function P:funcbody (line, method)
   self:expect("(")
-  local params, dots = {}, false
+  local params, dots, dotsname = {}, false, nil
   if not self:check(")") then
     repeat
-      if self:accept("...") then dots = true; break end
+      if self:accept("...") then
+        dots = true
+        if self:check("name") then dotsname = self:next().val end  -- '...t'
+        break
+      end
       params[#params+1] = self:expect("name").val
     until not self:accept(",")
   end
   self:expect(")")
   local body = self:block()
   local lastline = self:expect("end").line
-  return { tag="function", params=params, dots=dots, body=body, method=method,
-           line=line, lastline=lastline }
+  return { tag="function", params=params, dots=dots, dotsname=dotsname,
+           body=body, method=method, line=line, lastline=lastline }
 end
 
 function P:explist ()
@@ -527,7 +531,15 @@ end
 local function pstring (e)
   if e.tag == "lstring" then
     local s = e.val:gsub("^\n", "")
-    return '"""' .. s .. '"""'
+    -- multi-line literal: delimiters cannot touch the same quote char
+    for _, q in ipairs{'"', "'"} do
+      if s:sub(1,1) ~= q and s:sub(-1) ~= q and not s:find(q:rep(3), 1, true) then
+        return q:rep(3) .. s .. q:rep(3)
+      end
+    end
+    -- fallback: single-line string with escapes
+    s = s:gsub("\\", "\\\\"):gsub('"', '\\"'):gsub("\n", "\\n")
+    return '"' .. s .. '"'
   else
     return e.val
   end
@@ -646,6 +658,9 @@ pfunction = function (f, header)
   if f.method then table.insert(params, 1, "self") end
   if f.dots then params[#params+1] = "..." end
   local head = (header or "func") .. " (" .. table.concat(params, ", ") .. ") {"
+  if f.dotsname then
+    head = head .. "  " .. todo("named vararg '..." .. f.dotsname .. "'")
+  end
   return head, f
 end
 
