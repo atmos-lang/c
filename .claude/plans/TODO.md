@@ -69,7 +69,15 @@ the level of the active locals, overwriting live temporaries
 while the statement is parsed (see expressions.md). Tests:
 `testes/exprs.atm`.
 
-## 7. Tail calls
+## 7. Operators, pipes, match, where
+
+See [operators.md](operators.md): `??`/`!?`, `=>=`/`=<=`/`===`/`=!=`,
+`?>`/`!>` as C functions named by the operator in `_G`; `++` on tables
+in the VM; pipes, `match` and lambda operator shortcuts in the parser;
+`where` as a separate step (needs token recording). Tests:
+`testes/ops.atm`.
+
+## 8. Tail calls
 
 - Tail call optimization is bad for error messages / tracebacks
   (`(...tail calls...)`). Could it be disabled? Or made explicit

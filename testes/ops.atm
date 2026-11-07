@@ -1,0 +1,337 @@
+;; Atmos operators: '??' '!?' (equivalence), '=>=' '=<=' '===' '=!='
+;; (structural comparison), '?>' '!>' (membership), '++' on tables,
+;; pipes, 'match' and lambda operator shortcuts.
+;; See .claude/plans/operators.md.
+
+print("testing operators")
+
+val func count (...) { select("#", ...) }
+
+;; ---- equivalence: ?? and !?
+
+do {
+  assert(10 ?? 10)
+  assert(!(10 ?? 20))
+  assert("x" ?? "x")
+  assert(nil ?? nil)
+  assert(!(nil ?? false))
+  assert(!([] ?? []))
+  val t = []
+  assert(t ?? t)
+  ;; types
+  assert([] ?? :table)
+  assert((\{}) ?? :function)
+  assert(10 ?? :number)
+  assert("s" ?? :string)
+  assert(true ?? :boolean)
+  assert(nil ?? :nil)
+  assert(coroutine.create(\{}) ?? :thread)
+  assert(!(10 ?? :string))
+  ;; tag hierarchy
+  assert(:T.A.x ?? :T)
+  assert(:T.A.x ?? :T.A)
+  assert(:T.A.x ?? :T.A.x)
+  assert(!(:T ?? :T.A.x))
+  assert(!(:T.A ?? :T.B))
+  assert(!(:TA ?? :T))
+  assert("x.y.z" ?? "x.y")
+  ;; tagged tables
+  assert(:X.Y [] ?? :X)
+  assert(:X.Y [] ?? :X.Y)
+  assert(!(:X [] ?? :X.Y))
+  assert([tag=:X] ?? :X)
+  assert(!([] ?? :X))
+  assert(:X [] ?? :table)
+  ;; negation
+  assert(10 !? 20)
+  assert(!(10 !? 10))
+  assert(:X.Y [] !? :Z)
+  assert([] !? :X)
+  ;; operands are evaluated once, left to right
+  val log = []
+  val func mk (v) { table.insert(log, v); v }
+  assert(mk(:X.Y) ?? mk(:X))
+  assert((log@1 == :X.Y) && (log@2 == :X) && (#log == 2))
+  ;; same precedence level as the other binary operators
+  assert(((10 ?? 10) && (1 ?? :number)) == true)
+  assert(((10 ?? :string) || 5) == 5)
+}
+
+;; ---- structural comparison: =>= =<= === =!=
+
+do {
+  assert(10 =>= 10)
+  assert(!(10 =>= 20))
+  assert(!(10 =>= nil))
+  assert(!(10 =>= "10"))
+  assert(:x =>= :x.y)
+  assert(!(:x.y =>= :x))
+  assert(:x.y =<= :x)
+  assert([] =>= [1, 2, 3])
+  assert([1, 2, 3] =<= [])
+  assert(!([1, 2, 3] =>= []))
+  assert([1, 2] =>= [1, 2, 3])
+  assert(!([1, 2, 4] =>= [1, 2, 3]))
+  assert([x=1] =>= [x=1, y=2])
+  assert(!([x=1, y=2] =>= [x=1]))
+  assert([x=:A] =>= [x=:A.B])
+  assert([x=[y=1]] =>= [x=[y=1, z=2], w=0])
+  assert(!([x=[y=1]] =>= [x=[z=2]]))
+  assert(!([x=[y=1]] =>= [x=1]))
+  ;; metatables must match
+  val mt = []
+  assert(!(setmetatable([], mt) =>= []))
+  assert(setmetatable([], mt) =>= setmetatable([], mt))
+  ;; deep equality
+  assert([1, 2, 3] === [1, 2, 3])
+  assert((\{}) =!= [])
+  assert([v=[]] === [v=[]])
+  assert(!([v=[]] =!= [v=[]]))
+  assert([@([])=1] =!= [@([])=1])
+  assert((\{}) =!= (\{}))
+  val f = \{}
+  assert(f === f)
+  assert(10 === 10)
+  assert(10 =!= 20)
+  assert("a" === "a")
+  assert(:x =!= :x.y)
+  assert([1, [2, [3]]] === [1, [2, [3]]])
+  assert([1, [2, [3]]] =!= [1, [2, [4]]])
+  assert([x=1, y=2] === [y=2, x=1])
+  assert(nil === nil)
+  assert(!(nil === false))
+  ;; cycles are not followed forever: a table does not include itself
+  val c = []
+  set c.self = c
+  assert(c === c)
+  assert(count(10 === 10) == 1)
+}
+
+;; ---- membership: ?> and !>
+
+do {
+  assert(10 ?> [10, 20, 30])
+  assert(!(1 ?> [10, 20, 30]))
+  assert(30 ?> [10, 20, 30])
+  assert(:x ?> [x=10, y=20])
+  assert(10 ?> [x=10, y=20])
+  assert(!(:z ?> [x=10, y=20]))
+  assert(!(1 ?> [x=10]))          ;; numeric keys do not count
+  assert(1 ?> [10, 1])
+  assert(nil !> [1, 2])
+  assert(1 !> [2, 3])
+  assert(!(1 !> [1]))
+  assert(!(:x ?> [[x=1]]))        ;; not recursive
+  assert(:X ?> [:X.Y])             ;; values compared with =>=
+  assert([1] ?> [[1, 2]])
+  assert(!([1, 2] ?> [[1]]))
+  assert("ab" ?> ["ab", "cd"])
+  ;; iteration over the array part and then the other keys
+  val t = [1, 2, 3]
+  set t.k = 4
+  assert((4 ?> t) && (:k ?> t) && (3 ?> t) && (5 !> t))
+  ;; generators
+  val func gen (n) {
+    var i = 0
+    \{ set i = i + 1; if i <= n { i } else { nil } }
+  }
+  assert(3 ?> gen(5))
+  assert(7 !> gen(5))
+  ;; __pairs
+  val func nxt (_, k) { if k == nil { return(1, "a") } else { return() } }
+  val p = setmetatable([], [__pairs = \(t){ (nxt, t, nil) }])
+  assert("a" ?> p)
+  assert("b" !> p)
+  ;; errors
+  val ok, e = pcall(\{ 1 ?> 10 })
+  assert(!ok)
+}
+
+;; ---- concatenation of tables with ++
+
+do {
+  assert(("abc" ++ "def") == "abcdef")
+  assert((1 ++ 2) == "12")
+  val t = [1, 2] ++ [3, 4]
+  assert((#t == 4) && (t@1 == 1) && (t@4 == 4))
+  val t = [x=10] ++ [x=1, y=2]
+  assert((t.x == 1) && (t.y == 2))
+  val t = [1, x=10] ++ [2, y=20]
+  assert((t@1 == 1) && (t@2 == 2) && (t.x == 10) && (t.y == 20))
+  val t = [] ++ []
+  assert((type(t) == "table") && (#t == 0) && (next(t) == nil))
+  val a = [1, 2]
+  val b = [3]
+  val t = a ++ b
+  assert((t != a) && (t != b) && (#a == 2) && (#b == 1))
+  val t = [[1]] ++ [[2]]
+  assert((t@1@1 == 1) && (t@2@1 == 2))
+  val t = ([1] ++ [2]) ++ [3]
+  assert((#t == 3) && (t@3 == 3))
+  val t = :X [1] ++ [2]
+  assert((t.tag == :X) && (t@2 == 2))
+  ;; __concat still wins
+  val mt = [__concat = \(a, b){ "mm" }]
+  assert((setmetatable([], mt) ++ []) == "mm")
+  assert(([] ++ setmetatable([], mt)) == "mm")
+  ;; a table with a non-table operand is an error
+  val ok, e = pcall(\{ [] ++ "x" })
+  assert(!ok && string.find(e, "concatenate"))
+  val ok, e = pcall(\{ 1 ++ [] })
+  assert(!ok && string.find(e, "concatenate"))
+}
+
+;; ---- pipes
+
+do {
+  val func f (v) { return(v) }
+  val func g (v) { return(10) }
+  val func h (v, x) { return(v - x) }
+  val func all (...) { table.pack(...) }
+  assert((10 -> f()) == 10)
+  assert((99 -> g() -> f()) == 10)
+  assert((99 -> g -> f) == 10)
+  assert((10 -> h(20)) == -10)
+  assert((f <- 20) == 20)
+  assert((h(10) <- 20) == -10)
+  assert((10 -> f) == 10)
+  assert((f <-- 10 -> g) == 10)
+  assert((10 + 1 --> f) == 11)
+  assert((f <-- 10 + 10) == 20)
+  assert((f <-- 10 -> g) == 10)
+  assert((10 --> f --> g) == 10)
+  ;; multiple values flow through
+  val t = (10, 20) --> all(30, 40)
+  assert((t.n == 4) && (t@1 == 10) && (t@4 == 40))
+  val t = all(30, 40) <-- (10, 20)
+  assert((t.n == 4) && (t@1 == 30) && (t@4 == 20))
+  val t = all() <- f(1)
+  assert((t.n == 1) && (t@1 == 1))
+  ;; single pipes bind tighter than unary and binary operators
+  assert((-10 -> f) == -10)
+  assert((1 + 10 -> g) == 11)
+  assert((10 -> g + 1) == 11)
+  assert((# "abc" -> f) == 3)
+  ;; x<-y is a pipe, not 'x < -y'
+  val x = f
+  val y = 5
+  assert((x<-y) == 5)
+  ;; methods and juxtaposed calls as targets
+  val o = [m = \(self, v, w){ (v, w) }]
+  assert(count(1 -> o::m()) == 2)
+  val a, b = 1 -> o::m(2)
+  assert((a == 1) && (b == 2))
+  val a, b = o::m(2) <- 1
+  assert((a == 2) && (b == 1))
+  ;; keyword targets
+  val func r (v) { return <- v }
+  assert(r(7) == 7)
+  val func r2 () { return <-- (1, 2) }
+  assert(count(r2()) == 2)
+  val ok, e = catch :X { throw <- :X }
+  assert(!ok && (e == :X))
+  val ok, e = catch :X { throw <- :X [1] }
+  assert(!ok && (e@1 == 1))
+  val v = do :T { escape <- :T; 0 }
+  assert(v == :T)
+  var i = 0
+  loop { set i = i + 1; until <- (i == 3) }
+  assert(i == 3)
+  val v = loop { break <- 9 }
+  assert(v == 9)
+  ;; errors
+  val ok, e = pcall(\{ 10 -> (10) })
+  assert(!ok && string.find(e, "attempt to call a number"))
+  assert(!load("print(10 -> 10)"))
+}
+
+;; ---- match
+
+do {
+  var out = []
+  val func print (...) { table.insert(out, table.concat(table.pack(...), ",")) }
+  match 100 {
+    10 => {}
+    100 => print(:ok)
+  }
+  assert(out@1 == "ok")
+  val v = match :a.b.c {
+    :a.b => 10
+    else => 99
+  }
+  assert(v == 10)
+  val v = match :a.b.c {
+    :a.b.c.d => 10
+    else => 99
+  }
+  assert(v == 99)
+  assert(match 1 { 2 => 3 } == nil)
+  var x = :X.A [a=10]
+  match x {
+    :X.A => { print(x.a) }
+    else => { throw() }
+  }
+  assert(out@2 == "10")
+  match 100 {
+    100 => \{ print(it) }
+  }
+  assert(out@3 == "100")
+  match 100 {
+    \{ it == 100 } => print(:ok2)
+  }
+  assert(out@4 == "ok2")
+  match 100 {
+    \{ (it == 100) && 10 } => \(...){ print(...) }
+  }
+  assert(out@5 == "100")
+  match 100 {
+    :number => \{ print(it) }
+  }
+  assert(out@6 == "100")
+  match 100 {
+    else => \{ print(it) }
+  }
+  assert(out@7 == "100")
+  ;; the head is evaluated once; cases in order, first match wins
+  var n = 0
+  val func head () { set n = n + 1; :X.Y }
+  val v = match head() {
+    :Z => 1
+    :X => 2
+    :X.Y => 3
+  }
+  assert((v == 2) && (n == 1))
+  ;; block values and multiple statements
+  val v = match 5 {
+    5 => { val a = 1; val b = 4; a + b }
+  }
+  assert(v == 5)
+  ;; match as an argument
+  assert(count(match 1 { 1 => 7 }) == 1)
+  assert(select(2, 0, match 1 { 1 => 7 }) == 7)
+}
+
+;; ---- lambda operator shortcuts
+
+do {
+  assert((\+)(1, 2) == 3)
+  assert((\-)(5, 2) == 3)
+  assert((\*)(2, 3) == 6)
+  assert((\++)("a", "b") == "ab")
+  assert((\===)([1], [1]))
+  assert((\??)(:X.Y, :X))
+  assert((\#)([1, 2]) == 2)
+  assert((\!)(false))
+  assert((\==)(1, 1))
+  assert(!((\<)(2, 1)))
+  assert((\&&)(1, 2) == 2)
+  val t = [3, 1, 2]
+  table.sort(t, \<)
+  assert((t@1 == 1) && (t@3 == 3))
+  val f, m = load("print(\\->)")
+  assert(!f && string.find(m, "invalid operator"))
+  val f, m = load("print(\\where)")
+  assert(!f)
+}
+
+print("OK")
