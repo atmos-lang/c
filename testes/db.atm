@@ -1,0 +1,1159 @@
+;; $Id: testes/db.lua $
+;; See Copyright Notice in file lua.h
+
+;; testing debug library
+
+val debug = require("debug")
+
+val func dostring (s) {
+  return(assert(load(s))())
+}
+
+print("testing debug library and debug information")
+
+do {
+  val a = 1
+}
+
+assert(!debug.gethook())
+
+val testline = 21  ;; line where 'test' is defined
+val func test_ (s, l, p) {  ;; this must be line 21
+  collectgarbage()  ;; avoid gc during trace
+  val func f (event, line) {
+    assert(event == 'line')
+    val l = table.remove(l, 1)
+    if p { print(l, line) }
+    assert(l == line, "wrong trace!!")
+  }
+  debug.sethook(f, "l"); load(s)(); debug.sethook()
+  assert(#l == 0)
+}
+
+do {
+  assert(!pcall(debug.getinfo, print, "X"))  ;; invalid option
+  assert(!pcall(debug.getinfo, 0, ">"))  ;; invalid option
+  assert(!debug.getinfo(1000))  ;; out of range level
+  assert(!debug.getinfo(-1))  ;; out of range level
+  var a = debug.getinfo(print)
+  assert((a.what == "C") && (a.short_src == "[C]"))
+  set a = debug.getinfo(print, "L")
+  assert(a.activelines == nil)
+  val b = debug.getinfo(test_, "SfL")
+  assert((b.name == nil) && (b.what == "Lua") && (b.linedefined == testline) && (b.lastlinedefined == (b.linedefined + 10)) && (b.func == test_) && !string.find(b.short_src, "%["))
+  assert(b.activelines@(b.linedefined + 1) && b.activelines@(b.lastlinedefined))
+  assert(!b.activelines@(b.linedefined) && !b.activelines@(b.lastlinedefined + 1))
+}
+
+;;  bug in 5.4.4-5.4.6: activelines in vararg functions
+;;  without debug information
+do {
+  val func_ = load(string.dump(load("print(10)"), true))
+  val actl = debug.getinfo(func_, "L").activelines
+  assert(#actl == 0)  ;; no line info
+}
+
+;; test file and string names truncation
+var a = "func f () {}"
+val func dostring (s, x) {
+  return(load(s, x)())
+}
+dostring(a)
+assert(debug.getinfo(f).short_src == string.format('[string "%s"]', a))
+dostring(a ++ string.format("; set %s\n= 1", string.rep('p', 400)))
+assert(string.find(debug.getinfo(f).short_src, '^%[string [^\n]*%.%.%."%]$'))
+dostring(a ++ string.format("; set %s = 1", string.rep('p', 400)))
+assert(string.find(debug.getinfo(f).short_src, '^%[string [^\n]*%.%.%."%]$'))
+dostring("\n" ++ a)
+assert(debug.getinfo(f).short_src == '[string "..."]')
+dostring(a, "")
+assert(debug.getinfo(f).short_src == '[string ""]')
+dostring(a, "@xuxu")
+assert(debug.getinfo(f).short_src == "xuxu")
+dostring(a, "@" ++ (string.rep('p', 1000) ++ 't'))
+assert(string.find(debug.getinfo(f).short_src, "^%.%.%.p*t$"))
+dostring(a, "=xuxu")
+assert(debug.getinfo(f).short_src == "xuxu")
+dostring(a, string.format("=%s", string.rep('x', 500)))
+assert(string.find(debug.getinfo(f).short_src, "^x*$"))
+dostring(a, "=")
+assert(debug.getinfo(f).short_src == "")
+set _G.a = nil
+set _G.f = nil
+set _G@(string.rep("p", 400)) = nil
+
+loop {
+  var g = [x=func () {
+    var a = debug.getinfo(2)
+    assert((a.name == 'f') && (a.namewhat == 'local'))
+    set a = debug.getinfo(1)
+    assert((a.name == 'x') && (a.namewhat == 'field'))
+    return('xixi')
+  }]
+  var f
+  set f = func () {
+    return((1 + 1) && (!1 || g.x()))
+  }
+  assert(f() == 'xixi')
+  set g = debug.getinfo(f)
+  assert((g.what == "Lua") && (g.func == f) && (g.namewhat == "") && !g.name)
+
+  func f (x, name) {  ;; local!
+    set name = name || 'f'
+    val a = debug.getinfo(1)
+    assert((a.name == name) && (a.namewhat == 'local'))
+    return(x)
+  }
+
+  ;; breaks in different conditions
+  if 3 > 4 {
+    break()
+  }
+  f()
+  if 3 < 4 {
+    set a = 1
+  } else {
+    break()
+  }
+  f()
+  loop {
+    while(1)
+    val x = 10
+    break()
+  }
+  f()
+  val b = 1
+  if 3 > 4 {
+    return(math.sin(1))
+  }
+  f()
+  set a = 3 < 4
+  f()
+  set a = (3 < 4) || 1
+  f()
+  loop {
+    val x = 20
+    if 4 > 3 {
+      f()
+    } else {
+      break()
+    }
+    f()
+    until(1)
+  }
+  set g = []
+  set f(g).x = f(2) && (f(10) + f(9))
+  assert(g.x == f(19))
+  func g (x) {
+    if !x {
+      return(3)
+    }
+    return((x('a', 'x')))
+  }
+  assert(g(f) == 'a')
+  until(1)
+}
+
+test_("""if
+math.sin(1)
+{
+  set a = 1
+} else {
+  set a = 2
+}
+""", [2, 4, 7])
+
+test_("""val func foo () {
+}
+foo()
+set A = 1
+set A = 2
+set A = 3
+""", [2, 3, 2, 4, 5, 6])
+set _G.A = nil
+
+test_(""";;
+if nil {
+  set a = 1
+} else {
+  set a = 2
+}
+""", [2, 5, 6])
+
+test_("""set a = 1
+loop {
+  set a = a + 1
+  until(a == 3) }
+""", [1, 3, 4, 3, 4])
+
+test_(""" do {
+  return()
+}
+""", [2])
+
+test_("""var a
+set a = 1
+loop { while(a <= 3)
+  set a = a + 1
+}
+""", [1, 2, 3, 4, 3, 4, 3, 4, 3, 5])
+
+test_("""loop { while(math.sin(1))
+  if math.sin(1)
+  { break()
+  }
+}
+set a = 1""", [1, 2, 3, 6])
+
+test_("""loop i in (1, 3) {
+  set a = i
+}
+""", [1, 2, 1, 2, 1, 2, 1, 3])
+
+test_("""loop i, v in pairs(['a', 'b']) {
+  set a = tostring(i) ++ v
+}
+""", [1, 2, 1, 2, 1, 3])
+
+test_("""loop i in (1, 4) { set a = 1 }""", [1, 1, 1, 1])
+
+set _G.a = nil
+
+do {  ;; testing line info/trace with large gaps in source
+
+  val a = [1, 2, 3, 10, 124, 125, 126, 127, 128, 129, 130, 255, 256, 257, 500, 1000]
+  val s = """     var b = [10]
+     set a = b@(1) X + Y b@(1)
+     set b = 4
+  """
+
+  loop _, i in ipairs(a) {
+    val subs = [X=string.rep("\n", i)]
+    loop _, j in ipairs(a) {
+      set subs.Y = string.rep("\n", j)
+      val s = string.gsub(s, "[XY]", subs)
+      test_(s, [1, 2 + i, 2 + i + j, 2 + i, 2 + i + j, 3 + i + j])
+    }
+  }
+}
+set _G.a = nil
+
+do {  ;; testing active lines
+  val func checkactivelines (f, lines) {
+    val t = debug.getinfo(f, "SL")
+    loop _, l in pairs(lines) {
+      set l = l + t.linedefined
+      assert(t.activelines@(l))
+      set t.activelines@(l) = undef
+    }
+    assert(next(t.activelines) == nil)  ;; no extra lines
+  }
+
+  checkactivelines(func (...) {
+    ;; vararg function
+    ;; 1st line is empty
+    ;; 2nd line is empty
+    ;; 3th line is empty
+    val a = 20
+    ;; 5th line is empty
+    val b = 30
+    ;; 7th line is empty
+  }, [4, 6, 8])
+
+  checkactivelines(func (a) {
+    ;; 1st line is empty
+    ;; 2nd line is empty
+    val a = 20
+    val b = 30
+    ;; 5th line is empty
+  }, [3, 4, 6])
+
+  checkactivelines(func (a, b, ...) {}, [0])
+
+  checkactivelines(func (a, b) {}, [1])
+
+  loop _, n in pairs([0, 1, 2, 10, 50, 100, 1000, 10000]) {
+    checkactivelines(load(string.format("%s 1", string.rep("\n", n))), [n + 1])
+  }
+}
+
+print('+')
+
+;; invalid levels in [gs]etlocal
+assert(!pcall(debug.getlocal, 20, 1))
+assert(!pcall(debug.setlocal, -1, 1, 10))
+assert(!debug.getlocal(test_, -2147483648))
+
+;; parameter names
+var foo
+set foo = func (a, b, ...) {
+  val d, e
+}
+var co = coroutine.create(foo)
+
+assert(debug.getlocal(foo, 1) == 'a')
+assert(debug.getlocal(foo, 2) == 'b')
+assert(!debug.getlocal(foo, 3))
+assert(debug.getlocal(co, foo, 1) == 'a')
+assert(debug.getlocal(co, foo, 2) == 'b')
+assert(!debug.getlocal(co, foo, 3))
+
+assert(!debug.getlocal(print, 1))
+
+var foo
+set foo = func () {
+  return((debug.getlocal(1, -1)))
+}
+assert(!foo(10))
+
+;; varargs
+var foo
+set foo = func (a, ...) {
+  val t = table.pack(...)
+  loop i in (1, t.n) {
+    val n, v = debug.getlocal(1, -i)
+    assert((n == "(vararg)") && (v == t@(i)))
+  }
+  assert(!debug.getlocal(1, -(t.n + 1)))
+  assert(!debug.setlocal(1, -(t.n + 1), 30))
+  if t.n > 0 {
+    (func (x) {
+      assert(debug.setlocal(2, -1, x) == "(vararg)")
+      assert(debug.setlocal(2, -t.n, x) == "(vararg)")
+    })(430)
+    assert(... == 430)
+  }
+}
+
+foo()
+foo(print)
+foo(200, 3, 4)
+var a = []
+loop i in (1, ((_soft && 100) || 1000)) {
+  set a@(i) = i
+}
+foo(table.unpack(a))
+
+do {  ;; test hook presence in debug info
+  assert(!debug.gethook())
+  var count = 0
+  val func f () {
+    assert(debug.getinfo(1).namewhat == "hook")
+    val sndline = string.match(debug.traceback(), "\n(.-)\n")
+    assert(string.find(sndline, "hook"))
+    set count = count + 1
+  }
+  debug.sethook(f, "l")
+  var a = 0
+  set _ENV.a = a
+  set a = 1
+  debug.sethook()
+  assert(count == 4)
+}
+set _ENV.a = nil
+
+;; hook table has weak keys
+assert(getmetatable(debug.getregistry()._HOOKKEY).__mode == 'k')
+
+set a = []
+var L = nil
+var glob = 1
+var oldglob = glob
+debug.sethook(func (e, l) {
+  collectgarbage()  ;; force GC during a hook
+  val f, m, c = debug.gethook()
+  assert((m == 'crl') && (c == 0))
+  ifs {
+    e == "line" => {
+      if glob != oldglob {
+        set L = l - 1  ;; get the first line where "glob" has changed
+        set oldglob = glob
+      }
+    }
+    e == "call" => {
+      val f = debug.getinfo(2, "f").func
+      set a@(f) = 1
+    }
+    else => {
+      assert(e == "return")
+    }
+  }
+}, "crl")
+
+func f (a, b) {
+  ;; declare some globals to check that they don't interfere with 'getlocal'
+  ;; (global collectgarbage)
+  collectgarbage()
+  var _, x = debug.getlocal(1, 1)
+  ;; (global assert, g, string)
+  val _, y = debug.getlocal(1, 2)
+  assert((x == a) && (y == b))
+  assert(debug.setlocal(2, 4, "pera") == ("AA" ++ "AA"))
+  assert(debug.setlocal(2, 5, "manga") == "B")
+  set x = debug.getinfo(2)
+  assert((x.func == g) && (x.what == "Lua") && (x.name == 'g') && (x.nups == 2) && string.find(x.source, "^@.*db%.atm$"))
+  set glob = glob + 1
+  assert(debug.getinfo(1, "l").currentline == (L + 1))
+  assert(debug.getinfo(1, "l").currentline == (L + 2))
+}
+
+func foo () {
+  set glob = glob + 1
+  assert(debug.getinfo(1, "l").currentline == (L + 1))
+}; foo()  ;; set L
+;; check line counting inside strings and empty lines
+
+val _ = 'alo\
+alo' ++ """
+
+"""
+;;;
+;;;
+assert(debug.getinfo(1, "l").currentline == (L + 11))  ;; check count of lines
+
+func g (...) {
+  val arg = [...]
+  do {
+    var a, b, c
+    set a = math.sin(40)
+  }
+  val feijao
+  val AAAA, B = ("xuxu", "abacate")
+  f(AAAA, B)
+  assert((AAAA == "pera") && (B == "manga"))
+  do {
+    ;; (global *)
+    val B = 13
+    ;; (global <const> assert)
+    val x, y = debug.getlocal(1, 6)
+    assert((x == 'B') && (y == 13))
+  }
+}
+
+g()
+
+assert(a@(f) && a@(g) && a@(assert) && a@(debug.getlocal) && !a@(print))
+
+;; tests for manipulating non-registered locals (C and Lua temporaries)
+
+val n, v = debug.getlocal(0, 1)
+assert((v == 0) && (n == "(C temporary)"))
+val n, v = debug.getlocal(0, 2)
+assert((v == 2) && (n == "(C temporary)"))
+assert(!debug.getlocal(0, 3))
+assert(!debug.getlocal(0, 0))
+
+func f () {
+  assert(select(2, debug.getlocal(2, 3)) == 1)
+  assert(!debug.getlocal(2, 4))
+  debug.setlocal(2, 3, 10)
+  return(20)
+}
+
+func g (a, b) {
+  return((a + 1) + f())
+}
+
+assert(g(0, 0) == 30)
+
+set _G.f, _G.g = nil
+
+debug.sethook(nil)
+assert(!debug.gethook())
+
+;; minimal tests for setuservalue/getuservalue
+do {
+  assert(!debug.setuservalue(io.stdin, 10))
+  val a, b = debug.getuservalue(io.stdin, 10)
+  assert((a == nil) && !b)
+}
+
+;; testing interaction between multiple values x hooks
+do {
+  val func f (...) {
+    return(3, ...)
+  }
+  var count = 0
+  val a = []
+  loop i in (1, 100) {
+    set a@(i) = i
+  }
+  debug.sethook(func () {
+    set count = count + 1
+  }, "", 1)
+  var t = [table.unpack(a)]
+  assert(#t == 100)
+  set t = [table.unpack(a, 1, 3)]
+  assert(#t == 3)
+  set t = [f(table.unpack(a, 1, 30))]
+  assert(#t == 31)
+}
+
+;; testing access to function arguments
+
+val func collectlocals (level) {
+  val tab = []
+  loop i in (1, math.huge) {
+    val n, v = debug.getlocal(level + 1, i)
+    if !((n && string.find(n, "^[a-zA-Z0-9_]+$")) || (n == "(vararg table)")) {
+
+      break()  ;; consider only real variables
+    }
+    set tab@(n) = v
+  }
+  return(tab)
+}
+
+var X = nil
+set a = []
+func a::f (a, b, ...) {
+  val arg = [...]
+  val c = 13
+}
+debug.sethook(func (e) {
+  assert(e == "call")
+  dostring("set XX = 12")  ;; test dostring inside hooks
+  ;; testing errors inside hooks
+  assert(!pcall(load("set a = 'joao' + 1")))
+  debug.sethook(func (e, l) {
+    assert(debug.getinfo(2, "l").currentline == l)
+    val f, m, c = debug.gethook()
+    assert(e == "line")
+    assert((m == 'l') && (c == 0))
+    debug.sethook(nil)  ;; hook is called only once
+    assert(!X)  ;; check that
+    set X = collectlocals(2)
+  }, "l")
+}, "c")
+
+a::f(1, 2, 3, 4, 5)
+assert((X.self == a) && (X.a == 1) && (X.b == 2) && (X.c == nil))
+assert(XX == 12)
+assert(!debug.gethook())
+set _G.XX = nil
+
+;; testing access to local variables in return hook (bug in 5.2)
+do {
+  var X = false
+
+  val func foo (a, b, ...) {
+    do {
+      val x, y, z
+    }
+    val c, d = (10, 20)
+    return()
+  }
+
+  val func aux () {
+    if debug.getinfo(2).name == "foo" {
+      set X = true  ;; to signal that it found 'foo'
+      val tab = [a=100, b=200, c=10, d=20]
+      loop n, v in pairs(collectlocals(2)) {
+        assert(tab@(n) == v)
+        set tab@(n) = undef
+      }
+      assert(next(tab) == nil)  ;; 'tab' must be empty
+    }
+  }
+
+  debug.sethook(aux, "r")
+  foo(100, 200)
+  debug.sethook()
+  assert(X)
+}
+
+val func eqseq (t1, t2) {
+  assert(#t1 == #t2)
+  loop i in (1, #t1) {
+    assert(t1@(i) == t2@(i))
+  }
+}
+
+do {
+  print("testing inspection of parameters/returned values")
+  var on_ = false
+  var inp, out
+
+  val func hook (event) {
+    if !on_ {
+      return()
+    }
+    val ar = debug.getinfo(2, "ruS")
+    val t = []
+    loop i in (ar.ftransfer, (ar.ftransfer + ar.ntransfer) - 1) {
+      val _, v = debug.getlocal(2, i)
+      set t@(#t + 1) = v
+    }
+    if event == "return" {
+      set out = t
+    } else {
+      set inp = t
+    }
+  }
+
+  debug.sethook(hook, "cr")
+
+  set on_ = true
+  math.sin(3)
+  set on_ = false
+  eqseq(inp, [3])
+  eqseq(out, [math.sin(3)])
+
+  set on_ = true
+  select(2, 10, 20, 30, 40)
+  set on_ = false
+  eqseq(inp, [2, 10, 20, 30, 40])
+  eqseq(out, [20, 30, 40])
+
+  val func foo (a, ...) {
+    return(...)
+  }
+  val func foo1 () {
+    set on_ = !on_
+    return(foo(20, 10, 0))
+  }
+  foo1()
+  set on_ = false
+  eqseq(inp, [20])
+  eqseq(out, [10, 0])
+
+  debug.sethook()
+}
+
+;; testing upvalue access
+val func getupvalues (f) {
+  val t = []
+  var i = 1
+  loop {
+    while(true)
+    val name, value = debug.getupvalue(f, i)
+    if !name {
+      break()
+    }
+    assert(!t@(name))
+    set t@(name) = value
+    set i = i + 1
+  }
+  return(t)
+}
+
+var a, b, c = (1, 2, 3)
+val func foo1 (a) {
+  set b = a
+  return(c)
+}
+val func foo2 (x) {
+  set a = x
+  return(c + b)
+}
+assert(!debug.getupvalue(foo1, 3))
+assert(!debug.getupvalue(foo1, 0))
+assert(!debug.setupvalue(foo1, 3, "xuxu"))
+var t = getupvalues(foo1)
+assert((t.a == nil) && (t.b == 2) && (t.c == 3))
+set t = getupvalues(foo2)
+assert((t.a == 1) && (t.b == 2) && (t.c == 3))
+assert(debug.setupvalue(foo1, 1, "xuxu") == "b")
+assert(([debug.getupvalue(foo2, 3)])@(2) == "xuxu")
+;; upvalues of C functions are always named "" (the empty string)
+assert(debug.getupvalue(string.gmatch("x", "x"), 1) == "")
+
+;; testing count hooks
+var a = 0
+debug.sethook(func (e) {
+  set a = a + 1
+}, "", 1)
+set a = 0
+loop i in (1, 1000) {
+}
+assert((1000 < a) && (a < 1012))
+debug.sethook(func (e) {
+  set a = a + 1
+}, "", 4)
+set a = 0
+loop i in (1, 1000) {
+}
+assert((250 < a) && (a < 255))
+var f, m, c = debug.gethook()
+assert((m == "") && (c == 4))
+debug.sethook(func (e) {
+  set a = a + 1
+}, "", 4000)
+set a = 0
+loop i in (1, 1000) {
+}
+assert(a == 0)
+
+do {
+  debug.sethook(print, "", (2 ** 24) - 1)  ;; count upperbound
+  val f, m, c = debug.gethook()
+  assert(([debug.gethook()])@(3) == ((2 ** 24) - 1))
+}
+
+debug.sethook()
+
+var g, g1
+
+;; tests for tail calls
+var f
+set f = func (x) {
+  if x {
+    assert(debug.getinfo(1, "S").what == "Lua")
+    assert(debug.getinfo(1, "t").istailcall == true)
+    val tail = debug.getinfo(2)
+    assert((tail.func == g1) && (tail.istailcall == true))
+    assert(debug.getinfo(3, "S").what == "main")
+    print("+")
+  }
+}
+
+assert(debug.getinfo(print, 't').istailcall == false)
+assert(debug.getinfo(print, 't').extraargs == 0)
+
+func g (x) {
+  return(f(x))
+}
+
+func g1 (x) {
+  g(x)
+}
+
+val func h (x) {
+  val f = g1
+  return(f(x))
+}
+
+h(true)
+
+var b = []
+debug.sethook(func (e) {
+  table.insert(b, e)
+}, "cr")
+h(false)
+debug.sethook()
+val res = ["return", "call", "tail call", "call", "tail call", "return", "return", "call"]
+;; first return (from sethook)
+
+;; last call (to sethook)
+
+loop i in (1, #res) {
+  assert(res@(i) == table.remove(b, 1))
+}
+
+set b = 0
+debug.sethook(func (e) {
+  if e == "tail call" {
+    set b = b + 1
+    assert(debug.getinfo(2, "t").istailcall == true)
+  } else {
+    assert(debug.getinfo(2, "t").istailcall == false)
+  }
+}, "c")
+h(false)
+debug.sethook()
+assert(b == 2)  ;; two tail calls
+
+val lim = (_soft && 3000) || 30000
+var foo
+set foo = func (x) {
+  if x == 0 {
+    assert(debug.getinfo(2).what == "main")
+    val info = debug.getinfo(1)
+    assert((info.istailcall == true) && (info.func == foo))
+  } else {
+    return(foo(x - 1))
+  }
+}
+
+foo(lim)
+
+print("+")
+
+;; testing local function information
+set co = load("""  val A = func () {
+    x
+  }
+  return()
+""")
+
+var a = 0
+;; 'A' should be visible to debugger only after its complete definition
+debug.sethook(func (e, l) {
+  ifs {
+    l == 3 => {
+      set a = a + 1
+      assert(debug.getlocal(2, 1) == "(temporary)")
+    }
+    l == 4 => {
+      set a = a + 1
+      assert(debug.getlocal(2, 1) == "A")
+    }
+  }
+}, "l")
+co()  ;; run local function definition
+debug.sethook()  ;; turn off hook
+assert(a == 2)  ;; ensure all two lines where hooked
+
+;; testing traceback
+
+assert(debug.traceback(print) == print)
+assert(debug.traceback(print, 4) == print)
+assert(string.find(debug.traceback("hi", 4), "^hi\n"))
+assert(string.find(debug.traceback("hi"), "^hi\n"))
+assert(!string.find(debug.traceback("hi"), "'debug.traceback'"))
+assert(string.find(debug.traceback("hi", 0), "'traceback'"))
+assert(string.find(debug.traceback(), "^stack traceback:\n"))
+
+do {  ;; C-function names in traceback
+  val st, msg = (func () {
+    return(pcall)
+  })()(debug.traceback)
+  assert((st == true) && string.find(msg, "pcall"))
+}
+
+;; testing nparams, nups e isvararg
+var t = debug.getinfo(print, "u")
+assert((t.isvararg == true) && (t.nparams == 0) && (t.nups == 0))
+
+set t = debug.getinfo(func (a, b, c) {}, "u")
+assert((t.isvararg == false) && (t.nparams == 3) && (t.nups == 0))
+
+set t = debug.getinfo(func (a, b, ...) {
+  return(t@(a))
+}, "u")
+assert((t.isvararg == true) && (t.nparams == 2) && (t.nups == 1))
+
+set t = debug.getinfo(func (a, b, ...) {
+  val t = table.pack(...)
+  set t.n = 2
+  return(t@(a))
+}, "u")
+assert((t.isvararg == true) && (t.nparams == 2) && (t.nups == 0))
+
+set t = debug.getinfo(1)  ;; main
+assert((t.isvararg == true) && (t.nparams == 0) && (t.nups == 1) && (debug.getupvalue(t.func, 1) == "_ENV"))
+
+set t = debug.getinfo(math.sin)  ;; C function
+assert((t.isvararg == true) && (t.nparams == 0) && (t.nups == 0))
+
+set t = debug.getinfo(string.gmatch("abc", "a"))  ;; C closure
+assert((t.isvararg == true) && (t.nparams == 0) && (t.nups > 0))
+
+;; testing debugging of coroutines
+
+val func checktraceback (co, p, level) {
+  val tb = debug.traceback(co, nil, level)
+  var i = 0
+  loop l in string.gmatch(tb, "[^\n]+\n?") {
+    assert((i == 0) || string.find(l, p@(i)))
+    set i = i + 1
+  }
+  assert(p@(i) == undef)
+}
+
+var f
+set f = func (n) {
+  if n > 0 {
+    f(n - 1)
+  } else {
+    coroutine.yield()
+  }
+}
+
+var co = coroutine.create(f)
+coroutine.resume(co, 3)
+checktraceback(co, ["yield", "db.atm", "db.atm", "db.atm", "db.atm"])
+checktraceback(co, ["db.atm", "db.atm", "db.atm", "db.atm"], 1)
+checktraceback(co, ["db.atm", "db.atm", "db.atm"], 2)
+checktraceback(co, ["db.atm"], 4)
+checktraceback(co, [], 40)
+
+set co = coroutine.create(func (x) {
+  val a = 1
+  coroutine.yield(debug.getinfo(1, "l"))
+  coroutine.yield(debug.getinfo(1, "l").currentline)
+  return(a)
+})
+
+val tr = []
+val func foo (e, l) {
+  if l {
+    table.insert(tr, l)
+  }
+}
+debug.sethook(co, foo, "lcr")
+
+val _, l = coroutine.resume(co, 10)
+val x = debug.getinfo(co, 1, "lfLS")
+assert((x.currentline == l.currentline) && x.activelines@(x.currentline))
+assert(type(x.func) == "function")
+loop i in (x.linedefined + 1, x.lastlinedefined) {
+  assert(x.activelines@(i))
+  set x.activelines@(i) = undef
+}
+assert(next(x.activelines) == nil)  ;; no 'extra' elements
+assert(!debug.getinfo(co, 2))
+var a, b = debug.getlocal(co, 1, 1)
+assert((a == "x") && (b == 10))
+set a, b = debug.getlocal(co, 1, 2)
+assert((a == "a") && (b == 1))
+debug.setlocal(co, 1, 2, "hi")
+assert(debug.gethook(co) == foo)
+assert((#tr == 2) && (tr@(1) == (l.currentline - 1)) && (tr@(2) == l.currentline))
+
+set a, b, c = pcall(coroutine.resume, co)
+assert(a && b && (c == (l.currentline + 1)))
+checktraceback(co, ["yield", "in function <"])
+
+set a, b = coroutine.resume(co)
+assert(a && (b == "hi"))
+assert((#tr == 4) && (tr@(4) == (l.currentline + 2)))
+assert(debug.gethook(co) == foo)
+assert(!debug.gethook())
+checktraceback(co, [])
+
+;; check get/setlocal in coroutines
+set co = coroutine.create(func (x) {
+  val a, b = coroutine.yield(x)
+  assert((a == 100) && (b == nil))
+  return(x)
+})
+set a, b = coroutine.resume(co, 10)
+assert(a && (b == 10))
+set a, b = debug.getlocal(co, 1, 1)
+assert((a == "x") && (b == 10))
+assert(!debug.getlocal(co, 1, 5))
+assert(debug.setlocal(co, 1, 1, 30) == "x")
+assert(!debug.setlocal(co, 1, 5, 40))
+set a, b = coroutine.resume(co, 100)
+assert(a && (b == 30))
+
+;; check traceback of suspended (or dead with error) coroutines
+
+func f (i) {
+  if i == 0 {
+    error(i)
+  } else {
+    coroutine.yield()
+    f(i - 1)
+  }
+}
+
+set co = coroutine.create(func (x) {
+  f(x)
+})
+set a, b = coroutine.resume(co, 3)
+set t = ["'yield'", "'f'", "in function <"]
+loop {
+  while(coroutine.status(co) == "suspended")
+  checktraceback(co, t)
+  set a, b = coroutine.resume(co)
+  table.insert(t, 2, "'f'")  ;; one more recursive call to 'f'
+}
+set t@(1) = "'error'"
+checktraceback(co, t)
+
+;; test accessing line numbers of a coroutine from a resume inside
+;; a C function (this is a known bug in Lua 5.0)
+
+val func g (x) {
+  coroutine.yield(x)
+}
+
+val func f (i) {
+  debug.sethook(func () {}, "l")
+  loop j in (1, 1000) {
+    g(i + j)
+  }
+}
+
+val co = coroutine.wrap(f)
+co(10)
+pcall(co)
+pcall(co)
+
+assert(type(debug.getregistry()) == "table")
+
+;; test tagmethod information
+val a = []
+val func f (t) {
+  val info = debug.getinfo(1)
+  assert(info.namewhat == "metamethod")
+  set a.op = info.name
+  return(info.name)
+}
+setmetatable(a, [__index=f, __add=f, __div=f, __mod=f, __concat=f, __pow=f, __mul=f, __idiv=f, __unm=f, __len=f, __sub=f, __eq=f, __le=f, __lt=f, __unm=f, __len=f])
+
+val b = setmetatable([], getmetatable(a))
+
+assert((a@(3) == "index") && ((a ** 3) == "pow") && ((a ++ a) == "concat"))
+assert(((a / 3) == "div") && ((3 % a) == "mod"))
+assert(((a + 3) == "add") && ((3 - a) == "sub") && ((a * 3) == "mul") && (-a == "unm") && (#a == "len"))
+assert(((a + 30000) == "add") && ((a - 3.0) == "sub") && ((a * 3.0) == "mul") && (-a == "unm") && (#a == "len"))
+assert((a == b) && (a.op == "eq"))
+assert((a >= b) && (a.op == "le"))
+assert(("x" >= a) && (a.op == "le"))
+assert((a > b) && (a.op == "lt"))
+assert((a > 10) && (a.op == "lt"))
+
+
+do {  ;; testing for-iterator name
+  val func f () {
+    assert(debug.getinfo(1).name == "for iterator")
+  }
+
+  loop i in f {
+  }
+}
+
+do {  ;; testing debug info for finalizers
+  var name = nil
+
+  ;; create a piece of garbage with a finalizer
+  setmetatable([], [__gc=func () {
+    val t = debug.getinfo(1)  ;; get function information
+    assert(t.namewhat == "metamethod")
+    set name = t.name
+  }])
+
+  ;; repeat until previous finalizer runs (setting 'name')
+  loop {
+    val a = []
+    until(name)
+  }
+  assert(name == "__gc")
+}
+
+do {
+  print("testing traceback sizes")
+
+  val func countlines (s) {
+    return(select(2, string.gsub(s, "\n", "")))
+  }
+
+  var deep
+  set deep = func (lvl, n) {
+    if lvl == 0 {
+      return((debug.traceback("message", n)))
+    } else {
+      return((deep(lvl - 1, n)))
+    }
+  }
+
+  val func checkdeep (total, start) {
+    val s = deep(total, start)
+    val rest = string.match(s, "^message\nstack traceback:\n(.*)$")
+    val cl = countlines(rest)
+    ;; at most 10 lines in first part, 11 in second, plus '...'
+    assert(cl <= (10 + 11 + 1))
+    val brk = string.find(rest, "%.%.%.\t%(skip")
+    if brk {  ;; does message have '...'?
+      val rest1 = string.sub(rest, 1, brk)
+      val rest2 = string.sub(rest, brk, #rest)
+      assert((countlines(rest1) == 10) && (countlines(rest2) == 11))
+    } else {
+      assert(cl == ((total - start) + 2))
+    }
+  }
+
+  loop d in (1, 51, 10) {
+    loop l in (1, d) {
+      ;; use coroutines to ensure complete control of the stack
+      coroutine.wrap(checkdeep)(d, l)
+    }
+  }
+}
+
+print("testing debug functions on chunk without debug info")
+val prog = """;; program to be loaded without debug information (strip)
+val debug = require('debug')
+var a = 12  ;; a local variable
+
+var n, v = debug.getlocal(1, 1)
+assert((n == "(temporary)") && (v == debug))   ;; unknown name but known value
+set n, v = debug.getlocal(1, 2)
+assert((n == "(temporary)") && (v == 12))   ;; unknown name but known value
+
+;; a function with an upvalue
+var f = func () { val x; a }
+set n, v = debug.getupvalue(f, 1)
+assert((n == "(no name)") && (v == 12))
+assert(debug.setupvalue(f, 1, 13) == "(no name)")
+assert(a == 13)
+
+var t = debug.getinfo(f)
+assert((t.name == nil) && (t.linedefined > 0) &&
+       (t.lastlinedefined == t.linedefined) &&
+       (t.short_src == "?"))
+assert(debug.getinfo(1).currentline == -1)
+
+set t = debug.getinfo(f, "L").activelines
+assert(next(t) == nil)    ;; active lines are empty
+
+;; dump/load a function without debug info
+set f = load(string.dump(f))
+
+set t = debug.getinfo(f)
+assert((t.name == nil) && (t.linedefined > 0) &&
+       (t.lastlinedefined == t.linedefined) &&
+       (t.short_src == "?"))
+assert(debug.getinfo(1).currentline == -1)
+
+a
+"""
+
+;; load 'prog' without debug info
+val f = assert(load(string.dump(load(prog), true)))
+
+assert(f() == 13)
+
+do {  ;; bug in 5.4.0: line hooks in stripped code
+  val func foo () {
+    val a = 1
+    val b = 2
+    return(b)
+  }
+
+  val s = load(string.dump(foo, true))
+  var line = true
+  debug.sethook(func (e, l) {
+    assert(e == "line")
+    set line = l
+  }, "l")
+  assert(s() == 2)
+  debug.sethook(nil)
+  assert(line == nil)  ;; hook called without debug info for 1st instruction
+}
+
+do {  ;; tests for 'source' in binary dumps
+  val prog = """    func (x) {
+      func (y) {
+        x + y
+      }
+    }
+  """
+
+  val name = string.rep("x", 1000)
+  val p = assert(load(prog, name))
+  ;; load 'p' as a binary chunk with debug information
+  val c = string.dump(p)
+  assert((#c > 1000) && (#c < 2000))  ;; no repetition of 'source' in dump
+  val f = assert(load(c))
+  val g = f()
+  val h = g(3)
+  assert(h(5) == 8)
+  assert((debug.getinfo(f).source == name) && (debug.getinfo(g).source == name) && (debug.getinfo(h).source == name))
+  ;; all functions have 'source'
+
+  ;; again, without debug info
+  val c = string.dump(p, true)
+  assert(#c < 500)  ;; no 'source' in dump
+  val f = assert(load(c))
+  val g = f()
+  val h = g(30)
+  assert(h(50) == 80)
+  assert((debug.getinfo(f).source == '=?') && (debug.getinfo(g).source == '=?') && (debug.getinfo(h).source == '=?'))
+  ;; no function has 'source'
+}
+
+print("OK")
