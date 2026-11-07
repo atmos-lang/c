@@ -1450,7 +1450,7 @@ static int parenlist (LexState *ls, expdesc *v) {
   int n;
   luaX_next(ls);  /* skip '(' */
   if (ls->t.token == ')')
-    luaX_syntaxerror(ls, "expected expression");
+    luaX_syntaxerror(ls, "unexpected symbol");
   n = explist(ls, v);
   check_match(ls, ')', '(', line);
   if (n == 1)
@@ -1549,7 +1549,7 @@ static void primaryexp (LexState *ls, expdesc *v) {
     case TK_DO: dostat(ls, v); return;
     case TK_LOOP: loopstat(ls, v); return;
     default: {
-      luaX_syntaxerror(ls, "expected expression");
+      luaX_syntaxerror(ls, "unexpected symbol");
     }
   }
   luaX_next(ls);

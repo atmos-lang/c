@@ -425,11 +425,11 @@ prepfile("error([])")
 NoRun("error object is a table value", """lua %s""", prog)
 
 ;; chunk broken in many lines
-var s = """ ;;
+var s = ''' ;;
 func f ( x ) {
-  val a = \"\"\"
+  val a = """
 xuxu
-\"\"\"
+"""
   val b = "\
 xuxu\n"
   if x == 11 { return( 1 + 12 , 2 + 20 ) }  ;;; test multiple returns ;;;
@@ -438,7 +438,7 @@ xuxu\n"
 }
 ( f( 100 ) )
 assert( a == b )
-do { return( f( 11 ) ) }  """
+do { return( f( 11 ) ) }  '''
 
 set s = string.gsub(s, ' ', '\n\n')  ;; change all spaces for newlines
 prepfile(s)
@@ -500,7 +500,7 @@ NoRun("unrecognized option '-Ex'", "lua -Ex --")
 NoRun("unrecognized option '-vv'", "lua -vv")
 NoRun("unrecognized option '-iv'", "lua -iv")
 NoRun("'-e' needs argument", "lua -e")
-NoRun("syntax error", "lua -e =")
+NoRun("unexpected symbol", "lua -e =")
 NoRun("'-l' needs argument", "lua -l")
 NoRun("-i", "lua -- -i")  ;; handles -i as a script name
 

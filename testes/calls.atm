@@ -491,8 +491,8 @@ set _G.x = nil
 
 assert(!pcall(string.dump, print))  ;; no dump of C functions
 
-cannotload("expected expression", load(read1("*a = 123")))
-cannotload("expected expression", load("*a = 123"))
+cannotload("unexpected symbol", load(read1("*a = 123")))
+cannotload("unexpected symbol", load("*a = 123"))
 cannotload("hhi", load(func () {
   error("hhi")
 }))

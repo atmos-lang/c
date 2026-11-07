@@ -1121,8 +1121,7 @@ do {  ;; bug in 5.4.0: line hooks in stripped code
     assert(e == "line")
     set line = l
   }, "l")
-  assert(s() == 2)
-  debug.sethook(nil)
+  assert(s() == 2); debug.sethook(nil)
   assert(line == nil)  ;; hook called without debug info for 1st instruction
 }
 

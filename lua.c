@@ -638,7 +638,6 @@ static void checklocal (const char *line) {
 static int multiline (lua_State *L) {
   size_t len;
   const char *line = lua_tolstring(L, 1, &len);  /* get first line */
-  checklocal(line);
   for (;;) {  /* repeat until gets a complete statement */
     int status = luaL_loadbufferx(L, line, len, "=stdin", "t");  /* try it */
     if (!incomplete(L, status) || !pushline(L, 0))
@@ -664,7 +663,8 @@ static int loadline (lua_State *L) {
   lua_settop(L, 0);
   if (!pushline(L, 1))
     return -1;  /* no input */
-  if ((status = addreturn(L)) != LUA_OK)  /* 'return ...' did not work? */
+  checklocal(lua_tostring(L, 1));
+  if ((status = addreturn(L)) != LUA_OK)  /* single line did not work? */
     status = multiline(L);  /* try as command, maybe with continuation lines */
   line = lua_tostring(L, 1);
   if (line[0] != '\0')  /* non empty? */
