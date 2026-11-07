@@ -33,7 +33,15 @@ the `.lua` originals were removed. Dropped, with the reason:
 See `tools/README.md` for the conversion rules and the language semantics
 the converted tests assume.
 
-## 3. Tail calls
+## 3. Expression-based language
+
+See [expressions.md](expressions.md): how statement values are
+implemented (value register, no hidden locals, no block closures), what
+the converted Lua suite does and does not exercise, and the open points
+(functions ending in a call return its first value; truncation to one
+value; `match`/`where`/`catch`/pipes pending).
+
+## 4. Tail calls
 
 - Tail call optimization is bad for error messages / tracebacks
   (`(...tail calls...)`). Could it be disabled? Or made explicit
