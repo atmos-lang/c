@@ -1,0 +1,201 @@
+;; $Id: testes/cstack.lua $
+;; See Copyright Notice in file lua.h
+
+val tracegc = require("tracegc")
+
+print("testing stack overflow detection")
+
+;; Segmentation faults in these tests probably result from a C-stack
+;; overflow. To avoid these errors, you should set a smaller limit for
+;; the use of C stack by Lua, by changing the constant 'LUAI_MAXCCALLS'.
+;; Alternatively, you can ensure a larger stack for the program.
+
+val func checkerror (msg, f, ...) {
+  val s, err = pcall(f, ...)
+  assert(!s && string.find(err, msg))
+}
+
+do {
+  print("testing stack overflow in message handling")
+  var count = 0
+  var loop_
+  set loop_ = func (x, y, z) {
+    set count = count + 1
+    return(1 + loop_(x, y, z))
+  }
+  tracegc.stop()  ;; __gc should not be called with a full stack
+  val res, msg = xpcall(loop_, loop_)
+  tracegc.start()
+  assert(msg == "error in error handling")
+  print("final count: ", count)
+}
+
+;; bug since 2.5 (C-stack overflow in recursion inside pattern matching)
+do {
+  print("testing recursion inside pattern matching")
+  val func f (size) {
+    val s = string.rep("a", size)
+    val p = string.rep(".?", size)
+    return(string.match(s, p))
+  }
+  val m = f(80)
+  assert(#m == 80)
+  checkerror("too complex", f, 2000)
+}
+
+do {
+  print("testing stack-overflow in recursive 'gsub'")
+  var count = 0
+  var foo
+  set foo = func () {
+    set count = count + 1
+    string.gsub("a", ".", foo)
+  }
+  checkerror("stack overflow", foo)
+  print("final count: ", count)
+
+  print("testing stack-overflow in recursive 'gsub' with metatables")
+  var count = 0
+  val t = setmetatable([], [__index=foo])
+  set foo = func () {
+    set count = count + 1
+    string.gsub("a", ".", t)
+  }
+  checkerror("stack overflow", foo)
+  print("final count: ", count)
+}
+
+do {  ;; bug in 5.4.0
+  print("testing limits in coroutines inside deep calls")
+  var count = 0
+  val lim = 1000
+  var stack
+  set stack = func (n) {
+    if n > 0 {
+      return(stack(n - 1) + 1)
+    } else {
+      coroutine.wrap(func () {
+        set count = count + 1
+        stack(lim)
+      })()
+    }
+  }
+
+  val st, msg = xpcall(stack, func () {
+    return("ok")
+  }, lim)
+  assert(!st && (msg == "ok"))
+  print("final count: ", count)
+}
+
+do {  ;; bug since 5.4.0
+  var count = 0
+  print("chain of 'coroutine.close'")
+  ;; create N coroutines forming a list so that each one, when closed,
+  ;; closes the previous one. (With a large enough N, previous Lua
+  ;; versions crash in this test.)
+  var coro = false
+  loop i in (1, 1000) {
+    val previous = coro
+    set coro = coroutine.create(func () {
+      pin cc = setmetatable([], [__close=func () {
+        set count = count + 1
+        if previous {
+          assert(coroutine.close(previous))
+        }
+      }])
+      coroutine.yield()  ;; leaves 'cc' pending to be closed
+    })
+    assert(coroutine.resume(coro))  ;; start it and run until it yields
+  }
+  val st, msg = coroutine.close(coro)
+  assert(!st && string.find(msg, "C stack overflow"))
+  print("final count: ", count)
+}
+
+do {
+  print("nesting of resuming yielded coroutines")
+  var count = 0
+
+  var body
+  set body = func () {
+    coroutine.yield()
+    val f = coroutine.wrap(body)
+    f()  ;; start new coroutine (will stop in previous yield)
+    set count = count + 1
+    f()  ;; call it recursively
+  }
+
+  val f = coroutine.wrap(body)
+  f()
+  assert(!pcall(f))
+  print("final count: ", count)
+}
+
+do {  ;; bug in 5.4.2
+  print("nesting coroutines running after recoverable errors")
+  var count = 0
+  var foo
+  set foo = func () {
+    set count = count + 1
+    pcall(1)  ;; create an error
+    ;; running now inside 'precover' ("protected recover")
+    coroutine.wrap(foo)()  ;; call another coroutine
+  }
+  checkerror("C stack overflow", foo)
+  print("final count: ", count)
+}
+
+if T {
+  print("testing stack recovery")
+  var N = 0  ;; trace number of calls
+  var LIM = -1  ;; will store N just before stack overflow
+
+  ;; trace stack size; after stack overflow, it should be
+  ;; the maximum allowed stack size.
+  var stack1
+  var dummy
+
+  val func err (msg) {
+    assert(string.find(msg, "stack overflow"))
+    val _, stacknow = T.stacklevel()
+    assert(stacknow == (stack1 + 200))
+  }
+
+  ;; When LIM==-1, the 'if' is not executed, so this function only
+  ;; counts and stores the stack limits up to overflow.  Then, LIM
+  ;; becomes N, and then the 'if' code is run when the stack is
+  ;; full. Then, there is a stack overflow inside 'xpcall', after which
+  ;; the stack must have been restored back to its maximum normal size.
+  var f
+  set f = func () {
+    set dummy, stack1 = T.stacklevel()
+    if N == LIM {
+      xpcall(f, err)
+      val _, stacknow = T.stacklevel()
+      assert(stacknow == stack1)
+      return()
+    }
+    set N = N + 1
+    f()
+  }
+
+  var topB, sizeB  ;; top and size Before overflow
+  var topA, sizeA  ;; top and size After overflow
+  set topB, sizeB = T.stacklevel()
+  tracegc.stop()  ;; __gc should not be called with a full stack
+  xpcall(f, err)
+  tracegc.start()
+  set topA, sizeA = T.stacklevel()
+  ;; sizes should be comparable
+  assert((topA == topB) && (sizeA < (sizeB * 2)))
+  print(string.format("maximum stack size: %d", stack1))
+  set LIM = N  ;; will stop recursion at maximum level
+  set N = 0  ;; to count again
+  tracegc.stop()  ;; __gc should not be called with a full stack
+  f()
+  tracegc.start()
+  print("+")
+}
+
+print('OK')
