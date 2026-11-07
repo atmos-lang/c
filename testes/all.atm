@@ -186,6 +186,7 @@ do {  ;; (
   ;; (goto.lua: dropped, no goto in Atmos)
   dofile('errors.atm')
   dofile('throw.atm')
+  dofile('catch.atm')
   dofile('math.atm')
   dofile('sort.atm', true)
   ;; (bitwise.lua: dropped, no bitwise operators in Atmos)

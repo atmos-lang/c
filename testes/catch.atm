@@ -1,0 +1,545 @@
+;; 'catch', 'throw' and 'defer'. See .claude/plans/catch.md and the
+;; reference tests (atmos-lang/atmos tst/exec.lua "CATCH / THROW",
+;; "DEFER").
+
+print("testing catch, throw and defer")
+
+val func count (...) {
+  select("#", ...)
+}
+
+;; output captured by a local 'print'
+var out = ""
+val func print (...) {
+  val t = table.pack(...)
+  loop i in (1, t.n) {
+    set t@i = tostring(t@i)
+  }
+  set out = out ++ table.concat(t, "\t") ++ "\n"
+}
+val func check (exp) {
+  assert(out == exp, out)
+  set out = ""
+}
+
+;; ---- catch / throw (reference tests)
+
+do {
+  print(:1)
+  catch :X {
+    print(:2)
+    throw(:X)
+    print(:3)
+  }
+  print(:4)
+  check("1\n2\n4\n")
+
+  print(:1)
+  catch true {
+    print(:2)
+    throw()
+    print(:3)
+  }
+  print(:4)
+  check("1\n2\n4\n")
+
+  print(:1)
+  catch :Y {
+    print(:2)
+    catch :X {
+      print(:3)
+      throw(:Y)
+      print(:4)
+    }
+    print(:5)
+  }
+  print(:6)
+  check("1\n2\n3\n6\n")
+
+  print(:1)
+  catch (func (e) { e == 10 }) {
+    print(:2)
+    catch (func (e) { e != 10 }) {
+      print(:3)
+      throw(10)
+      print(:4)
+    }
+    print(:5)
+  }
+  print(:6)
+  check("1\n2\n3\n6\n")
+
+  val ok, v = catch true {
+    throw(10)
+  }
+  print(ok, v)
+  check("false\t10\n")
+
+  val ok, v = catch true {
+    (10)
+  }
+  print(ok, v)
+  check("true\t10\n")
+
+  val a = 1
+  catch :X {
+    val b = 2
+    print(a + b)
+  }
+  check("3\n")
+
+  val _, x = catch :X {
+    catch :Y {
+      throw(:X [10])
+    }
+  }
+  print(x.tag, x@1)
+  check("X\t10\n")
+}
+
+;; ---- values of 'catch'
+
+do {
+  ;; no error: true + body values
+  val ok, a, b = catch :X { (1, 2) }
+  assert(ok && (a == 1) && (b == 2))
+  assert(count(catch :X { (1, 2) }) == 3)
+  val ok, a = catch :X { }
+  assert(ok && (a == nil) && (count(catch :X { }) == 1))
+  val ok, a = catch :X { print("x") }
+  assert(ok && (a == nil))
+  check("x\n")
+  ;; error: false + all the thrown values
+  val ok, a, b, c = catch :X { throw(:X, 2, 3) }
+  assert(!ok && (a == :X) && (b == 2) && (c == 3))
+  assert(count(catch :X { throw(:X, 2, 3) }) == 4)
+  assert(count(catch :X { throw(:X, nil, nil) }) == 4)
+  val ok, a = catch true { throw() }
+  assert(!ok && (a == "<no error object>"))
+  ;; the body is a block: locals, last expression as value
+  val ok, v = catch :X {
+    val x = 10
+    x + 1
+  }
+  assert(ok && (v == 11))
+  ;; the condition is evaluated before the body, once
+  var n = 0
+  val func cnd () { set n = n + 1; true }
+  val ok, v = catch cnd() {
+    set n = n + 10
+    throw(1)
+  }
+  assert(!ok && (v == 1) && (n == 11))
+  ;; 'catch' as an expression
+  val v = 1 + (\(ok, _, x){ x })(catch true { throw(nil, 41) })
+  assert(v == 42)
+}
+
+;; ---- matching
+
+do {
+  ;; tags: exact, hierarchy, no match
+  assert(!(catch :X { throw(:X) }))
+  assert(!(catch :X { throw(:X.Y) }))
+  assert(!(catch :X { throw(:X.Y.Z) }))
+  assert(!(catch :X.Y { throw(:X.Y) }))
+  val ok, a, b = catch :X { catch :X.Y { throw(:X, 1) } }
+  assert(!ok && (a == :X) && (b == 1))
+  val ok, a = catch :Y { catch :X { throw(:Y) } }
+  assert(!ok && (a == :Y))
+  val ok, a = catch :X { catch :XY { throw(:X) } }
+  assert(!ok && (a == :X))
+  val ok, a = catch :XY { catch :X { throw(:XY) } }
+  assert(!ok && (a == :XY))
+  ;; tagged tables: the 'tag' field is matched
+  val t = :X.Y [v=10]
+  val ok, e = catch :X { throw(t) }
+  assert(!ok && (e == t) && (e.v == 10))
+  val ok, e = catch true { catch :X.Y { throw(:X [1]) } }
+  assert(!ok && (e.tag == :X))
+  val ok, e = catch true { catch :X { throw([tag=:X]) } }
+  assert(ok && !e)  ;; caught by ':X' (plain table with a 'tag' field)
+  val ok, e = catch true { catch :X { throw([]) } }
+  assert(!ok && (type(e) == "table"))
+  ;; other values: equality and type names
+  assert(!(catch 10 { throw(10) }))
+  assert(!(catch "s" { throw("s") }))
+  val ok = catch true { catch 10 { throw(11) } }
+  assert(!ok)
+  assert(!(catch :number { throw(10) }))
+  assert(!(catch :string { throw("x") }))
+  assert(!(catch :table { throw([]) }))
+  ;; 'true' catches anything, 'false' nothing
+  assert(!(catch true { throw(nil) }))
+  assert(!(catch true { throw([]) }))
+  val ok, e = catch true { catch false { throw(:X) } }
+  assert(!ok && (e == :X))
+  ;; Lua errors: strings and runtime errors
+  val ok, e = catch true { error("msg", 0) }
+  assert(!ok && (e == "msg"))
+  val ok, e = catch :string { error("msg", 0) }
+  assert(!ok && (e == "msg"))
+  val ok, e = catch true { val x = nil; x.y }
+  assert(!ok && string.find(e, "attempt to index"))
+  val ok, e = catch true { catch :X { error("msg", 0) } }
+  assert(!ok && (e == "msg"))
+  val ok, e, extra = catch true { errorn(0, "msg", 2) }
+  assert(!ok && (e == "msg") && (extra == 2))
+  ;; function conditions: the other results replace the values
+  val ok, v = catch (\(e){ (true, 42) }) { throw(:X) }
+  assert(!ok && (v == 42))
+  assert(count(catch (\(e){ (true, 42) }) { throw(:X) }) == 2)
+  val ok, a, b = catch (\(e, x){ (true, x, e) }) { throw(:X, 1) }
+  assert(!ok && (a == 1) && (b == :X))
+  val ok = catch (\(e){ true }) { throw(:X) }
+  assert(!ok && (count(catch (\(e){ true }) { throw(:X) }) == 1))
+  val ok, e = catch true { catch (\(e){ false }) { throw(:X) } }
+  assert(!ok && (e == :X))
+  val ok, e = catch true { catch (\(e){ 1 }) { throw(:X) } }
+  assert(!ok && (e == :X))  ;; only 'true' matches
+  ;; the function receives all the values
+  val ok, n = catch (\(...){ (true, select("#", ...)) }) { throw(1, nil, 3) }
+  assert(!ok && (n == 3))
+  ;; an error inside the condition function propagates
+  val ok, e = catch true { catch (\(e){ throw(:Z) }) { throw(:X) } }
+  assert(!ok && (e == :Z))
+}
+
+;; ---- re-throw keeps all the values
+
+do {
+  val ok, a, b, c = catch :Y { catch :X { throw(:Y, 2, 3) } }
+  assert(!ok && (a == :Y) && (b == 2) && (c == 3))
+  assert(count(catch :Y { catch :X { throw(:Y, 2, 3) } }) == 4)
+  val st, a, b = pcall(\{ catch :X { throw(:Y, 2) } })
+  assert(!st && (a == :Y) && (b == 2))
+  ;; through functions
+  val func f () { catch :X { throw(:Y, 1) } }
+  val st, a, b = pcall(f)
+  assert(!st && (a == :Y) && (b == 1))
+  ;; message handlers do not see caught errors
+  var seen = 0
+  val st, a = xpcall(\{
+    catch :X { throw(:X) }
+    catch true { error("x") }
+    throw(:Y, 2)
+  }, \(...){ set seen = seen + 1; (...) })
+  assert(!st && (a == :Y) && (seen == 1))
+}
+
+;; ---- catch and blocks: locals, pins, break, escape, return
+
+do {
+  ;; locals of the body are closed before the handler
+  val log = []
+  val ok = catch :X {
+    pin x = setmetatable([], [__close = \{ table.insert(log, "x") }])
+    pin y = setmetatable([], [__close = \{ table.insert(log, "y") }])
+    throw(:X)
+  }
+  assert(!ok && (log@1 == "y") && (log@2 == "x") && (#log == 2))
+  ;; a '__close' error replaces the error
+  val ok, e = catch :Z {
+    pin x = setmetatable([], [__close = \{ throw(:Z, 1) }])
+    throw(:X)
+  }
+  assert(!ok && (e == :Z))
+  ;; upvalues of the body
+  var v = 0
+  catch :X {
+    val f = \{ set v = v + 1 }
+    f()
+    throw(:X)
+  }
+  assert(v == 1)
+  ;; break out of a loop from inside a catch
+  var i = 0
+  val r = loop {
+    set i = i + 1
+    catch :X {
+      if i == 3 { break(i * 10) }
+      throw(:X)
+    }
+  }
+  assert((r == 30) && (i == 3))
+  ;; escape through a catch
+  val r = do :T {
+    catch :X {
+      escape(:T, 1, 2)
+    }
+    99
+  }
+  assert(r == 1)
+  val r = do :T {
+    catch :X {
+      catch true {
+        escape(:T, 7)
+      }
+    }
+    99
+  }
+  assert(r == 7)
+  ;; return from inside a catch
+  val func f (x) {
+    catch :X {
+      if x { return(x, 2) }
+      throw(:X)
+    }
+    0
+  }
+  val a, b = f(1)
+  assert((a == 1) && (b == 2) && (f(false) == 0))
+  ;; after leaving a catch by break/escape/return, later errors are not
+  ;; caught by it
+  val func g () {
+    loop {
+      catch :X { break() }
+    }
+    throw(:X)
+  }
+  val st, e = pcall(g)
+  assert(!st && (e == :X))
+  ;; until/while inside catch
+  set i = 0
+  loop {
+    catch :X {
+      set i = i + 1
+      until(i == 5)
+      throw(:X)
+    }
+  }
+  assert(i == 5)
+}
+
+;; ---- catch in coroutines and C callbacks
+
+do {
+  ;; yield inside the body
+  val co = coroutine.wrap(\{
+    val ok, e = catch :X {
+      coroutine.yield(1)
+      throw(:X, coroutine.yield(2))
+    }
+    (ok, e)
+  })
+  assert(co() == 1)
+  assert(co() == 2)
+  val ok, e = co("v")
+  assert(!ok && (e == :X))
+  ;; yield inside a '__close' run by the catch
+  val co = coroutine.wrap(\{
+    val ok, e = catch :X {
+      pin x = setmetatable([], [__close = \{ coroutine.yield(10) }])
+      throw(:X)
+    }
+    (ok, e)
+  })
+  assert(co() == 10)
+  val ok, e = co()
+  assert(!ok && (e == :X))
+  ;; error after a yield inside a catch, not caught by an inner one
+  val co = coroutine.wrap(\{
+    val ok, e = catch :X {
+      catch :Y {
+        coroutine.yield()
+        throw(:X)
+      }
+    }
+    (ok, e)
+  })
+  co()
+  val ok, e = co()
+  assert(!ok && (e == :X))
+  ;; coroutine dying inside a catch that does not match
+  val co = coroutine.create(\{ catch :X { throw(:Y, 1) } })
+  val st, a, b = coroutine.resume(co)
+  assert(!st && (a == :Y) && (b == 1))
+  ;; catch inside a callback called from C
+  val s = string.gsub("abc", ".", \(c){
+    val ok, e = catch :X { throw(:X, c ++ c) }
+    e
+  })
+  assert(s == "aabbcc")
+  val s = string.gsub("ab", ".", \(c){
+    val ok, e = catch :X {
+      if c == "a" { throw(:X, "A") }
+      "B"
+    }
+    e
+  })
+  assert(s == "AB")
+  val t = [3, 1, 2]
+  table.sort(t, \(a, b){
+    val ok, v = catch true { if a < b { throw(:X, true) } else { false } }
+    (!ok) && v
+  })
+  assert((t@1 == 1) && (t@2 == 2) && (t@3 == 3))
+  ;; error inside a C function inside the body
+  val ok, e = catch true { string.rep("x", -1, 3) }
+  assert(ok)
+  val ok, e = catch true { ("x")::rep(1e10) }
+  assert(!ok && string.find(e, "too large"))
+  ;; stack overflow inside the body
+  val func rec () { rec() ; nil }
+  val ok, e = catch true { rec() }
+  assert(!ok && string.find(e, "stack overflow"))
+  val ok = catch true { (10) }
+  assert(ok)
+}
+
+;; ---- defer (reference tests)
+
+do {
+  print(:1)
+  do {
+    defer {
+      print(:2)
+    }
+    print(:3)
+  }
+  check("1\n3\n2\n")
+
+  do {
+    print(:1)
+    defer { print(:2) }
+    defer { print(:3) }
+    print(:4)
+  }
+  check("1\n4\n3\n2\n")
+
+  do {
+    print(1)
+    defer { print(2) }
+    do {
+      defer { print(3) }
+      defer { print(4) }
+      ;;nil
+    }
+    defer { print(5) }
+    print(6)
+  }
+  check("1\n4\n3\n6\n5\n2\n")
+
+  val ok, e = catch :X {
+    do {
+      defer {
+        print(10)
+      }
+      throw(:X)
+      print(99)
+    }
+  }
+  assert(!ok && (e == :X))
+  check("10\n")
+
+  do {
+    defer { print(:2) }
+  }
+  check("2\n")
+}
+
+;; ---- defer: exits, errors, values
+
+do {
+  ;; defer on break, escape, return and error, in reverse order
+  val log = []
+  val func mark (s) { table.insert(log, s) }
+  loop {
+    defer { mark("b1") }
+    defer { mark("b2") }
+    break()
+  }
+  do :T {
+    defer { mark("e") }
+    escape(:T)
+  }
+  val func f () {
+    defer { mark("r") }
+    return(1)
+  }
+  f()
+  catch :X {
+    defer { mark("t") }
+    throw(:X)
+  }
+  assert(table.concat(log, ",") == "b2,b1,e,r,t")
+  ;; defer runs after the block value is computed
+  val v = do {
+    var x = 1
+    defer { set x = 100 }
+    x + 1
+  }
+  assert(v == 2)
+  ;; a defer sees locals declared before it
+  var y = 0
+  do {
+    val a = 10
+    defer { set y = a }
+  }
+  assert(y == 10)
+  ;; an error in a defer replaces the error in flight
+  val ok, e = catch true {
+    defer { throw(:Z, 2) }
+    throw(:X)
+  }
+  assert(!ok && (e == :Z))
+  val ok, e = catch true {
+    defer { error("d", 0) }
+    1
+  }
+  assert(!ok && (e == "d"))
+  ;; defer and pin interleave in reverse order
+  val log = []
+  do {
+    pin a = setmetatable([], [__close = \{ table.insert(log, "a") }])
+    defer { table.insert(log, "d") }
+    pin b = setmetatable([], [__close = \{ table.insert(log, "b") }])
+  }
+  assert(table.concat(log) == "bda")
+  ;; defer inside functions and loops (one per iteration)
+  val log = []
+  loop i in (1, 3) {
+    defer { table.insert(log, i) }
+  }
+  assert(table.concat(log) == "123")
+  ;; defer in a coroutine closed from outside
+  val co = coroutine.create(\{
+    defer { table.insert(log, "co") }
+    coroutine.yield()
+  })
+  coroutine.resume(co)
+  assert(coroutine.close(co))
+  assert(log@4 == "co")
+  ;; the defer body is a function: no values, no locals leaking
+  do {
+    defer { val z = 1; z }
+  }
+  assert(rawget(_G, "z") == nil)
+  ;; nesting
+  val log = []
+  do {
+    defer {
+      defer { table.insert(log, 2) }
+      table.insert(log, 1)
+    }
+  }
+  assert(table.concat(log) == "12")
+}
+
+;; ---- syntax errors
+
+do {
+  val func err (src, msg) {
+    val f, m = load(src)
+    assert(!f && string.find(m, msg, 1, true), m)
+  }
+  err("catch :X", "'{' expected")
+  err("catch { }", "unexpected symbol")
+  err("defer", "'{' expected")
+  err("defer { break() }", "break outside a loop")
+  err("loop { defer { break() } }", "break outside a loop")
+  assert(load("defer { return(1) }; 1"))  ;; return inside defer is allowed
+}
+
+set out = nil
+_G.print("OK")
