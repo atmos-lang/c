@@ -1,0 +1,892 @@
+;; $Id: testes/gc.lua $
+;; See Copyright Notice in file lua.h
+
+print('testing incremental garbage collection')
+
+val debug = require("debug")
+
+assert(collectgarbage("isrunning"))
+
+collectgarbage()
+
+val oldmode = collectgarbage("incremental")
+
+;; changing modes should return previous mode
+assert(collectgarbage("generational") == "incremental")
+assert(collectgarbage("generational") == "generational")
+assert(collectgarbage("incremental") == "generational")
+assert(collectgarbage("incremental") == "incremental")
+
+val func nop () {
+}
+
+val func gcinfo () {
+  return(collectgarbage("count") * 1024)
+}
+
+;; test weird parameters to 'collectgarbage'
+do {
+  collectgarbage("incremental")
+  val opause = collectgarbage("param", "pause", 100)
+  val ostepmul = collectgarbage("param", "stepmul", 100)
+  assert(collectgarbage("param", "pause") == 100)
+  assert(collectgarbage("param", "stepmul") == 100)
+  val t = [0, 2, 10, 90, 500, 5000, 30000, 0x7ffffffe]
+  loop i in (1, #t) {
+    collectgarbage("param", "pause", t@(i))
+    loop j in (1, #t) {
+      collectgarbage("param", "stepmul", t@(j))
+      collectgarbage("step", t@(j))
+    }
+  }
+  ;; restore original parameters
+  collectgarbage("param", "pause", opause)
+  collectgarbage("param", "stepmul", ostepmul)
+  collectgarbage()
+}
+
+;;
+;; test the "size" of basic GC steps (whatever they mean...)
+;;
+do {
+  print("steps")
+
+  val func dosteps (siz) {
+    collectgarbage()
+    val a = []
+    loop i in (1, 100) {
+      set a@(i) = [[]]
+      val b = []
+    }
+    val x = gcinfo()
+    var i = 0
+    loop {  ;; do steps until it completes a collection cycle
+      set i = i + 1
+      until(collectgarbage("step", siz))
+    }
+    assert(gcinfo() < x)
+    return(i)  ;; number of steps
+  }
+
+  if !_port {
+    collectgarbage("stop")
+    assert(dosteps(10) < dosteps(2))
+    collectgarbage("restart")
+  }
+}
+
+set _G.while = 234
+
+;;
+;; tests for GC activation when creating different kinds of objects
+;;
+val func GC1 () {
+  var u
+  var b  ;; (above 'u' it in the stack)
+  var finish = false
+  set u = setmetatable([], [__gc=func () {
+    set finish = true
+  }])
+  set b = [34]
+  loop {
+    set u = []
+    until(finish)
+  }
+  assert(b@(1) == 34)  ;; 'u' was collected, but 'b' was not
+
+  set finish = false
+  var i = 1
+  set u = setmetatable([], [__gc=func () {
+    set finish = true
+  }])
+  loop {
+    set i = i + 1
+    set u = tostring(i) ++ tostring(i)
+    until(finish)
+  }
+  assert(b@(1) == 34)  ;; 'u' was collected, but 'b' was not
+
+  set finish = false
+  set u = setmetatable([], [__gc=func () {
+    set finish = true
+  }])
+  loop {
+    val i
+    set u = func () {
+      return(i)
+    }
+    until(finish)
+  }
+  assert(b@(1) == 34)  ;; 'u' was collected, but 'b' was not
+}
+
+val func GC2 () {
+  var u
+  var finish = false
+  set u = [setmetatable([], [__gc=func () {
+    set finish = true
+  }])]
+  val b = [34]
+  loop {
+    set u = [[]]
+    until(finish)
+  }
+  assert(b@(1) == 34)  ;; 'u' was collected, but 'b' was not
+
+  set finish = false
+  var i = 1
+  set u = [setmetatable([], [__gc=func () {
+    set finish = true
+  }])]
+  loop {
+    set i = i + 1
+    set u = [tostring(i) ++ tostring(i)]
+    until(finish)
+  }
+  assert(b@(1) == 34)  ;; 'u' was collected, but 'b' was not
+
+  set finish = false
+  set u = [setmetatable([], [__gc=func () {
+    set finish = true
+  }])]
+  loop {
+    val i
+    set u = [func () {
+      return(i)
+    }]
+    until(finish)
+  }
+  assert(b@(1) == 34)  ;; 'u' was collected, but 'b' was not
+}
+
+val func GC () {
+  GC1()
+  GC2()
+}
+
+do {
+  print("creating many objects")
+
+  val limit = 5000
+
+  loop i in (1, limit) {
+    var a = []
+    set a = nil
+  }
+
+  var a = "a"
+
+  loop i in (1, limit) {
+    set a = i ++ "b"
+    set a = string.gsub(a, '(%d%d*)', "%1 %1")
+    set a = "a"
+  }
+
+  set a = []
+
+  func a::test () {
+    loop i in (1, limit) {
+      load(string.format("set temp = func (a) { 'a%d' }", i), "")()
+      assert(temp() == string.format('a%d', i))
+    }
+  }
+
+  a::test()
+  set _G.temp = nil
+}
+
+;; collection of functions without locals, globals, etc.
+do {
+  val func f () {
+  }
+}
+
+print("functions with errors")
+val prog = """do {
+  set a = 10;
+  func foo (x, y) {
+    set a = sin(a + 0.456 - 0.23e-12);
+    func (z) { sin(%x + z) }
+  }
+  val x = func (w) { set a = a + w; }
+}
+"""
+
+do {
+  var step = 1
+  if _soft {
+    set step = 13
+  }
+  loop i in (1, string.len(prog), step) {
+    loop j in (i, string.len(prog), step) {
+      pcall(load(string.sub(prog, i, j), ""))
+    }
+  }
+}
+rawset(_G, "a", nil)
+set _G.x = nil
+
+do {
+  set foo = nil
+  print('long strings')
+  val x = "01234567890123456789012345678901234567890123456789012345678901234567890123456789"
+  assert(string.len(x) == 80)
+  var s = ''
+  val k = math.min(300, (math.maxinteger // 80) // 2)
+  loop n in (1, k) {
+    set s = s ++ x
+    val j = tostring(n)
+  }
+  assert(string.len(s) == (k * 80))
+  set s = string.sub(s, 1, 10000)
+  val s, i = string.gsub(s, '(%d%d%d%d)', '')
+  assert(i == (10000 // 4))
+
+  assert(_G.while == 234)
+  set _G.while = nil
+}
+
+if !_port {
+  ;; test the pace of the collector
+  collectgarbage()
+  collectgarbage()
+  val x = gcinfo()
+  collectgarbage("stop")
+  loop {
+    val a = []
+    until(gcinfo() > (3 * x))
+  }
+  collectgarbage("restart")
+  assert(collectgarbage("isrunning"))
+  loop {
+    val a = []
+    until(gcinfo() <= (x * 2))
+  }
+}
+
+print("clearing tables")
+val lim = 15
+var a = []
+;; fill a with `collectable' indices
+loop i in (1, lim) {
+  set a@([]) = i
+}
+set b = []
+loop k, v in pairs(a) {
+  set b@(k) = v
+}
+;; remove all indices and collect them
+loop n in pairs(b) {
+  set a@(n) = undef
+  assert((type(n) == 'table') && (next(n) == nil))
+  collectgarbage()
+}
+set b = nil
+collectgarbage()
+loop n in pairs(a) {
+  error('cannot be here')
+}
+loop i in (1, lim) {
+  set a@(i) = i
+}
+loop i in (1, lim) {
+  assert(a@(i) == i)
+}
+
+print('weak tables')
+set a = []
+setmetatable(a, [__mode='k'])
+;; fill a with some `collectable' indices
+loop i in (1, lim) {
+  set a@([]) = i
+}
+;; and some non-collectable ones
+loop i in (1, lim) {
+  set a@(i) = i
+}
+loop i in (1, lim) {
+  val s = string.rep('@', i)
+  set a@(s) = s ++ '#'
+}
+collectgarbage()
+var i = 0
+loop k, v in pairs(a) {
+  assert((k == v) || ((k ++ '#') == v))
+  set i = i + 1
+}
+assert(i == (2 * lim))
+
+set a = []
+setmetatable(a, [__mode='v'])
+set a@(1) = string.rep('b', 21)
+collectgarbage()
+assert(a@(1))  ;; strings are *values*
+set a@(1) = undef
+;; fill a with some `collectable' values (in both parts of the table)
+loop i in (1, lim) {
+  set a@(i) = []
+}
+loop i in (1, lim) {
+  set a@(i ++ 'x') = []
+}
+;; and some non-collectable ones
+loop i in (1, lim) {
+  val t = []
+  set a@(t) = t
+}
+loop i in (1, lim) {
+  set a@(i + lim) = i ++ 'x'
+}
+collectgarbage()
+var i = 0
+loop k, v in pairs(a) {
+  assert((k == v) || (((k - lim) ++ 'x') == v))
+  set i = i + 1
+}
+assert(i == (2 * lim))
+
+set a = []
+setmetatable(a, [__mode='kv'])
+var x, y, z = ([], [], [])
+;; keep only some items
+set a@(1), a@(2), a@(3) = (x, y, z)
+set a@(string.rep('$', 11)) = string.rep('$', 11)
+;; fill a with some `collectable' values
+loop i in (4, lim) {
+  set a@(i) = []
+}
+loop i in (1, lim) {
+  set a@([]) = i
+}
+loop i in (1, lim) {
+  val t = []
+  set a@(t) = t
+}
+collectgarbage()
+assert(next(a) != nil)
+var i = 0
+loop k, v in pairs(a) {
+  assert(((k == 1) && (v == x)) || ((k == 2) && (v == y)) || ((k == 3) && (v == z)) || (k == v))
+  set i = i + 1
+}
+assert(i == 4)
+set x, y, z = nil
+collectgarbage()
+assert(next(a) == string.rep('$', 11))
+
+do {  ;; invalid mode
+  val a = setmetatable([], [__mode=34])
+  collectgarbage()
+}
+
+if T {  ;; bug since 5.3: all-weak tables are not being revisited
+  T.gcstate("propagate")
+  val t = setmetatable([], [__mode="kv"])
+  T.gcstate("enteratomic")  ;; 't' was visited
+  setmetatable(t, [__mode="kv"])
+  T.gcstate("pause")  ;; its new metatable is not being visited
+  assert(getmetatable(t).__mode == "kv")
+}
+
+;; 'bug' in 5.1
+set a = []
+var t = [x=10]
+var C = setmetatable([key=t], [__mode='v'])
+var C1 = setmetatable([@(t)=1], [__mode='k'])
+set a.x = t  ;; this should not prevent 't' from being removed from
+;; weak table 'C' by the time 'a' is finalized
+
+setmetatable(a, [__gc=func (u) {
+  assert(C.key == nil)
+  assert(type(next(C1)) == 'table')
+}])
+
+set a, t = nil
+collectgarbage()
+collectgarbage()
+assert((next(C) == nil) && (next(C1) == nil))
+set C, C1 = nil
+
+;; ephemerons
+val mt = [__mode='k']
+set a = [[10], [20], [30], [40]]
+setmetatable(a, mt)
+set x = nil
+loop i in (1, 100) {
+  val n = []
+  set a@(n) = [k=[x]]
+  set x = n
+}
+GC()
+var n = x
+var i = 0
+loop {
+  while(n)
+  set n = a@(n).k@(1)
+  set i = i + 1
+}
+assert(i == 100)
+set x = nil
+GC()
+loop i in (1, 4) {
+  assert(a@(i)@(1) == (i * 10))
+  set a@(i) = undef
+}
+assert(next(a) == nil)
+
+var K = []
+set a@(K) = []
+loop i in (1, 10) {
+  set a@(K)@(i) = []
+  set a@(a@(K)@(i)) = setmetatable([], mt)
+}
+set x = nil
+var k = 1
+loop j in (1, 100) {
+  val n = []
+  val nk = (k % 10) + 1
+  set a@(a@(K)@(nk))@(n) = [x, k=k]
+  set x = n
+  set k = nk
+}
+GC()
+var n = x
+var i = 0
+loop {
+  while(n)
+  val t = a@(a@(K)@(k))@(n)
+  set n = t@(1)
+  set k = t.k
+  set i = i + 1
+}
+assert(i == 100)
+set K = nil
+GC()
+;; assert(next(a) == nil)
+
+;; testing errors during GC
+if T {
+  collectgarbage("stop")  ;; stop collection
+  val u = []
+  val s = []
+  setmetatable(s, [__mode='k'])
+  setmetatable(u, [__gc=func (o) {
+    val i = s@(o)
+    set s@(i) = true
+    assert(!s@(i - 1))  ;; check proper finalization order
+    if i == 8 {  ;; error during GC
+      error("@expected@")
+    }
+  }])
+
+  loop i in (6, 10) {
+    val n = setmetatable([], getmetatable(u))
+    set s@(n) = i
+  }
+
+  warn("@on")
+  warn("@store")
+  collectgarbage()
+  assert(string.find(_WARN, "error in __gc"))
+  assert(string.match(_WARN, "@(.-)@") == "expected")
+  set _WARN = false
+  loop i in (8, 10) {
+    assert(s@(i))
+  }
+
+  loop i in (1, 5) {
+    val n = setmetatable([], getmetatable(u))
+    set s@(n) = i
+  }
+
+  collectgarbage()
+  loop i in (1, 10) {
+    assert(s@(i))
+  }
+
+  set getmetatable(u).__gc = nil
+  warn("@normal")
+}
+print('+')
+
+;; testing userdata
+if T == nil {
+  (Message || print)('\n >>> testC not active: skipping userdata GC tests <<<\n')
+} else {
+
+  val func newproxy (u) {
+    return(debug.setmetatable(T.newuserdata(0), debug.getmetatable(u)))
+  }
+
+  collectgarbage("stop")  ;; stop collection
+  var u = newproxy(nil)
+  debug.setmetatable(u, [__gc=true])
+  var s = 0
+  val a = [@(u)=0]
+  setmetatable(a, [__mode='vk'])
+  loop i in (1, 10) {
+    set a@(newproxy(u)) = i
+  }
+  loop k in pairs(a) {
+    assert(getmetatable(k) == getmetatable(u))
+  }
+  var a1 = []
+  loop k, v in pairs(a) {
+    set a1@(k) = v
+  }
+  loop k, v in pairs(a1) {
+    set a@(v) = k
+  }
+  loop i in (1, 10) {
+    assert(a@(i))
+  }
+  set getmetatable(u).a = a1
+  set getmetatable(u).u = u
+  do {
+    val u = u
+    set getmetatable(u).__gc = func (o) {
+      assert(a@(o) == (10 - s))
+      assert(a@(10 - s) == undef)  ;; udata already removed from weak table
+      assert(getmetatable(o) == getmetatable(u))
+      assert(getmetatable(o).a@(o) == (10 - s))
+      set s = s + 1
+    }
+  }
+  set a1, u = nil
+  assert(next(a) != nil)
+  collectgarbage()
+  assert(s == 11)
+  collectgarbage()
+  assert(next(a) == nil)  ;; finalized keys are removed in two cycles
+}
+
+;; __gc x weak tables
+var u = setmetatable([], [__gc=true])
+;; __gc metamethod should be collected before running
+setmetatable(getmetatable(u), [__mode="v"])
+set getmetatable(u).__gc = func (o) {
+  os.exit(1)  ;; cannot happen
+}
+set u = nil
+collectgarbage()
+
+var u = setmetatable([], [__gc=true])
+var m = getmetatable(u)
+set m.x = [@([0])=1, @(0)=[1]]
+setmetatable(m.x, [__mode="kv"])
+set m.__gc = func (o) {
+  assert(next(getmetatable(o).x) == nil)
+  set m = 10
+}
+set u, m = nil
+collectgarbage()
+assert(m == 10)
+
+do {  ;; tests for string keys in weak tables
+  collectgarbage()
+  collectgarbage()
+  val m = collectgarbage("count")  ;; current memory
+  val a = setmetatable([], [__mode="kv"])
+  set a@(string.rep("a", 2 ** 22)) = 25  ;; long string key -> number value
+  set a@(string.rep("b", 2 ** 22)) = []  ;; long string key -> collectable value
+  set a@([]) = 14  ;; collectable key
+  collectgarbage()
+  var k, v = next(a)  ;; string key with number value preserved
+  assert((k == string.rep("a", 2 ** 22)) && (v == 25))
+  assert(next(a, k) == nil)  ;; everything else cleared
+  assert(a@(string.rep("b", 2 ** 22)) == undef)
+  set a@(k) = undef  ;; erase this last entry
+  set k = nil
+  collectgarbage()
+  assert(next(a) == nil)
+  ;; make sure will not try to compare with dead key
+  assert(a@(string.rep("b", 100)) == undef)
+  assert(collectgarbage("count") <= (m + 1))  ;; everything collected
+}
+
+;; errors during collection
+if T {
+  warn("@store")
+  set u = setmetatable([], [__gc=func () {
+    error("@expected error")
+  }])
+  set u = nil
+  collectgarbage()
+  assert(string.find(_WARN, "@expected error"))
+  set _WARN = false
+  warn("@normal")
+}
+
+if !_soft {
+  print("long list")
+  var a = []
+  loop i in (1, 200000) {
+    set a = [next=a]
+  }
+  set a = nil
+  collectgarbage()
+}
+
+;; create many threads with self-references and open upvalues
+print("self-referenced threads")
+var thread_id = 0
+val threads = []
+
+val func fn (thread_) {
+  val x = []
+  set threads@(thread_id) = func () {
+    set thread_ = x
+  }
+  coroutine.yield()
+}
+
+loop {
+  while(thread_id < 1000)
+  val thread_ = coroutine.create(fn)
+  coroutine.resume(thread_, thread_)
+  set thread_id = thread_id + 1
+}
+
+;; Create a closure (function inside 'f') with an upvalue ('param') that
+;; points (through a table) to the closure itself and to the thread
+;; ('co' and the initial value of 'param') where closure is running.
+;; Then, assert that table (and therefore everything else) will be
+;; collected.
+do {
+  var collected = false  ;; to detect collection
+  collectgarbage()
+  collectgarbage("stop")
+  do {
+    var f
+    set f = func (param) {
+      (func () {
+        assert((type(f) == 'function') && (type(param) == 'thread'))
+        set param = [param, f]
+        setmetatable(param, [__gc=func () {
+          set collected = true
+        }])
+        coroutine.yield(100)
+      })()
+    }
+    val co = coroutine.create(f)
+    assert(coroutine.resume(co, co))
+  }
+  ;; Now, thread and closure are not reachable any more.
+  collectgarbage()
+  assert(collected)
+  collectgarbage("restart")
+}
+
+do {
+  collectgarbage()
+  collectgarbage("stop")
+  collectgarbage("step")  ;; steps should not unblock the collector
+  val x = gcinfo()
+  loop {
+    loop i in (1, 1000) {  ;; no collection during the loop
+      set _ENV.a = []
+    }
+    until(gcinfo() > (2 * x))
+  }
+  collectgarbage("restart")
+  set _ENV.a = nil
+}
+
+if T {  ;; tests for weird cases collecting upvalues
+
+  val func foo () {
+    var a = [x=20]
+    coroutine.yield(func () {
+      return(a.x)  ;; will run collector
+    })
+    assert(a.x == 20)  ;; 'a' is 'ok'
+    set a = [x=30]  ;; create a new object
+    assert(T.gccolor(a) == "white")  ;; of course it is new...
+    coroutine.yield(100)  ;; 'a' is still local to this thread
+  }
+
+  val t = setmetatable([], [__mode="kv"])
+  collectgarbage()
+  collectgarbage('stop')
+  ;; create coroutine in a weak table, so it will never be marked
+  set t.co = coroutine.wrap(foo)
+  val f = t.co()  ;; create function to access local 'a'
+  T.gcstate("enteratomic")  ;; ensure all objects are traversed
+  assert(T.gcstate() == "enteratomic")
+  assert(t.co() == 100)  ;; resume coroutine, creating new table for 'a'
+  assert(T.gccolor(t.co) == "white")  ;; thread was not traversed
+  T.gcstate("pause")  ;; collect thread, but should mark 'a' before that
+  assert((t.co == nil) && (f() == 30))  ;; ensure correct access to 'a'
+
+  collectgarbage("restart")
+
+  ;; test barrier in sweep phase (backing userdata to gray)
+  val u = T.newuserdata(0, 1)  ;; create a userdata
+  collectgarbage()
+  collectgarbage("stop")
+  val a = []  ;; avoid 'u' as first element in 'allgc'
+  T.gcstate("enteratomic")
+  T.gcstate("sweepallgc")
+  val x = []
+  assert(T.gccolor(u) == "black")  ;; userdata is "old" (black)
+  assert(T.gccolor(x) == "white")  ;; table is "new" (white)
+  debug.setuservalue(u, x)  ;; trigger barrier
+  assert(T.gccolor(u) == "gray")  ;; userdata changed back to gray
+  collectgarbage("restart")
+
+  print("+")
+}
+
+if T {
+  val debug = require("debug")
+  collectgarbage("stop")
+  val x = T.newuserdata(0)
+  val y = T.newuserdata(0)
+  debug.setmetatable(y, [__gc=nop])  ;; bless the new udata before...
+  debug.setmetatable(x, [__gc=nop])  ;; ...the old one
+  assert(T.gccolor(y) == "white")
+  T.checkmemory()
+  collectgarbage("restart")
+}
+
+if T {
+  collectgarbage("stop")
+  T.gcstate("pause")
+  val sup = [x=0]
+  val a = setmetatable([], [__newindex=sup])
+  T.gcstate("enteratomic")
+  assert(T.gccolor(sup) == "black")
+  set a.x = []  ;; should not break the invariant
+  assert(!((T.gccolor(sup) == "black") && (T.gccolor(sup.x) == "white")))
+  T.gcstate("pause")  ;; complete the GC cycle
+  set sup.x.y = 10
+  collectgarbage("restart")
+}
+
+if T {
+  print("emergency collections")
+  collectgarbage()
+  collectgarbage()
+  T.totalmem(T.totalmem() + 200)
+  loop i in (1, 200) {
+    val a = []
+  }
+  T.totalmem(0)
+  collectgarbage()
+  var t = T.totalmem("table")
+  var a = [[], [], []]  ;; create 4 new tables
+  assert(T.totalmem("table") == (t + 4))
+  set t = T.totalmem("function")
+  set a = func () {}  ;; create 1 new closure
+  assert(T.totalmem("function") == (t + 1))
+  set t = T.totalmem("thread")
+  set a = coroutine.create(func () {})  ;; create 1 new coroutine
+  assert(T.totalmem("thread") == (t + 1))
+}
+
+;; create an object to be collected when state is closed
+do {
+  val setmetatable, assert, type, print, getmetatable = (setmetatable, assert, type, print, getmetatable)
+  val tt = []
+  set tt.__gc = func (o) {
+    assert(getmetatable(o) == tt)
+    ;; create new objects during GC
+    val a = ('xuxu' ++ ((10 + 3) ++ 'joao'), [])
+    set ___Glob = o  ;; resurrect object!
+    setmetatable([], tt)  ;; creates a new one with same metatable
+    print(">>> closing state " ++ "<<<\n")
+  }
+  val u = setmetatable([], tt)
+  set ___Glob = [u]  ;; avoid object being collected before program end
+}
+
+;; create several objects to raise errors when collected while closing state
+if T {
+  val error, assert, find, warn = (error, assert, string.find, warn)
+  var n = 0
+  var lastmsg
+  val mt = [__gc=func (o) {
+    set n = n + 1
+    assert(n == o@(1))
+    ifs {
+      n == 1 => {
+        set _WARN = false
+      }
+      n == 2 => {
+        assert(find(_WARN, "@expected warning"))
+        set lastmsg = _WARN  ;; get message from previous error (first 'o')
+      }
+      else => {
+        assert(lastmsg == _WARN)  ;; subsequent error messages are equal
+      }
+    }
+    warn("@store")
+    set _WARN = false
+    error("@expected warning")
+  }]
+  loop i in (10, 1, -1) {
+    ;; create object and preserve it until the end
+    table.insert(___Glob, setmetatable([i], mt))
+  }
+}
+
+;; just to make sure
+assert(collectgarbage('isrunning'))
+
+do {  ;; check that the collector is not reentrant in incremental mode
+  var res = true
+  setmetatable([], [__gc=func () {
+    set res = collectgarbage()
+  }])
+  collectgarbage()
+  assert(!res)
+}
+
+collectgarbage(oldmode)
+
+if T {
+  print("testing stack issues when calling finalizers")
+
+  var X
+  var obj
+
+  val func initobj () {
+    set X = false
+    set obj = setmetatable([], [__gc=func () {
+      set X = true
+    }])
+  }
+
+  var loop_
+  set loop_ = func (n) {
+    if n > 0 {
+      loop_(n - 1)
+    }
+  }
+
+  ;; should not try to call finalizer without a CallInfo available
+  initobj()
+  loop_(20)  ;; ensure stack space
+  T.resetCI()  ;; remove extra CallInfos
+  T.alloccount(0)  ;; cannot allocate more CallInfos
+  set obj = nil
+  collectgarbage()  ;; will not call finalizer
+  T.alloccount()
+  assert(X == false)
+  collectgarbage()  ;; now will call finalizer (it was still pending)
+  assert(X == true)
+
+  ;; should not try to call finalizer without stack space available
+  initobj()
+  loop_(5)  ;; ensure enough CallInfos
+  T.reallocstack(0)  ;; remove extra stack slots
+  T.alloccount(0)  ;; cannot reallocate stack
+  set obj = nil
+  collectgarbage()  ;; will not call finalizer
+  T.alloccount()
+  assert(X == false)
+  collectgarbage()  ;; now will call finalizer (it was still pending)
+  assert(X == true)
+}
+
+print('OK')
