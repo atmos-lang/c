@@ -68,3 +68,7 @@ Semantics assumed for the Atmos implementation (the tests rely on them):
   non-table operand is an error
 - error messages, variable-kind names (global/local/upvalue/field/method/
   constant) and syntax-error formats are Lua's
+- errors carry several values: `throw(e1, ..., en)` raises them all (no
+  position prefix), `pcall` returns `false, e1, ..., en`, `xpcall`
+  handlers receive them all and their results replace them, `__close`
+  receives `e1` only; `error(v, level)` is unchanged (`testes/throw.atm`)

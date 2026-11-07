@@ -198,6 +198,7 @@ struct CallInfo {
       lua_KFunction k;  /* continuation in case of yields */
       ptrdiff_t old_errfunc;
       lua_KContext ctx;  /* context info. in case of yields */
+      int nerr;  /* number of error values (while finishing a pcall) */
     } c;
   } u;
   union {
@@ -299,6 +300,7 @@ struct lua_State {
   CallInfo base_ci;  /* CallInfo for first level (C host) */
   volatile lua_Hook hook;
   ptrdiff_t errfunc;  /* current error handling function (stack index) */
+  int nerr;  /* number of values of the error being propagated */
   l_uint32 nCcalls;  /* number of nested non-yieldable or C calls */
   int oldpc;  /* last pc traced */
   int nci;  /* number of items in 'ci' list */

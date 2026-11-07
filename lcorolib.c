@@ -47,9 +47,14 @@ static int auxresume (lua_State *L, lua_State *co, int narg) {
     lua_xmove(co, L, nres);  /* move yielded values */
     return nres;
   }
-  else {
-    lua_xmove(co, L, 1);  /* move error message */
-    return -1;  /* error flag */
+  else {  /* error: 'nres' error values */
+    if (l_unlikely(!lua_checkstack(L, nres + 1))) {
+      lua_pop(co, nres);  /* remove error values anyway */
+      lua_pushliteral(L, "too many results to resume");
+      return -1;  /* error flag */
+    }
+    lua_xmove(co, L, nres);  /* move error values */
+    return -nres;  /* error flag: number of error values */
   }
 }
 
@@ -58,10 +63,10 @@ static int luaB_coresume (lua_State *L) {
   lua_State *co = getco(L);
   int r;
   r = auxresume(L, co, lua_gettop(L) - 1);
-  if (l_unlikely(r < 0)) {
+  if (l_unlikely(r < 0)) {  /* error with '-r' values? */
     lua_pushboolean(L, 0);
-    lua_insert(L, -2);
-    return 2;  /* return false + error message */
+    lua_insert(L, r - 1);  /* 'false' before the error values */
+    return 1 - r;  /* return false + error values */
   }
   else {
     lua_pushboolean(L, 1);
@@ -74,21 +79,27 @@ static int luaB_coresume (lua_State *L) {
 static int luaB_auxwrap (lua_State *L) {
   lua_State *co = lua_tothread(L, lua_upvalueindex(1));
   int r = auxresume(L, co, lua_gettop(L));
-  if (l_unlikely(r < 0)) {  /* error? */
+  if (l_unlikely(r < 0)) {  /* error with '-r' values? */
+    int n = -r;  /* number of error values */
     int stat = lua_status(co);
     if (stat != LUA_OK && stat != LUA_YIELD) {  /* error in the coroutine? */
       stat = lua_closethread(co, L);  /* close its tbc variables */
       if (stat == LUA_OK)
         return 0;  /* nothing to return */
-      lua_xmove(co, L, 1);  /* move error message to the caller */
+      n = lua_gettop(co);  /* error values left by 'lua_closethread' */
+      luaL_checkstack(L, n, "too many results to resume");
+      lua_xmove(co, L, n);  /* move error values to the caller */
     }
     if (stat != LUA_ERRMEM &&  /* not a memory error and ... */
-        lua_type(L, -1) == LUA_TSTRING) {  /* ... error object is a string? */
+        lua_type(L, -n) == LUA_TSTRING) {  /* ... error object is a string? */
+      int idx = lua_gettop(L) - n + 1;  /* index of the error object */
+      luaL_checkstack(L, 2, "too many results to resume");
       luaL_where(L, 1);  /* add extra info, if available */
-      lua_insert(L, -2);
+      lua_pushvalue(L, idx);
       lua_concat(L, 2);
+      lua_replace(L, idx);
     }
-    return lua_error(L);  /* propagate error */
+    return lua_errorn(L, n);  /* propagate error */
   }
   return r;
 }
@@ -185,9 +196,11 @@ static int luaB_close (lua_State *L) {
         return 1;
       }
       else {
+        int n = lua_gettop(co);  /* error values left by 'lua_closethread' */
         lua_pushboolean(L, 0);
-        lua_xmove(co, L, 1);  /* move error message */
-        return 2;
+        luaL_checkstack(L, n, "too many results to close");
+        lua_xmove(co, L, n);  /* move error values */
+        return n + 1;
       }
     }
     case COS_NORM:

@@ -71,7 +71,10 @@ value 1 stays the "main" object.
 
 (b): extend the core to n values, with value 1 as the Lua-visible error
 object. (Alternative (a), packing a table in `throw`, was discarded.)
-Not implemented yet; the design below is to be confirmed first.
+Implemented (tests in `testes/throw.atm`); the notes below describe the
+implementation. Open points were settled as: handlers get all n values
+in and n out; `__close` gets value 1 only; `throw` is a base function
+(no longer a reserved word).
 
 ## Design notes (from reading the code paths)
 
@@ -140,10 +143,36 @@ values (not one); `luaE_resetthread`/`lua_closethread` leave n values
 (`lua_errorn`), `lbaselib.c` (`throw`), `lcorolib.c`. The converted test
 suite should pass unchanged: every existing error carries one value.
 
-### Open points to confirm
+### Implementation notes
 
-- Handler convention: all n in / n out (above) vs. value 1 only in and
-  out, keeping values 2..n untouched.
-- Whether `__close` should get the n values after all.
-- Name and signature of the base function (`throw(...)`), and whether
-  Atmos `throw` will be the same function or a parser construct.
+- `lua_State.nerr`: number of values of the error being propagated.
+  Set by `luaD_thrown(L, status, n)` (`luaD_throw` is the n = 1 case),
+  read by `luaD_seterrorobj`, which moves the n top values to `oldtop`.
+  `luaD_pcall` saves and restores it like `errfunc`; `precover` stores
+  it in `CallInfo.u.c.nerr` and `finishpcallk` restores it before
+  closing tbc variables (yieldable `pcall` in coroutines).
+- `luaG_errormsgn(L, n)`: moves the values up one slot, calls the
+  handler with `LUA_MULTRET`, and the results are the new values (zero
+  results or a nil first value become `"<no error object>"`). The base
+  pointer is saved as an offset across the call (the stack can move).
+- `lua_resume` leaves the n values in place and reports `n` in
+  `nresults`; it also pushes a copy of them (in protected mode, the
+  stack may grow) because the host moves the first copy out and
+  `lua_closethread` must still find the values for `coroutine.close`.
+  `resume_error` sets `nresults = 1`.
+- `luaE_resetthread` keeps the n values at `stack + 1` and raises the
+  base frame top if needed; `resetthread_aux` and `luaD_throwbaselevel`
+  re-throw with the current count (not 1). Unhandled errors in a thread
+  without handler copy the n values to the main thread.
+- API: `lua_errorn(L, n)`; `lua_error` = `lua_errorn(L, 1)`. Base
+  `throw(...)`; `pcall`'s continuation reserves a slot before pushing
+  (`lua_pcallk` raises the frame top only to the results);
+  `coroutine.resume/wrap/close` move n values with stack checks.
+- Invariant for a thread dead by error: `L->nerr` is the number of
+  error values at the top of its stack (and at `stack + 1` after
+  `lua_closethread`).
+- `lua.c`'s message handler returns one value (the traceback of value
+  1), so uncaught errors at the top level report value 1 only.
+- Tested with the debug build (`ltests.h`): it reallocates the stack on
+  every call and checks the frame tops, which caught a stale pointer and
+  two missing stack checks.

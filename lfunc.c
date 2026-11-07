@@ -111,7 +111,7 @@ static void callclosemethod (lua_State *L, TValue *obj, TValue *err, int yy) {
   setobj2s(L, top++, tm);  /* will call metamethod... */
   setobj2s(L, top++, obj);  /* with 'self' as the 1st argument */
   if (err != NULL)  /* if there was an error... */
-    setobj2s(L, top++, err);  /* then error object will be 2nd argument */
+    setobj2s(L, top++, err);  /* then 1st error value will be 2nd argument */
   L->top.p = top;  /* add function and arguments */
   if (yy)
     luaD_call(L, func, 0);
@@ -153,9 +153,9 @@ static void prepcallclosemth (lua_State *L, StkId level, TStatus status,
     case CLOSEKTOP:  /* don't need to change top */
       errobj = NULL;  /* no error object */
       break;
-    default:  /* 'luaD_seterrorobj' will set top to level + 2 */
-      errobj = s2v(level + 1);  /* error object goes after 'uv' */
-      luaD_seterrorobj(L, status, level + 1);  /* set error object */
+    default:  /* 'luaD_seterrorobj' will set top to level + 1 + nerr */
+      errobj = s2v(level + 1);  /* error values go after 'uv' */
+      luaD_seterrorobj(L, status, level + 1);  /* set error values */
       break;
   }
   callclosemethod(L, uv, errobj, yy);

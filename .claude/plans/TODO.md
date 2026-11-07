@@ -43,11 +43,11 @@ value; `match`/`where`/`catch`/pipes pending).
 
 ## 4. Errors with multiple values
 
-See [errors.md](errors.md): Lua passes the error object on the stack
-already, but hard-wires the count to one (`luaD_seterrorobj`, message
-handlers, `__close`, `lua_error`/`lua_pcall`/`lua_resume`, `error(v,
-level)`). Extending to n values is local to the core; `throw`/`catch`
-could then carry tag and payload without allocating.
+Done: see [errors.md](errors.md). Errors carry n values on the stack
+(`throw(...)`, `lua_errorn`); `pcall`/`xpcall`/`coroutine.resume`/
+`coroutine.close` return them, handlers receive and return n values,
+`__close` gets value 1. Tests: `testes/throw.atm`. Next: `catch`/`throw`
+syntax and `defer` in the parser on top of it.
 
 ## 5. Tail calls
 

@@ -1255,18 +1255,23 @@ LUA_API int lua_gc (lua_State *L, int what, ...) {
 */
 
 
-LUA_API int lua_error (lua_State *L) {
-  TValue *errobj;
+LUA_API int lua_errorn (lua_State *L, int n) {
   lua_lock(L);
-  errobj = s2v(L->top.p - 1);
-  api_checkpop(L, 1);
-  /* error object is the memory error message? */
-  if (ttisshrstring(errobj) && eqshrstr(tsvalue(errobj), G(L)->memerrmsg))
-    luaM_error(L);  /* raise a memory error */
-  else
-    luaG_errormsg(L);  /* raise a regular error */
+  api_checkpop(L, n);
+  if (n == 1) {
+    TValue *errobj = s2v(L->top.p - 1);
+    /* error object is the memory error message? */
+    if (ttisshrstring(errobj) && eqshrstr(tsvalue(errobj), G(L)->memerrmsg))
+      luaM_error(L);  /* raise a memory error */
+  }
+  luaG_errormsgn(L, n);  /* raise a regular error */
   /* code unreachable; will unlock when control actually leaves the kernel */
   return 0;  /* to avoid warnings */
+}
+
+
+LUA_API int lua_error (lua_State *L) {
+  return lua_errorn(L, 1);
 }
 
 

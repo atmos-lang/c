@@ -837,20 +837,42 @@ const char *luaG_addinfo (lua_State *L, const char *msg, TString *src,
 }
 
 
-l_noret luaG_errormsg (lua_State *L) {
+/*
+** Raise an error with the 'n' values at the top of the stack. The
+** message handler (if any) receives all the values and its results
+** become the new error values. The first value is the error object
+** (never nil; no values means "no error object").
+*/
+l_noret luaG_errormsgn (lua_State *L, int n) {
   if (L->errfunc != 0) {  /* is there an error handling function? */
     StkId errfunc = restorestack(L, L->errfunc);
+    StkId base = L->top.p - n;  /* first error value */
+    ptrdiff_t baseidx = savestack(L, base);  /* call can move the stack */
+    int i;
     lua_assert(ttisfunction(s2v(errfunc)));
-    setobjs2s(L, L->top.p, L->top.p - 1);  /* move argument */
-    setobjs2s(L, L->top.p - 1, errfunc);  /* push function */
+    for (i = n; i > 0; i--)  /* move arguments up */
+      setobjs2s(L, base + i, base + i - 1);
+    setobjs2s(L, base, errfunc);  /* push function */
     L->top.p++;  /* assume EXTRA_STACK */
-    luaD_callnoyield(L, L->top.p - 2, 1);  /* call it */
+    luaD_callnoyield(L, base, LUA_MULTRET);  /* call it */
+    base = restorestack(L, baseidx);
+    n = cast_int(L->top.p - base);  /* results are the new error values */
   }
-  if (ttisnil(s2v(L->top.p - 1))) {  /* error object is nil? */
+  if (n == 0) {  /* no error object? */
+    setsvalue2s(L, L->top.p, luaS_newliteral(L, "<no error object>"));
+    L->top.p++;  /* assume EXTRA_STACK */
+    n = 1;
+  }
+  else if (ttisnil(s2v(L->top.p - n))) {  /* error object is nil? */
     /* change it to a proper message */
-    setsvalue2s(L, L->top.p - 1, luaS_newliteral(L, "<no error object>"));
+    setsvalue2s(L, L->top.p - n, luaS_newliteral(L, "<no error object>"));
   }
-  luaD_throw(L, LUA_ERRRUN);
+  luaD_thrown(L, LUA_ERRRUN, n);
+}
+
+
+l_noret luaG_errormsg (lua_State *L) {
+  luaG_errormsgn(L, 1);
 }
 
 

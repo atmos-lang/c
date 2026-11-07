@@ -125,6 +125,15 @@ static int luaB_error (lua_State *L) {
 }
 
 
+/*
+** Raise an error with all the arguments as error values (no position
+** information is added).
+*/
+static int luaB_throw (lua_State *L) {
+  return lua_errorn(L, lua_gettop(L));
+}
+
+
 static int luaB_getmetatable (lua_State *L) {
   luaL_checkany(L, 1);
   if (!lua_getmetatable(L, 1)) {
@@ -463,9 +472,11 @@ static int luaB_select (lua_State *L) {
 */
 static int finishpcall (lua_State *L, int status, lua_KContext extra) {
   if (l_unlikely(status != LUA_OK && status != LUA_YIELD)) {  /* error? */
+    /* error values are above the 'true' at position 'extra + 1' */
+    luaL_checkstack(L, 1, "too many error values");
     lua_pushboolean(L, 0);  /* first result (false) */
-    lua_pushvalue(L, -2);  /* error message */
-    return 2;  /* return false, msg */
+    lua_replace(L, (int)extra + 1);  /* in place of 'true' */
+    return lua_gettop(L) - (int)extra;  /* return false, e1, ..., en */
   }
   else
     return lua_gettop(L) - (int)extra;  /* return all results */
@@ -511,6 +522,7 @@ static const luaL_Reg base_funcs[] = {
   {"collectgarbage", luaB_collectgarbage},
   {"dofile", luaB_dofile},
   {"error", luaB_error},
+  {"throw", luaB_throw},
   {"getmetatable", luaB_getmetatable},
   {"ipairs", luaB_ipairs},
   {"loadfile", luaB_loadfile},

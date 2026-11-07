@@ -2451,7 +2451,7 @@ static int statement (LexState *ls, expdesc *v) {
       escapestat(ls, line);
       break;
     }
-    case TK_DEFER: case TK_CATCH: case TK_THROW: case TK_AWAIT:
+    case TK_DEFER: case TK_CATCH: case TK_AWAIT:
     case TK_EMIT: case TK_SPAWN: case TK_TOGGLE: case TK_PAR:
     case TK_WATCHING: case TK_THREAD: case TK_TASK: case TK_TASKS:
     case TK_TEST: case TK_MATCH: case TK_PUB: {

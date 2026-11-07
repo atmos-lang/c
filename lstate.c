@@ -243,6 +243,7 @@ static void preinit_thread (lua_State *L, global_State *g) {
   L->openupval = NULL;
   L->status = LUA_OK;
   L->errfunc = 0;
+  L->nerr = 1;
   L->oldpc = 0;
   L->base_ci.previous = L->base_ci.next = NULL;
 }
@@ -317,8 +318,11 @@ TStatus luaE_resetthread (lua_State *L, TStatus status) {
   if (status == LUA_YIELD)
     status = LUA_OK;
   status = luaD_closeprotected(L, 1, status);
-  if (status != LUA_OK)  /* errors? */
+  if (status != LUA_OK) {  /* errors? */
     luaD_seterrorobj(L, status, L->stack.p + 1);
+    if (L->ci->top.p < L->top.p)  /* error values may not fit in frame */
+      L->ci->top.p = L->top.p;
+  }
   else  /* keep in the stack only the fake function-entry for basic ci */
     L->top.p = L->stack.p + 1;
   luaD_reallocstack(L, cast_int(L->ci->top.p - L->stack.p), 0);
@@ -337,8 +341,8 @@ TStatus luaE_resetthread (lua_State *L, TStatus status) {
 static void resetthread_aux (lua_State *L, void *ud) {
   TStatus status = *cast(TStatus*, ud);
   status = luaE_resetthread(L, status);
-  if (status != LUA_OK)
-    luaD_throw(L, status);
+  if (status != LUA_OK)  /* error values are at 'stack + 1' */
+    luaD_thrown(L, status, cast_int(L->top.p - (L->stack.p + 1)));
 }
 
 
@@ -347,8 +351,9 @@ LUA_API int lua_closethread (lua_State *L, lua_State *from) {
   lua_lock(L);
   L->nCcalls = (from) ? getCcalls(from) : 0;
   status = luaD_rawrunprotected(L, resetthread_aux, &L->status);
-  /* stack has error message iff there was an error */
-  lua_assert(L->top.p == L->stack.p + (status == LUA_OK ? 1 : 2));
+  /* stack has error values iff there was an error */
+  lua_assert(status == LUA_OK ? L->top.p == L->stack.p + 1
+                              : L->top.p == L->stack.p + 1 + L->nerr);
   if (L == from)  /* closing itself? */
     luaD_throwbaselevel(L, status);
   lua_unlock(L);

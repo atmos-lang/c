@@ -109,20 +109,33 @@ static void LUAI_TRY (lua_State *L, lua_longjmp *c, Pfunc f, void *ud) {
 #endif							/* } */
 
 
+/*
+** Move the error values (the 'L->nerr' values at the top of the stack)
+** to 'oldtop'. Memory errors have a single, preregistered, message.
+*/
 void luaD_seterrorobj (lua_State *L, TStatus errcode, StkId oldtop) {
+  int n = L->nerr;
   if (errcode == LUA_ERRMEM) {  /* memory error? */
     setsvalue2s(L, oldtop, G(L)->memerrmsg); /* reuse preregistered msg. */
+    n = L->nerr = 1;
   }
   else {
+    StkId first = L->top.p - n;  /* first error value */
+    int i;
     lua_assert(errorstatus(errcode));  /* must be a real error */
-    lua_assert(!ttisnil(s2v(L->top.p - 1)));  /* with a non-nil object */
-    setobjs2s(L, oldtop, L->top.p - 1);  /* move it to 'oldtop' */
+    lua_assert(n >= 1 && !ttisnil(s2v(first)));  /* with a non-nil object */
+    for (i = 0; i < n; i++)  /* move values down to 'oldtop' */
+      setobjs2s(L, oldtop + i, first + i);
   }
-  L->top.p = oldtop + 1;  /* top goes back to old top plus error object */
+  L->top.p = oldtop + n;  /* top goes back to old top plus error values */
 }
 
 
-l_noret luaD_throw (lua_State *L, TStatus errcode) {
+/*
+** Throw an error with 'nerr' values at the top of the stack.
+*/
+l_noret luaD_thrown (lua_State *L, TStatus errcode, int nerr) {
+  L->nerr = nerr;
   if (L->errorJmp) {  /* thread has an error handler? */
     L->errorJmp->status = errcode;  /* set status */
     LUAI_THROW(L, L->errorJmp);  /* jump to it */
@@ -133,8 +146,12 @@ l_noret luaD_throw (lua_State *L, TStatus errcode) {
     errcode = luaE_resetthread(L, errcode);  /* close all upvalues */
     L->status = errcode;
     if (mainth->errorJmp) {  /* main thread has a handler? */
-      setobjs2s(L, mainth->top.p++, L->top.p - 1);  /* copy error obj. */
-      luaD_throw(mainth, errcode);  /* re-throw in main thread */
+      int n = cast_int(L->top.p - (L->stack.p + 1));  /* error values */
+      int i;
+      luaD_checkstack(mainth, n);
+      for (i = 0; i < n; i++)  /* copy error values */
+        setobjs2s(L, mainth->top.p++, L->stack.p + 1 + i);
+      luaD_thrown(mainth, errcode, n);  /* re-throw in main thread */
     }
     else {  /* no handler at all; abort */
       if (g->panic) {  /* panic function? */
@@ -147,13 +164,18 @@ l_noret luaD_throw (lua_State *L, TStatus errcode) {
 }
 
 
+l_noret luaD_throw (lua_State *L, TStatus errcode) {
+  luaD_thrown(L, errcode, 1);
+}
+
+
 l_noret luaD_throwbaselevel (lua_State *L, TStatus errcode) {
   if (L->errorJmp) {
     /* unroll error entries up to the first level */
     while (L->errorJmp->previous != NULL)
       L->errorJmp = L->errorJmp->previous;
   }
-  luaD_throw(L, errcode);
+  luaD_thrown(L, errcode, L->nerr);  /* keep the current error values */
 }
 
 
@@ -810,6 +832,7 @@ static TStatus finishpcallk (lua_State *L,  CallInfo *ci) {
   else {  /* error */
     StkId func = restorestack(L, ci->u2.funcidx);
     L->allowhook = getoah(ci);  /* restore 'allowhook' */
+    L->nerr = ci->u.c.nerr;  /* restore number of error values */
     func = luaF_close(L, func, status, 1);  /* can yield or raise an error */
     luaD_seterrorobj(L, status, func);
     luaD_shrinkstack(L);   /* restore stack size in case of overflow */
@@ -898,11 +921,13 @@ static CallInfo *findpcall (lua_State *L) {
 ** of the coroutine itself. (Such errors should not be handled by any
 ** coroutine error handler and should not kill the coroutine.)
 */
-static int resume_error (lua_State *L, const char *msg, int narg) {
+static int resume_error (lua_State *L, const char *msg, int narg,
+                                       int *nresults) {
   api_checkpop(L, narg);
   L->top.p -= narg;  /* remove args from the stack */
   setsvalue2s(L, L->top.p, luaS_new(L, msg));  /* push error message */
   api_incr_top(L);
+  L->nerr = *nresults = 1;  /* one error value */
   lua_unlock(L);
   return LUA_ERRRUN;
 }
@@ -959,9 +984,26 @@ static TStatus precover (lua_State *L, TStatus status) {
   while (errorstatus(status) && (ci = findpcall(L)) != NULL) {
     L->ci = ci;  /* go down to recovery functions */
     setcistrecst(ci, status);  /* status to finish 'pcall' */
+    ci->u.c.nerr = L->nerr;  /* number of error values to finish 'pcall' */
     status = luaD_rawrunprotected(L, unroll, NULL);
   }
   return status;
+}
+
+
+/*
+** Push a copy of the 'n' error values at the top of the stack. The
+** original values stay in the stack of the dead coroutine, so that
+** 'lua_closethread' can return them again after the caller takes the
+** copies. (Can raise a memory error when growing the stack.)
+*/
+static void duperrvalues (lua_State *L, void *ud) {
+  int n = *cast(int *, ud);
+  int i;
+  luaD_checkstack(L, n);
+  for (i = 0; i < n; i++)
+    setobjs2s(L, L->top.p + i, L->top.p - n + i);
+  L->top.p += n;
 }
 
 
@@ -971,15 +1013,16 @@ LUA_API int lua_resume (lua_State *L, lua_State *from, int nargs,
   lua_lock(L);
   if (L->status == LUA_OK) {  /* may be starting a coroutine */
     if (L->ci != &L->base_ci)  /* not in base level? */
-      return resume_error(L, "cannot resume non-suspended coroutine", nargs);
+      return resume_error(L, "cannot resume non-suspended coroutine", nargs,
+                          nresults);
     else if (L->top.p - (L->ci->func.p + 1) == nargs)  /* no function? */
-      return resume_error(L, "cannot resume dead coroutine", nargs);
+      return resume_error(L, "cannot resume dead coroutine", nargs, nresults);
   }
   else if (L->status != LUA_YIELD)  /* ended with errors? */
-    return resume_error(L, "cannot resume dead coroutine", nargs);
+    return resume_error(L, "cannot resume dead coroutine", nargs, nresults);
   L->nCcalls = (from) ? getCcalls(from) : 0;
   if (getCcalls(L) >= LUAI_MAXCCALLS)
-    return resume_error(L, "C stack overflow", nargs);
+    return resume_error(L, "C stack overflow", nargs, nresults);
   L->nCcalls++;
   luai_userstateresume(L, nargs);
   api_checkpop(L, (L->status == LUA_OK) ? nargs + 1 : nargs);
@@ -990,11 +1033,20 @@ LUA_API int lua_resume (lua_State *L, lua_State *from, int nargs,
     lua_assert(status == L->status);  /* normal end or yield */
   else {  /* unrecoverable error */
     L->status = status;  /* mark thread as 'dead' */
-    luaD_seterrorobj(L, status, L->top.p);  /* push error message */
+    if (status != LUA_ERRMEM) {  /* error values in the stack? */
+      int n = L->nerr;
+      if (luaD_rawrunprotected(L, duperrvalues, &n) != LUA_OK) {
+        status = L->status = LUA_ERRMEM;  /* no memory for the copies */
+        L->nerr = 1;
+      }
+    }
+    if (status == LUA_ERRMEM)  /* no error object in the stack? */
+      luaD_seterrorobj(L, status, L->top.p);  /* push error message */
     L->ci->top.p = L->top.p;
   }
   *nresults = (status == LUA_YIELD) ? L->ci->u2.nyield
-                                    : cast_int(L->top.p - (L->ci->func.p + 1));
+            : errorstatus(status) ? L->nerr  /* error values at the top */
+            : cast_int(L->top.p - (L->ci->func.p + 1));
   lua_unlock(L);
   return APIstatus(status);
 }
@@ -1086,6 +1138,7 @@ TStatus luaD_pcall (lua_State *L, Pfunc func, void *u, ptrdiff_t old_top,
   CallInfo *old_ci = L->ci;
   lu_byte old_allowhooks = L->allowhook;
   ptrdiff_t old_errfunc = L->errfunc;
+  int old_nerr = L->nerr;  /* an outer error may be being propagated */
   L->errfunc = ef;
   status = luaD_rawrunprotected(L, func, u);
   if (l_unlikely(status != LUA_OK)) {  /* an error occurred? */
@@ -1096,6 +1149,7 @@ TStatus luaD_pcall (lua_State *L, Pfunc func, void *u, ptrdiff_t old_top,
     luaD_shrinkstack(L);   /* restore stack size in case of overflow */
   }
   L->errfunc = old_errfunc;
+  L->nerr = old_nerr;
   return status;
 }
 

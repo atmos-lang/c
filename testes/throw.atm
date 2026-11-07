@@ -79,7 +79,7 @@ do {
   loop i in (1, 300) { set t@i = i }
   val res = table.pack(pcall(throw, table.unpack(t)))
   assert((res.n == 301) && (res@1 == false) && (res@2 == 1) && (res@301 == 300))
-  val res = table.pack(xpcall(\{ throw(table.unpack(t)) }, \(...){ (...) }))
+  val res = table.pack(xpcall(\{ throw(table.unpack(t)) }, \(...){ return(...) }))
   assert((res.n == 301) && (res@2 == 1) && (res@301 == 300))
   val st, n = xpcall(\{ throw(table.unpack(t)) }, count)
   assert(!st && (n == 300))
@@ -177,7 +177,7 @@ do {
       coroutine.yield()
       throw("a", "b", "c")
     }))
-    table.unpack(res, 1, res.n)
+    return(table.unpack(res, 1, res.n))
   })
   co(); co(); co()
   val res = table.pack(co())

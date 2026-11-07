@@ -47,7 +47,7 @@ static const char *const luaX_tokens [] = {
     "await", "break", "catch", "defer", "do",
     "else", "emit", "escape", "false", "func", "if", "ifs", "in",
     "loop", "match", "nil", "on", "par", "pin", "pub", "return",
-    "set", "spawn", "task", "tasks", "test", "thread", "throw",
+    "set", "spawn", "task", "tasks", "test", "thread",
     "toggle", "true", "until", "val", "var", "watching", "where",
     "while", "with",
     "//", "**", "++", "...", "==", "!=", ">=", "<=",
