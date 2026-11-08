@@ -6,6 +6,7 @@
 print("testing environments")
 
 ;; output captured by a local 'print'
+val realprint = print
 var out = ""
 val func print (...) {
   val t = table.pack(...)
@@ -169,13 +170,18 @@ do {  ;; pattern: false short-circuits
 do {
   var r = nil
   var q = false
-  atmos.env([step = \{ }, quit = \{ set q = true }])
-  atmos.start(\{ await(:Z); set r = :ok })
-  assert(r == nil)
-  emit(:Z)
-  assert(r == "ok")
-  atmos.stop()  ;; quits the environments
-  assert(q)
+  ;; ('stop' aborts the innermost loop body: a nested loop, so that
+  ;; this test file survives)
+  atmos.loop(\{
+    atmos.env([step = \{ }, quit = \{ set q = true }])
+    atmos.start(\{ await(:Z); set r = :ok })
+    assert(r == nil)
+    emit(:Z)
+    assert(r == "ok")
+    atmos.stop()  ;; aborts this body, quits the environments
+    assert(q)
+  })
+  assert(q && (r == "ok"))
 }
 
 do {  ;; start requires a single env without modes
@@ -202,4 +208,4 @@ do {
   assert(clock.now > 0)
 }
 
-print("OK")
+realprint("OK")

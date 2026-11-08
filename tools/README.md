@@ -123,7 +123,13 @@ Semantics assumed for the Atmos implementation (the tests rely on them):
   the nearest timer (`late` returned), `await(:clock)` any tick; `toggle
   t(false) [with P]` / `toggle t(true)` / `toggle on :T [with P] { }` as
   the reference; `atmos.next()`, `atmos.stop()` (aborts the innermost
-  `atmos.loop` body)
+  `atmos.loop` body, quits the environments)
+- environments as the reference (`atmos.env{step=, quit=, mode=}`;
+  `atmos.loop` drives the steps and quits the envs on exit;
+  `atmos.start` for host-driven envs; `__atmos` metamethod on patterns
+  and events; `require "atmos.env.clock"` is built in, emitting the
+  elapsed processor time); a loop body is spawned under the running
+  task when there is one (nested loops), else under the root
 
 ## tst2atm.py
 

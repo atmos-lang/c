@@ -11,6 +11,7 @@
 #include "lprefix.h"
 
 #include <math.h>
+#include <time.h>
 #include <string.h>
 
 #include "lua.h"
@@ -310,6 +311,8 @@ static const luaL_Reg X_funcs[] = {
 #define ATM_EXIT	"atmos.exit"
 #define ATM_PATT	"atmos.patt"
 #define ATM_GC		"atmos.gc"
+#define ATM_ENVS	"atmos.envs"
+#define LOOPCLOSE	"atmos.loopclose"
 
 #define ST_OK		0
 #define ST_ABORTED	1
@@ -322,7 +325,10 @@ typedef struct XTask {
   unsigned char tra;  /* transparent task */
   unsigned char pin;  /* owned by a block or a pool */
   unsigned char status;  /* ST_* */
+  unsigned char isloop;  /* body of an 'atmos.loop' */
 } XTask;
+
+static int LOOPFLAG = 0;  /* the next task created is a loop body */
 
 typedef struct Pool {
   lua_Integer max;  /* maximum number of tasks (-1: unbounded) */
@@ -604,6 +610,8 @@ static XTask *newxtask (lua_State *L, int fidx, int tra) {
   t->th = th;
   t->time = 0;
   t->pass = 0;
+  t->isloop = (unsigned char)LOOPFLAG;
+  LOOPFLAG = 0;
   t->tra = (unsigned char)tra;
   t->pin = 0;
   t->status = ST_OK;
@@ -1062,24 +1070,24 @@ static int atm_next (lua_State *L) {  /* atmos.next(): nearest timer */
 ** root) and resets the clock. (The reference closes the whole root
 ** pool; here nested loops, as the test harness, must survive.)
 */
+static void quitenvs (lua_State *L);
+
 static int atm_stop (lua_State *L) {
   lua_settop(L, 0);
   pushme(L, 1);
-  if (isxtask(L, 1)) {
-    for (;;) {
-      uvget(L, -1, "up");
-      if (isrootpool(L, -1) || lua_isnil(L, -1)) {
-        lua_pop(L, 1);
-        break;
-      }
-      lua_remove(L, -2);
-    }
-    closextask(L, -1);
+  while (isxtask(L, -1) && !(xtaskof(L, -1))->isloop) {  /* up to the body */
+    uvget(L, -1, "up");
+    lua_remove(L, -2);
   }
-  else {  /* no running task: the whole root */
+  if (isxtask(L, -1))
+    closextask(L, -1);
+  else {  /* not inside a loop: everything */
+    lua_pop(L, 1);
     lua_getfield(L, LUA_REGISTRYINDEX, ATM_ROOT);
     closepool(L, -1);
   }
+  lua_pop(L, 1);
+  quitenvs(L);
   sweep(L);
   CLKMIN = HUGE_VAL;
   CLKLATE = 0;
@@ -1299,9 +1307,33 @@ static int await_k (lua_State *L, int status, lua_KContext ctx);
 ** when 'hasevent' is false, right after the await starts). Returns the
 ** number of results, or -1 to keep waiting.
 */
+/* result of an '__atmos' metamethod call (on the top): -1 to keep
+   waiting, else the number of results (true: the event itself) */
+static int atmosresult (lua_State *L, int hasevent) {
+  if (!lua_toboolean(L, -1)) return -1;
+  if (lua_type(L, -1) == LUA_TBOOLEAN) {
+    lua_pop(L, 1);
+    if (!hasevent) return -1;
+    lua_pushvalue(L, 3);
+  }
+  return 1;
+}
+
 static int awaitmatch (lua_State *L, int hasevent) {
   const char *kind = pattkind(L, 1);
   lua_settop(L, hasevent ? 3 : 2);
+  if (luaL_getmetafield(L, 1, "__atmos") != LUA_TNIL) {  /* user pattern */
+    lua_pushvalue(L, 1);
+    if (hasevent) lua_pushvalue(L, 3); else lua_pushnil(L);
+    lua_call(L, 2, 1);
+    return atmosresult(L, hasevent);
+  }
+  if (hasevent && luaL_getmetafield(L, 3, "__atmos") != LUA_TNIL) {
+    lua_pushvalue(L, 3);  /* user event: decides by itself */
+    lua_pushvalue(L, 1);
+    lua_call(L, 2, 1);
+    return atmosresult(L, 1);
+  }
   if (kind != NULL) {
     int arg;
     lua_rawgeti(L, 1, 1);  /* its argument */
@@ -1946,22 +1978,196 @@ static int pinchk_tm (lua_State *L) {
 ** environments, nothing can awake a suspended body, so the loop ends
 ** when the body returns control; its subtree is then closed.
 */
+/*
+** {------------------------------------------------------------------
+** Environments (see tasks.md, stage 3): tables with 'step' (polls
+** once and emits; true quits the loop), 'quit' and 'mode', registered
+** by 'atmos.env' and driven by 'atmos.loop'.
+** -------------------------------------------------------------------
+*/
+
+static int atm_env (lua_State *L) {  /* atmos.env(e) */
+  lua_Integer n;
+  if (lua_type(L, 1) != LUA_TTABLE) luaL_error(L, "invalid env : expected table");
+  lua_settop(L, 1);
+  lua_getfield(L, LUA_REGISTRYINDEX, ATM_ENVS);
+  n = (lua_Integer)lua_rawlen(L, -1);
+  if (n >= 1) {  /* multiple environments: the first is the primary */
+    lua_rawgeti(L, 2, 1);
+    lua_getfield(L, -1, "mode");
+    if (lua_type(L, -1) != LUA_TTABLE ||
+        (lua_getfield(L, -1, "primary"), !lua_toboolean(L, -1)))
+      luaL_error(L, "invalid env : first env must support primary mode");
+    lua_pop(L, 1);  /* primary flag; the first mode table stays */
+    lua_getfield(L, 1, "mode");
+    if (lua_type(L, -1) != LUA_TTABLE ||
+        (lua_getfield(L, -1, "secondary"), !lua_toboolean(L, -1)))
+      luaL_error(L, "invalid env : non-first envs must support secondary mode");
+    lua_pop(L, 1);
+    lua_pushliteral(L, "secondary");
+    lua_setfield(L, -2, "current");
+    lua_pop(L, 1);
+    lua_pushliteral(L, "primary");
+    lua_setfield(L, -2, "current");
+    lua_pop(L, 2);  /* first mode table and the first env */
+  }
+  lua_pushvalue(L, 1);
+  lua_rawseti(L, 2, n + 1);
+  return 0;
+}
+
+/* calls 'quit' on each environment, in reverse order, and unregisters all */
+static void quitenvs (lua_State *L) {
+  lua_Integer n, i;
+  lua_getfield(L, LUA_REGISTRYINDEX, ATM_ENVS);
+  n = (lua_Integer)lua_rawlen(L, -1);
+  for (i = n; i >= 1; i--) {
+    lua_rawgeti(L, -1, i);
+    lua_pushnil(L);
+    lua_rawseti(L, -3, i);  /* unregister before calling (errors) */
+    if (lua_getfield(L, -1, "quit") != LUA_TNIL)
+      lua_call(L, 0, 0);
+    else
+      lua_pop(L, 1);
+    lua_pop(L, 1);
+  }
+  lua_pop(L, 1);
+}
+
+/* the running task or the root, as the owner of a loop/start body */
+static void pushowner (lua_State *L) {
+  pushme(L, 1);
+  if (!isxtask(L, -1)) {
+    lua_pop(L, 1);
+    lua_getfield(L, LUA_REGISTRYINDEX, ATM_ROOT);
+  }
+}
+
+/* teardown of 'atmos.loop' (to-be-closed, so also on errors): closes
+   the body and quits the environments */
+static int loopclose_tm (lua_State *L) {
+  if (lua_rawgeti(L, 1, 1) != LUA_TNIL)
+    closextask(L, -1);
+  lua_pop(L, 1);
+  quitenvs(L);
+  sweep(L);
+  return 0;
+}
+
+/*
+** atmos.loop(body, ...): runs 'body' as a task under the running task
+** (or the root) and drives the environments until it dies (or a step
+** returns true); with no environment, it returns when the body returns
+** control (nothing could awake it). Its value is the body's.
+*/
 static int atm_loop (lua_State *L) {
   int nargs = lua_gettop(L) - 1;
+  int tidx, closer;
   luaL_checktype(L, 1, LUA_TFUNCTION);
   lua_pushcfunction(L, atm_task);  /* body as a prototype */
   lua_pushvalue(L, 1);
   lua_call(L, 1, 1);
   lua_replace(L, 1);
-  lua_getfield(L, LUA_REGISTRYINDEX, ATM_ROOT);
-  lua_insert(L, 1);  /* root, body, args... */
-  spawnaux(L, 1, 0, 2, nargs);  /* the body is the running task at the top */
-  /* stack: root, body, xtask */
-  closextask(L, -1);
-  sweep(L);
-  lua_getfield(L, -1, "ret");
+  lua_createtable(L, 1, 0);  /* teardown */
+  luaL_setmetatable(L, LOOPCLOSE);
+  pushowner(L);
+  lua_rotate(L, 2, 2);  /* body, closer, owner, args... */
+  closer = 2;
+  lua_toclose(L, closer);  /* (a to-be-closed slot cannot be moved) */
+  LOOPFLAG = 1;
+  spawncore(L, 3, 0, 1, nargs);  /* runs to its first await */
+  /* stack: body, closer, owner, xtask */
+  tidx = lua_gettop(L);
+  lua_pushvalue(L, tidx);
+  lua_rawseti(L, closer, 1);
+  while (costatus(L, tidx) != CO_DEAD) {
+    lua_Integer n, i;
+    int quit = 0;
+    lua_getfield(L, LUA_REGISTRYINDEX, ATM_ENVS);
+    n = (lua_Integer)lua_rawlen(L, -1);
+    if (n == 0) {
+      lua_pop(L, 1);
+      break;  /* nothing can awake the body */
+    }
+    for (i = 1; i <= n && !quit; i++) {
+      lua_rawgeti(L, -1, i);
+      lua_getfield(L, -1, "step");
+      lua_call(L, 0, 1);
+      quit = lua_toboolean(L, -1);
+      lua_pop(L, 2);
+    }
+    lua_pop(L, 1);
+    sweep(L);
+    if (quit) break;
+  }
+  lua_getfield(L, tidx, "ret");
   return 1;
 }
+
+/* atmos.start(body, ...): host-driven environment: spawns the body */
+static int atm_start (lua_State *L) {
+  int nargs = lua_gettop(L) - 1;
+  int ok;
+  luaL_checktype(L, 1, LUA_TFUNCTION);
+  lua_getfield(L, LUA_REGISTRYINDEX, ATM_ENVS);
+  ok = (lua_rawlen(L, -1) == 1);
+  if (ok) {
+    lua_rawgeti(L, -1, 1);
+    lua_getfield(L, -1, "mode");
+    ok = lua_isnil(L, -1);
+    lua_pop(L, 2);
+  }
+  lua_pop(L, 1);
+  if (!ok) luaL_error(L, "invalid start : expected single-mode env only");
+  lua_pushcfunction(L, atm_task);
+  lua_pushvalue(L, 1);
+  lua_call(L, 1, 1);
+  lua_replace(L, 1);
+  pushowner(L);
+  lua_insert(L, 1);  /* owner, body, args... */
+  LOOPFLAG = 1;
+  spawncore(L, 1, 0, 2, nargs);
+  return 0;
+}
+
+/* the clock environment ('require "atmos.env.clock"'): 'step' emits
+   the elapsed processor time in microseconds to the root */
+static clock_t CLOCKOLD;
+
+static int clockstep (lua_State *L) {
+  clock_t now = clock();
+  if (now > CLOCKOLD) {
+    lua_Number dt = (lua_Number)(now - CLOCKOLD) * 1e6 / CLOCKS_PER_SEC;
+    lua_Number us = (lua_Number)now * 1e6 / CLOCKS_PER_SEC;
+    CLOCKOLD = now;
+    pushnum(L, us);
+    lua_setfield(L, lua_upvalueindex(1), "now");
+    lua_pushcfunction(L, atm_emit_in);
+    lua_getfield(L, LUA_REGISTRYINDEX, ATM_ROOT);
+    pushnum(L, floor(dt));
+    lua_call(L, 2, 0);
+  }
+  return 0;
+}
+
+static int openclock (lua_State *L) {  /* the module */
+  lua_newtable(L);  /* M */
+  lua_pushinteger(L, 0);
+  lua_setfield(L, -2, "now");
+  lua_createtable(L, 0, 1);  /* M.env */
+  lua_pushvalue(L, -2);
+  lua_pushcclosure(L, clockstep, 1);
+  lua_setfield(L, -2, "step");
+  lua_pushvalue(L, -1);
+  lua_setfield(L, -3, "env");
+  lua_pushcfunction(L, atm_env);
+  lua_insert(L, -2);
+  lua_call(L, 1, 0);  /* atmos.env(M.env) */
+  CLOCKOLD = clock();
+  return 1;
+}
+
+/* }------------------------------------------------------------------ */
 
 
 /* metamethods */
@@ -2073,6 +2279,20 @@ static void opentasks (lua_State *L) {  /* 'atmos' table on top */
   lua_setfield(L, -2, "next");
   lua_pushcfunction(L, atm_stop);
   lua_setfield(L, -2, "stop");
+  lua_pushcfunction(L, atm_env);
+  lua_setfield(L, -2, "env");
+  lua_pushcfunction(L, atm_start);
+  lua_setfield(L, -2, "start");
+  lua_newtable(L);
+  lua_setfield(L, LUA_REGISTRYINDEX, ATM_ENVS);
+  luaL_newmetatable(L, LOOPCLOSE);
+  lua_pushcfunction(L, loopclose_tm);
+  lua_setfield(L, -2, "__close");
+  lua_pop(L, 1);
+  luaL_getsubtable(L, LUA_REGISTRYINDEX, LUA_PRELOAD_TABLE);
+  lua_pushcfunction(L, openclock);
+  lua_setfield(L, -2, "atmos.env.clock");
+  lua_pop(L, 1);
 }
 
 /* }====================================================================== */

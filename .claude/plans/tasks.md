@@ -443,3 +443,29 @@ Reference: `run.lua` (`M.env`, `M.loop` step loop, `M.start`,
   `package.preload`): `step` emits the elapsed microseconds of
   `os.clock()` to the root; module fields `now`, `env`.
 - Loop bodies carry a flag so `atmos.stop()` finds the innermost one.
+
+### Status: implemented
+
+- `latmlib.c`: registry table `atmos.envs`; `atm_env` validates before
+  registering (so a failed registration leaves nothing); `atm_loop`
+  spawns the body under the running task (or the root), flagged
+  `isloop`, drives the steps while it lives, sweeps after each round,
+  and tears down (close the body, `quit` the envs in reverse order,
+  unregister) through a to-be-closed table of the C frame, so also on
+  errors; with no env and a suspended body it returns. `atm_start`,
+  `atm_stop` (innermost loop body by the `isloop` flag, else the whole
+  root; then quits the envs and resets the clock). `__atmos` checked
+  first in `awaitmatch` for the pattern, then for the event (false
+  ends the matching). Clock env: `package.preload["atmos.env.clock"]`
+  (`clock()` of the C library, as the reference's `os.clock`), emitting
+  to the root through `emit_in`.
+- Note: a to-be-closed slot cannot be moved on the stack
+  (`lua_insert`/`lua_rotate` after `lua_toclose` breaks it); `atm_loop`
+  arranges the stack first.
+- Tests: `testes/envs.atm` (hand-written after the reference's
+  `tst/envs.lua`, which uses the Lua API): quit (single env, on error,
+  two envs in reverse order, a step returning true), the mode errors,
+  primary + secondary, `__atmos` (event true/false, pattern true/false),
+  `start`/`stop` (inside a nested loop: `stop` aborts the innermost
+  loop body, which otherwise is the test itself), the clock env.
+  `testes/ref/tst/guide.atm` (real-time clock, 5 seconds) is not run.
