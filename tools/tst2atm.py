@@ -12,12 +12,12 @@ The reference tests are Atmos sources inside Lua strings, run through
 This script extracts (name, src, expectation) triples and writes an
 Atmos test file made of calls to a harness (see testes/tasks1.atm):
 
-    T("name", <src as a raw string>, "expected\n")  ;; exact output
-    T("name", <src>, TX("expected"))   ;; trimmed output
-    T("name", <src>, P("pattern"))     ;; Lua pattern (assertfx)
-    T("name", <src>, F("text"))        ;; substring (string.find)
-    T("name", <src>, E("pre", "msg"))  ;; error 'msg' after output 'pre'
-    T("name", <src>, EP("pre", "pat")) ;; error matching pattern
+    R.T("key", <src as a raw string>, "expected\n")  ;; exact output
+    R.T("key", <src>, R.TX("expected"))   ;; trimmed output
+    R.T("key", <src>, R.P("pattern"))     ;; Lua pattern (assertfx)
+    R.T("key", <src>, R.F("text"))        ;; substring (string.find)
+    R.T("key", <src>, R.E("pre", "msg"))  ;; error 'msg' after output 'pre'
+    R.T("key", <src>, R.EP("pre", "pat")) ;; error matching pattern
 
 Usage: tst2atm.py [--commented] [--enabled NAMESFILE] FILE.lua [FIRST [LAST]]
 With --commented every case is emitted as a ';; ' comment block, to be
@@ -139,7 +139,6 @@ def convert(text, first, last, commented=False, enabled=None, base='',
             listonly=False):
     lines = text.split('\n')
     sub = '\n'.join(lines[first - 1:last])
-    base = sum(len(l) + 1 for l in lines[:first - 1])
     out = []
     pos = 0
     rx = re.compile(r'(?m)^(?P<sec>\s*print\s*[\'"]--- (?P<name>.*?) ---[\'"])|'
@@ -181,14 +180,14 @@ def convert(text, first, last, commented=False, enabled=None, base='',
         if kind == 'X':
             ev = atm_string(val)
         elif kind in ('E', 'EP'):
-            ev = '%s(%s, %s)' % (kind, atm_string(val[0]), atm_string(val[1]))
+            ev = 'R.%s(%s, %s)' % (kind, atm_string(val[0]), atm_string(val[1]))
         else:
-            ev = '%s(%s)' % (kind, atm_string(val))
+            ev = 'R.%s(%s)' % (kind, atm_string(val))
         key = '%s:%d %s' % (base, lineno, name)  # unique per case
         if listonly:
             out.append(key)
             continue
-        case = 'T(%s, %s,\n  %s)' % (atm_string(key), body, ev)
+        case = 'R.T(%s, %s,\n  %s)' % (atm_string(key), body, ev)
         active = not commented if enabled is None else (key in enabled)
         out.append(case if active else comment(case))
     return '\n'.join(out)
@@ -226,9 +225,9 @@ def main():
                      ';; (atmos-lang/atmos tst/%s, copied as is in testes/ref/tst/).\n'
                      ';; Commented cases are not expected to pass yet.\n\n'
                      'dofile("ref/harness.atm")\n'
-                     'harness_begin(%s)\n' % (base, atm_string(base)))
+                     'R.begin(%s)\n' % (base, atm_string(base)))
     sys.stdout.write(convert(text, first, last, commented, enabled, base))
-    sys.stdout.write('\n\nharness_end()\n')
+    sys.stdout.write('\n\nR.finish()\n')
 
 
 if __name__ == '__main__':

@@ -3,8 +3,8 @@
 ;; Commented cases are not expected to pass yet.
 
 dofile("ref/harness.atm")
-harness_begin("await.lua")
-;; T("0:5 op_or 1", """
+R.begin("await.lua")
+;; R.T("await.lua:5 op_or 1", """
 ;;         spawn {
 ;;             await <:X || :Y>
 ;;             print(:ok)
@@ -18,7 +18,7 @@ harness_begin("await.lua")
 ;; ok
 ;; depois
 ;; """)
-;; T("0:18 op_and 1", """
+;; R.T("await.lua:18 op_and 1", """
 ;;         spawn {
 ;;             await <:X && :Y>
 ;;             print(:ok)
@@ -34,7 +34,7 @@ harness_begin("await.lua")
 ;; ok
 ;; depois
 ;; """)
-;; T("0:33 op_nested 1", """
+;; R.T("await.lua:33 op_nested 1", """
 ;;         spawn {
 ;;             await <<:X || :Y> && :Z>
 ;;             print(:ok)
@@ -49,7 +49,7 @@ harness_begin("await.lua")
 ;; ok
 ;; depois
 ;; """)
-;; T("0:47 op_not 1", """
+;; R.T("await.lua:47 op_not 1", """
 ;;         spawn {
 ;;             await <!:X && :Y>
 ;;             print(:ok)
@@ -63,7 +63,7 @@ harness_begin("await.lua")
 ;; ok
 ;; depois
 ;; """)
-;; T("0:60 op_watching 1", """
+;; R.T("await.lua:60 op_watching 1", """
 ;;         spawn {
 ;;             watching <:X || :Y> {
 ;;                 await(:Z)
@@ -80,7 +80,7 @@ harness_begin("await.lua")
 ;; ok
 ;; depois
 ;; """)
-;; T("0:76 op_every 1", """
+;; R.T("await.lua:76 op_every 1", """
 ;;         spawn {
 ;;             loop on <:A || :B> {
 ;;                 print(:tick)
@@ -95,7 +95,7 @@ harness_begin("await.lua")
 ;; tick
 ;; tick
 ;; """)
-;; T("0:90 op_clock_or 1", """
+;; R.T("await.lua:90 op_clock_or 1", """
 ;;         spawn {
 ;;             await <:X || 5ms>
 ;;             print(:ok)
@@ -105,7 +105,7 @@ harness_begin("await.lua")
 ;;   """
 ;; ok
 ;; """)
-;; T("0:101 op_payload_or 1", """
+;; R.T("await.lua:101 op_payload_or 1", """
 ;;         spawn {
 ;;             val a = 10
 ;;             await <:X until (a || 20)>
@@ -116,11 +116,11 @@ harness_begin("await.lua")
 ;;   """
 ;; ok
 ;; """)
-;; T("0:113 op_mixed_err 1", """
+;; R.T("await.lua:113 op_mixed_err 1", """
 ;;         spawn { await <:X || :Y && :Z> }
 ;;     """,
 ;;   "anon.atm : line 1 : near '&&' : operation error : use parentheses to disambiguate")
-;; T("0:120 op_par :any 1", """
+;; R.T("await.lua:120 op_par :any 1", """
 ;;         spawn {
 ;;             par :any { await <:X || :Y> } with { await(:Z) }
 ;;             print(:ok)
@@ -130,7 +130,7 @@ harness_begin("await.lua")
 ;;   """
 ;; ok
 ;; """)
-;; T("0:131 op_nested_not 1", """
+;; R.T("await.lua:131 op_nested_not 1", """
 ;;         spawn {
 ;;             await <!:X || :Y>
 ;;             print(:2)
@@ -143,7 +143,7 @@ harness_begin("await.lua")
 ;; 1
 ;; 2
 ;; """)
-;; T("0:156 task_promote solo 1", """
+;; R.T("await.lua:156 task_promote solo 1", """
 ;;         task T (v) {
 ;;             v * 2
 ;;         }
@@ -155,7 +155,7 @@ harness_begin("await.lua")
 ;;   """
 ;; 20
 ;; """)
-;; T("0:172 task_promote nil_arg 1", """
+;; R.T("await.lua:172 task_promote nil_arg 1", """
 ;;         task T (a, b, c) {
 ;;             print(a)
 ;;             print(b)
@@ -170,7 +170,7 @@ harness_begin("await.lua")
 ;; 10
 ;; 20
 ;; """)
-;; T("0:187 task_promote watching_event 1", """
+;; R.T("await.lua:187 task_promote watching_event 1", """
 ;;         task T () {
 ;;             await(:done)
 ;;         }
@@ -185,7 +185,7 @@ harness_begin("await.lua")
 ;;   """
 ;; ok
 ;; """)
-;; T("0:204 task_promote watching_task 1", """
+;; R.T("await.lua:204 task_promote watching_task 1", """
 ;;         task T () {
 ;;             await(:done)
 ;;             print(:T)
@@ -202,7 +202,7 @@ harness_begin("await.lua")
 ;; T
 ;; ok
 ;; """)
-;; T("0:222 task_promote loop_on 1", """
+;; R.T("await.lua:222 task_promote loop_on 1", """
 ;;         task T () {
 ;;             await(:step)
 ;;         }
@@ -218,7 +218,7 @@ harness_begin("await.lua")
 ;; tick
 ;; tick
 ;; """)
-;; T("0:240 task_promote paren_value 1", """
+;; R.T("await.lua:240 task_promote paren_value 1", """
 ;;         func g () {
 ;;             :X
 ;;         }
@@ -231,7 +231,7 @@ harness_begin("await.lua")
 ;;   """
 ;; ok
 ;; """)
-;; T("0:255 task_promote nontask_err 1", """
+;; R.T("await.lua:255 task_promote nontask_err 1", """
 ;;         func g () { }
 ;;         spawn {
 ;;             watching g() {
@@ -239,6 +239,6 @@ harness_begin("await.lua")
 ;;             }
 ;;         }
 ;;     """,
-;;   P("invalid spawn : expected task prototype"))
+;;   R.P("invalid spawn : expected task prototype"))
 
-harness_end()
+R.finish()

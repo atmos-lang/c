@@ -3,27 +3,27 @@
 ;; Commented cases are not expected to pass yet.
 
 dofile("ref/harness.atm")
-harness_begin("x.lua")
+R.begin("x.lua")
 
 ;; ---- EQ
 
-T("0:6 print(0xA === 10)", "print(0xA === 10)",
+R.T("x.lua:6 print(0xA === 10)", "print(0xA === 10)",
   """
 true
 """)
-T("0:11 print([1,2,3] === [1,2,3])", "print([1,2,3] === [1,2,3])",
+R.T("x.lua:11 print([1,2,3] === [1,2,3])", "print([1,2,3] === [1,2,3])",
   """
 true
 """)
-T("0:16 print(\\{} =!= \\{})", "print(\\{} =!= \\{})",
+R.T("x.lua:16 print(\\{} =!= \\{})", "print(\\{} =!= \\{})",
   """
 true
 """)
-T("0:21 print([x=1] =!= [x=1])", "print([x=1] =!= [x=1])",
+R.T("x.lua:21 print([x=1] =!= [x=1])", "print([x=1] =!= [x=1])",
   """
 false
 """)
-T("0:26 expr ===", """
+R.T("x.lua:26 expr ===", """
         print([ ] =!= [ ])
         print([1] === [1])
         print([ ] === [1])
@@ -47,7 +47,7 @@ false
 true
 false
 """)
-T("0:42 expr === :table", """
+R.T("x.lua:42 expr === :table", """
         print([] ==  [])
         print([] === [])
         print([] !=  [])
@@ -59,7 +59,7 @@ true
 true
 false
 """)
-T("0:52 expr === :vector", """
+R.T("x.lua:52 expr === :vector", """
         print([]  ==  [])
         print([1] === [1])
         print([1] !=  [1])
@@ -71,7 +71,7 @@ true
 true
 false
 """)
-T("0:62 expr === :vector", """
+R.T("x.lua:62 expr === :vector", """
         print([[],[]] ==  [[],[]])
         print([[],[]] !=  [[],[]])
         print([[1],[@(:y)=false,@(:x)=true]] === [[1],[@(:x)=true,@(:y)=false]])
@@ -86,7 +86,7 @@ false
 
 ;; ---- GTE
 
-T("0:80 gte 1", """
+R.T("x.lua:80 gte 1", """
         print(10 =>= 10)
         print(10 =>= 20)
         print(:x =>= :x.y)
@@ -102,7 +102,7 @@ false
 true
 false
 """)
-T("0:93 lte 1", """
+R.T("x.lua:93 lte 1", """
         print(10 =<= 10)
         print(10 =<= 20)
         print(:x =<= :x.y)
@@ -121,19 +121,19 @@ true
 
 ;; ---- CAT
 
-T("0:109 cat 1", """
+R.T("x.lua:109 cat 1", """
         print('a' ++ 'b' ++ 'c')
     """,
   """
 abc
 """)
-T("0:116 cat 2", """
+R.T("x.lua:116 cat 2", """
         print('a' ++ " b " ++ 'c')
     """,
   """
 a b c
 """)
-;; T("0:123 cat 3: vector", """
+;; R.T("x.lua:123 cat 3: vector", """
 ;;         val x = [1,2,3]
 ;;         val t = []
 ;;         set t@(#t+1) = 4
@@ -144,7 +144,7 @@ a b c
 ;;   """
 ;; [1, 2, 3, 4, 5, 6, 7]
 ;; """)
-;; T("0:135 cat 4: table", """
+;; R.T("x.lua:135 cat 4: table", """
 ;;         X.print([x=1] ++ [y=2] ++ [z=3])
 ;;         X.print([1] ++ [2] ++ [3])
 ;;     """,
@@ -155,7 +155,7 @@ a b c
 
 ;; ---- IS / IN
 
-T("0:147 is 1", """
+R.T("x.lua:147 is 1", """
         print(10 ?? :number)
         print([] !? :table)
         print <-- :x ?? :number
@@ -165,7 +165,7 @@ true
 false
 false
 """)
-T("0:156 is 2", """
+R.T("x.lua:156 is 2", """
         print([] ?? :bool)
         print([] ?? :table)
         print(1 !? :table)
@@ -177,7 +177,7 @@ true
 true
 false
 """)
-;; T("0:166 is 3", """
+;; R.T("x.lua:166 is 3", """
 ;;         print([] ?? :table)
 ;;         print(1s ?? :number)
 ;;         print(task () {} ?? :task)
@@ -192,12 +192,12 @@ false
 ;; true
 ;; true
 ;; """)
-;; T("0:178 is 3b: xtask non-proto fails", """
+;; R.T("x.lua:178 is 3b: xtask non-proto fails", """
 ;;         xtask(\{})
 ;;         print :ok
 ;;     """,
-;;   E("", "invalid xtask : expected task prototype"))
-T("0:191 is 4", """
+;;   R.E("", "invalid xtask : expected task prototype"))
+R.T("x.lua:191 is 4", """
         print([] ?? [])
         print([1,2,3] === [1,2,3])
         print(\{} !? \{})
@@ -207,7 +207,7 @@ false
 true
 true
 """)
-T("0:200 in 1", """
+R.T("x.lua:200 in 1", """
         val t = [1,2,3]
         print(2 ?> t)
         print(4 ?> t)
@@ -220,7 +220,7 @@ false
 false
 true
 """)
-T("0:211 is 5", """
+R.T("x.lua:211 is 5", """
         print([tag=[]] ?? :number)
     """,
   """
@@ -229,15 +229,15 @@ false
 
 ;; ---- OPERATOR AS FUNCTION
 
-T("0:223 \\===", """
+R.T("x.lua:223 \\===", """
         print((\===)([1,2], [1,2]))
     """,
   """
 true
 """)
-T("0:231 \\++", " print((\\++)('a', 'b')) ",
+R.T("x.lua:231 \\++", " print((\\++)('a', 'b')) ",
   """
 ab
 """)
 
-harness_end()
+R.finish()

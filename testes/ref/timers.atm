@@ -3,11 +3,11 @@
 ;; Commented cases are not expected to pass yet.
 
 dofile("ref/harness.atm")
-harness_begin("timers.lua")
+R.begin("timers.lua")
 
 ;; ---- TIMERS
 
-;; T("0:9 timers 1: residual carried", """
+;; R.T("timers.lua:9 timers 1: residual carried", """
 ;;         spawn {
 ;;             await(10ms)
 ;;             await(10ms)
@@ -18,7 +18,7 @@ harness_begin("timers.lua")
 ;;   """
 ;; ok
 ;; """)
-;; T("0:21 timers 2: time order in one tick", """
+;; R.T("timers.lua:21 timers 2: time order in one tick", """
 ;;         spawn {
 ;;             par :any {
 ;;                 await(20ms)
@@ -33,7 +33,7 @@ harness_begin("timers.lua")
 ;;   """
 ;; b
 ;; """)
-;; T("0:37 timers 3: periodic catch-up", """
+;; R.T("timers.lua:37 timers 3: periodic catch-up", """
 ;;         spawn {
 ;;             loop i in 3 {
 ;;                 await(10ms)
@@ -47,7 +47,7 @@ harness_begin("timers.lua")
 ;; 2
 ;; 3
 ;; """)
-;; T("0:50 timers 4: late returned", """
+;; R.T("timers.lua:50 timers 4: late returned", """
 ;;         spawn {
 ;;             print(await(10ms))
 ;;             print(await(10ms))
@@ -58,7 +58,7 @@ harness_begin("timers.lua")
 ;; 15000
 ;; 5000
 ;; """)
-;; T("0:61 timers 5: clock pieces", """
+;; R.T("timers.lua:61 timers 5: clock pieces", """
 ;;         spawn {
 ;;             await(10ms)
 ;;         }
@@ -75,7 +75,7 @@ harness_begin("timers.lua")
 ;; 10000	15000
 ;; 15000	0
 ;; """)
-;; T("0:78 timers 6: timer born mid-tick", """
+;; R.T("timers.lua:78 timers 6: timer born mid-tick", """
 ;;         spawn {
 ;;             await(10ms)
 ;;             spawn {
@@ -89,7 +89,7 @@ harness_begin("timers.lua")
 ;;   """
 ;; B
 ;; """)
-;; T("0:93 timers 7: toggle freezes timer", """
+;; R.T("timers.lua:93 timers 7: toggle freezes timer", """
 ;;         pin t = spawn {
 ;;             await(10ms)
 ;;             print(:ok)
@@ -105,7 +105,7 @@ harness_begin("timers.lua")
 ;; -
 ;; ok
 ;; """)
-;; T("0:109 timers 8: toggle on re-reports timer", """
+;; R.T("timers.lua:109 timers 8: toggle on re-reports timer", """
 ;;         spawn {
 ;;             await(20ms)
 ;;             print(:b)
@@ -123,7 +123,7 @@ harness_begin("timers.lua")
 ;; a
 ;; b
 ;; """)
-;; T("0:127 timers 9: next", """
+;; R.T("timers.lua:127 timers 9: next", """
 ;;         print(atmos.next())             ;; no timer
 ;;         spawn {
 ;;             await(10ms)
@@ -141,4 +141,4 @@ harness_begin("timers.lua")
 ;; nil
 ;; """)
 
-harness_end()
+R.finish()

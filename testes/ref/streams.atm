@@ -3,7 +3,7 @@
 ;; Commented cases are not expected to pass yet.
 
 dofile("ref/harness.atm")
-harness_begin("streams.lua")
+R.begin("streams.lua")
 
 ;; ---- BEHAVIOR
 
@@ -13,7 +13,7 @@ harness_begin("streams.lua")
 
 ;; ---- STREAMS
 
-;; T("0:97 func 1", """
+;; R.T("streams.lua:97 func 1", """
 ;;     val S = require "atmos.streams"
 ;;     val my_counter = S.fr_counter()
 ;;     val my_capped_counter = my_counter::take(5)
@@ -31,7 +31,7 @@ harness_begin("streams.lua")
 ;; 4	4
 ;; 5	5
 ;; """)
-;; T("0:111 func 2", """
+;; R.T("streams.lua:111 func 2", """
 ;;     val S = require "atmos.streams"
 ;;     val my_array =
 ;;         S.from()::
@@ -47,7 +47,7 @@ harness_begin("streams.lua")
 ;; 4
 ;; 5
 ;; """)
-;; T("0:124 func 3", """
+;; R.T("streams.lua:124 func 3", """
 ;;     val S = require "atmos.streams"
 ;;     val names = [
 ;;       "Arya",
@@ -64,7 +64,7 @@ harness_begin("streams.lua")
 ;;   """
 ;; [Beatrice, Caleb]
 ;; """)
-;; T("0:142 func 4", """
+;; R.T("streams.lua:142 func 4", """
 ;;     val S = require "atmos.streams"
 ;;     val names = [
 ;;       "Arya",
@@ -82,7 +82,7 @@ harness_begin("streams.lua")
 ;;   """
 ;; [BEATRICE, CALEB]
 ;; """)
-;; T("0:161 func 5", """
+;; R.T("streams.lua:161 func 5", """
 ;;     val S = require "atmos.streams"
 ;;     S.fr_range(1, 10)           ;; run through all the numbers from 1 to 10 (inclusive)
 ;;         ::filter(\{(it%2)==0})  ;; take only even numbers
@@ -96,7 +96,7 @@ harness_begin("streams.lua")
 ;; 8
 ;; 10
 ;; """)
-;; T("0:172 func 6", """
+;; R.T("streams.lua:172 func 6", """
 ;;     val S = require "atmos.streams"
 ;;     val names = ["hellen", "oDYSseuS", "aChIlLeS", "PATROCLUS"]
 ;;     val fix_case = func (name) {
@@ -112,7 +112,7 @@ harness_begin("streams.lua")
 ;; Achilles
 ;; Patroclus
 ;; """)
-;; T("0:186 func 7", """
+;; R.T("streams.lua:186 func 7", """
 ;;     val S = require "atmos.streams"
 ;;     val numbers = S.from(10,15)
 ;;     val sum = numbers::acc0(0, \(acc,new){acc+new})::to()
@@ -121,7 +121,7 @@ harness_begin("streams.lua")
 ;;   """
 ;; 75
 ;; """)
-;; T("0:196 func 8", """
+;; R.T("streams.lua:196 func 8", """
 ;;     val S = require "atmos.streams"
 ;;     val numbers = [2, 1, 3, 4, 7, 11, 18, 29]
 ;;
@@ -134,7 +134,7 @@ harness_begin("streams.lua")
 ;; [2, 4, 18]
 ;; [2, 4, 18]
 ;; """)
-;; T("0:209 func 9", """
+;; R.T("streams.lua:209 func 9", """
 ;;     val S = require "atmos.streams"
 ;;     val matrix = [
 ;;       [1, 2, 3], ;; first element of matrix
@@ -149,4 +149,4 @@ harness_begin("streams.lua")
 ;; [2, 5, 8]
 ;; """)
 
-harness_end()
+R.finish()

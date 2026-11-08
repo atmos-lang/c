@@ -96,8 +96,8 @@ Semantics assumed for the Atmos implementation (the tests rely on them):
 
 Extracts the test cases of the reference implementation
 (`atmos-lang/atmos/tst/*.lua`: Atmos sources inside Lua strings with the
-expected output) into an Atmos test file made of `T(name, src, exp)`
-calls on the harness of `testes/tasks1.atm`:
+expected output) into an Atmos test file made of `R.T(key, src, exp)`
+calls on the harness `testes/ref/harness.atm`:
 
 ```
 python3 tools/tst2atm.py ../atmos-lang/atmos/tst/tasks.lua 101 3609

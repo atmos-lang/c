@@ -3,8 +3,8 @@
 ;; Commented cases are not expected to pass yet.
 
 dofile("ref/harness.atm")
-harness_begin("throw.lua")
-;; T("0:16 spawn-return pre", """
+R.begin("throw.lua")
+;; R.T("throw.lua:16 spawn-return pre", """
 ;;         val T = task () {
 ;;             spawn {
 ;;                 return(10)
@@ -21,7 +21,7 @@ harness_begin("throw.lua")
 ;; 10
 ;; end
 ;; """)
-;; T("0:34 spawn-return pos", """
+;; R.T("throw.lua:34 spawn-return pos", """
 ;;         val T = task () {
 ;;             spawn {
 ;;                 await(:go)
@@ -40,7 +40,7 @@ harness_begin("throw.lua")
 ;; 10
 ;; end
 ;; """)
-;; T("0:54 spawn-break pre", """
+;; R.T("throw.lua:54 spawn-break pre", """
 ;;         val T = task () {
 ;;             val v = loop {
 ;;                 spawn {
@@ -57,7 +57,7 @@ harness_begin("throw.lua")
 ;; 10
 ;; end
 ;; """)
-;; T("0:72 spawn-break pos", """
+;; R.T("throw.lua:72 spawn-break pos", """
 ;;         val T = task () {
 ;;             val v = loop {
 ;;                 spawn {
@@ -76,7 +76,7 @@ harness_begin("throw.lua")
 ;; 10
 ;; end
 ;; """)
-;; T("0:92 spawn-throw pre", """
+;; R.T("throw.lua:92 spawn-throw pre", """
 ;;         val T = task () {
 ;;             val ok, e, v = catch :X {
 ;;                 spawn {
@@ -93,7 +93,7 @@ harness_begin("throw.lua")
 ;; false	X	10
 ;; end
 ;; """)
-;; T("0:110 spawn-throw pos", """
+;; R.T("throw.lua:110 spawn-throw pos", """
 ;;         val T = task () {
 ;;             val ok, e, v = catch :X {
 ;;                 spawn {
@@ -112,7 +112,7 @@ harness_begin("throw.lua")
 ;; false	X	10
 ;; end
 ;; """)
-;; T("0:130 spawn-escape pre", """
+;; R.T("throw.lua:130 spawn-escape pre", """
 ;;         val T = task () {
 ;;             val v = do :X {
 ;;                 spawn {
@@ -129,7 +129,7 @@ harness_begin("throw.lua")
 ;; 10
 ;; end
 ;; """)
-;; T("0:148 spawn-escape pos", """
+;; R.T("throw.lua:148 spawn-escape pos", """
 ;;         val T = task () {
 ;;             val v = do :X {
 ;;                 spawn {
@@ -149,4 +149,4 @@ harness_begin("throw.lua")
 ;; end
 ;; """)
 
-harness_end()
+R.finish()

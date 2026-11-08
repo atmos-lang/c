@@ -3,7 +3,7 @@
 ;; Commented cases are not expected to pass yet.
 
 dofile("ref/harness.atm")
-harness_begin("toggle.lua")
+R.begin("toggle.lua")
 
 ;; ---- TOGGLE FILTER : PARSE
 
@@ -17,7 +17,7 @@ harness_begin("toggle.lua")
 
 ;; ---- TOGGLE FILTER : EXEC
 
-;; T("0:94 toggle filter combinator", """
+;; R.T("toggle.lua:94 toggle filter combinator", """
 ;;         val T = task () {
 ;;             spawn (task () { loop on :Draw  { print(:draw)  } }) ()
 ;;             spawn (task () { loop on :Click { print(:click) } }) ()
@@ -38,7 +38,7 @@ harness_begin("toggle.lua")
 ;; click
 ;; tick
 ;; """)
-;; T("0:114 toggle pool target", """
+;; R.T("toggle.lua:114 toggle pool target", """
 ;;         val T = task (v) {
 ;;             loop {
 ;;                 await(true)
@@ -68,4 +68,4 @@ harness_begin("toggle.lua")
 ;; 2
 ;; """)
 
-harness_end()
+R.finish()
