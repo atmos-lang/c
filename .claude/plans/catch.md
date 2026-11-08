@@ -37,10 +37,42 @@ the `catch` stack-trace output of the reference, tasks interactions
 
 ## Mechanism for `catch`
 
-Status: (A) was implemented first (`luaB_catch` in `lbaselib.c`,
-`catchexp` in `lparser.c`); (B) replaces it: VM try regions (design
-below), `watching` inline, jumps across task bodies. `defer` is
+Status: (B) implemented (design below): VM try regions, `catch` and
+`watching` inline, jumps across task bodies. (A) was the first
+implementation; `luaB_catch` stays as a library function. `defer` is
 unchanged (function values closable in `lfunc.c`).
+
+Implementation notes (things found while making it work, all in the
+tests now):
+
+- The code generator requires that an instruction leaving open results
+  (`ot`, `C == 0`) is followed by one consuming them (`it`), and the
+  debug VM resets `L->top` before any instruction not marked `it`. So
+  the value count of a `catch` travels in `L->trynres` (set by
+  `OP_ENDTRY`/`OP_CATCH`, read by `OP_CATCHRES`, the only opcode with
+  open results), and `OP_CATCH` takes the error count from `L->nerr`.
+- The recovery must keep the region active while closing its variables
+  (a `__close` error is recovered by the same region, as `pcall` does),
+  and be re-entrant for a yield inside a `__close` (the frame keeps its
+  recovery status until the handler is set; closes run with `yy = 1`
+  in recovery mode). In nested mode `luaD_runnested` loops the
+  recovery as `luaD_closeprotected` does.
+- The region's stack level must be re-derived from its relative offset
+  after closing: a `defer` can reallocate the stack.
+- An API call from inside the VM (`luaB_tagmatch` in the matcher) must
+  release `lua_lock`.
+- The handler code of an owning block must copy the error values to
+  fresh temporaries before using them (constants loaded for the
+  comparisons would clobber them in the debug build), and the
+  `par`/`toggle` region register is the call base (an extra reserved
+  slot broke the register layout of declarations).
+- `taskresult` kept the last result as `ret`; it is the first.
+- Per-block owner records live in `BlockCnt` (a heap allocation leaked
+  on compile errors); the region array is accounted in
+  `luaE_threadsize`.
+- Reference `emit scope 6` expects `return` inside `catch true` to be
+  caught as the error `atm-func` (the reference's dynamic scope); here
+  it returns, so the case stays disabled.
 
 Two bugs of the Atmos front end surfaced with `defer` in value blocks
 and were fixed on the way: (1) `val x = <expr>` predeclared `x` before

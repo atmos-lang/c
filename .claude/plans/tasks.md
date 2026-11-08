@@ -261,17 +261,10 @@ Decisions (discussed before implementing):
 - `watching P { body }` → `watching(P, \{ })` = `par_any(\{ await(P)
   }, body)`: the body is a transparent task too (as the reference);
   the value is the body's value or the awaited event.
-- `break`/`return`/`escape`/`until`/`while` inside a `par`/`watching`
-  body are compile errors, as inside `catch`: they are jumps here, not
-  throws as in the reference (`atm_break` = `throw('atm-loop')` caught
-  by every loop), and a jump cannot cross a closure. The inline
-  alternative (body in the current task, a hidden watcher task waking
-  it with a private error at its `await`, caught by a VM try region)
-  is catch.md option B, whose scope is `catch` and `watching`. With the
-  stackless coroutines of coroutine.md (c), closures that are task
-  bodies (`par` branches, `watching` bodies) may `await`; closures
-  called inline (`catch` A, `defer`) may not, which is another reason
-  for B.
+- (Superseded by catch.md option B, implemented: `watching` has an
+  inline body under a try region with a hidden watcher task; jumps out
+  of `par` branches, `spawn { }` and `toggle on` bodies reach their
+  targets in the owner through a region of the owning block.)
 - Patterns `await <PAT>` (also after `watching`, `loop on`): leaves are
   tags/values, `(E)` value expressions, `:any ts`/`:all ts`, `until (c)`/
   `while (c)`, nested `<P>`, and a bare call `T(args)` which spawns

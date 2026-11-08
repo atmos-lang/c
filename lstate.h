@@ -250,6 +250,8 @@ struct CallInfo {
 #define CIST_HOOKYIELD	(CIST_TAIL << 1)
 /* function "called" a finalizer */
 #define CIST_FIN	(CIST_HOOKYIELD << 1)
+/* Atmos: Lua frame with open try regions ('catch') */
+#define CIST_TRY	(CIST_FIN << 1)
 
 
 #define get_nresults(cs)  (cast_int((cs) & CIST_NRESULTS) - 1)
@@ -283,10 +285,28 @@ struct CallInfo {
 /*
 ** 'per thread' state
 */
+/*
+** Atmos: a try region (an active 'catch' block or an owning block of
+** spawned tasks; see .claude/plans/catch.md). Regions form a stack per
+** thread; errors inside one are recovered at its handler.
+*/
+typedef struct TryRegion {
+  CallInfo *ci;  /* its frame */
+  const Instruction *handler;  /* pc of the handler (OP_CATCH) */
+  ptrdiff_t level;  /* stack level of the first error value */
+  ptrdiff_t errfunc;  /* saved 'errfunc' */
+  l_uint32 nCcalls;  /* saved 'nCcalls' */
+  lu_byte allowhook;  /* saved 'allowhook' */
+  lu_byte nested;  /* runs under its own protected call (non-yieldable) */
+} TryRegion;
+
+
 struct lua_State {
   CommonHeader;
   lu_byte allowhook;
   TStatus status;
+  TStatus trystatus;  /* Atmos: status of the error being handled by a region */
+  int trynres;  /* Atmos: values of a 'catch' (OP_ENDTRY/OP_CATCH -> OP_CATCHRES) */
   StkIdRel top;  /* first free slot in the stack */
   struct global_State *l_G;
   CallInfo *ci;  /* call info for current function */
@@ -301,6 +321,9 @@ struct lua_State {
   volatile lua_Hook hook;
   ptrdiff_t errfunc;  /* current error handling function (stack index) */
   int nerr;  /* number of values of the error being propagated */
+  TryRegion *tryregions;  /* Atmos: stack of active regions */
+  int ntry;  /* number of active regions */
+  int sizetry;  /* size of 'tryregions' */
   l_uint32 nCcalls;  /* number of nested non-yieldable or C calls */
   int oldpc;  /* last pc traced */
   int nci;  /* number of items in 'ci' list */

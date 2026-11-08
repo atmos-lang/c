@@ -224,19 +224,16 @@ do {  ;; jumps are not errors: 'catch true' lets them through
   check("3\n")
 }
 
-do {  ;; an escape with no matching block in the owner is an error
-  task T () {
-    spawn {
-      await(:go)
-      escape(:Z, 1)
-    }
-    await(false)
+do {  ;; jumps are checked at compile time against the owner's blocks
+  val func err (src, msg) {
+    val f, m = load(src)
+    assert(!f && string.find(m, msg, 1, true), m)
   }
-  spawn T()
-  val ok, e = pcall(emit, :go)
-  assert(!ok)
-  print(:ok)
-  check("ok\n")
+  err("task T () { spawn { escape(:Z, 1) }; await(false) }",
+      "no enclosing block ':Z' for <escape>")
+  err("task T () { spawn { break() }; await(false) }", "break outside loop")
+  err("spawn { defer { break() } }", "break outside loop")
+  err("loop { f(spawn { break() }) }", "no owning block")
 }
 
 ;; ---- par branches and toggle bodies
@@ -300,5 +297,7 @@ do {
   }
   assert(w == "Y")
 }
+
+set T = nil  ;; (the task declarations above are globals)
 
 realprint("OK")

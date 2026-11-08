@@ -346,6 +346,11 @@ OP_VARARGPREP,/* 	(adjust varargs)				*/
 
 OP_PINCHK,/*	A B	__pinchk(R[A], B) if R[A] has it (0 chk, 1 set, 2 own) */
 
+OP_TRY,/*	A sBx	open a try region; handler at pc+sBx; values at R[A+1] */
+OP_ENDTRY,/*	A B k	pop the region; k: R[A] := true, B-1 values at A+1 */
+OP_CATCH,/*	A B	handler: B=0 'catch' (cnd in R[A]), 1 jumps only, 2 rethrow */
+OP_CATCHRES,/*	A C	1 + 'trynres' values at R[A]..: adjust to C-1 results (C=0: open) */
+
 OP_EXTRAARG/*	Ax	extra (larger) argument for previous opcode	*/
 } OpCode;
 

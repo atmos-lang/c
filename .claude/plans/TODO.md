@@ -57,21 +57,24 @@ value; `match`/`where`/`catch`/pipes pending).
 ## 4. Errors with multiple values
 
 Done: see [errors.md](errors.md) and [catch.md](catch.md) (`catch`,
-`throw`, `defer`, option (A): closure + protected call; VM try regions
-planned as option (B)). Errors carry n values on the stack
+`throw`, `defer`; `catch` is an inline block under a VM try region,
+option (B)). Errors carry n values on the stack
 (`throw(...)`, `lua_errorn`); `pcall`/`xpcall`/`coroutine.resume`/
 `coroutine.close` return them, handlers receive and return n values,
 `__close` gets value 1. Tests: `testes/throw.atm`. Next: `catch`/`throw`
 syntax and `defer` in the parser on top of it.
 
-## 5. `catch` as VM try regions (option B)
+## 5. `catch` as VM try regions (option B): done
 
-`catch` is a closure plus a protected call (option A in
-[catch.md](catch.md)), so `break`/`escape`/`return`/`until`/`while`
-cannot cross it and each execution allocates a closure. Option B
-(`OP_TRY`/`OP_ENDTRY`/`OP_CATCH`, per-thread region stack, `setjmp` per
-`luaV_execute` invocation) is designed in catch.md and replaces only
-`catchexp` and `luaB_catch`.
+`OP_TRY`/`OP_ENDTRY`/`OP_CATCH`/`OP_CATCHRES`, a per-thread region
+stack recovered through `lua_resume`'s `precover` (yieldable threads)
+or a nested protected call (non-yieldable). `catch` and `watching`
+bodies are inline blocks: `break`/`until`/`while`/`escape`/`return`
+cross them. Jumps out of task bodies (`spawn { }`, `par` branches,
+`toggle on`) are throws of status `LUA_ERRJUMP` dispatched by a region
+of the owning block to the loop, `do :X` or function they target
+(checked at compile time). Tests: `testes/catch.atm`, `testes/jumps.atm`,
+`ref/throw.atm`. See catch.md for the implementation notes.
 
 ## 6. Compound expressions with live temporaries (done)
 

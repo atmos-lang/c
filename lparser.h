@@ -183,7 +183,8 @@ typedef struct FuncState {
   lu_byte freereg;  /* first free register */
   lu_byte iwthabs;  /* instructions issued since last absolute line info */
   lu_byte needclose;  /* function needs to close upvalues when returning */
-  lu_byte iscatch;  /* body of a 'catch'/'par'/'watching' (CB_*) */
+  lu_byte iscatch;  /* body of a 'par'/'toggle on'/'spawn' block (CB_*) */
+  struct Owner *owner;  /* innermost open owner region (jumps out of tasks) */
   lu_byte spawnval;  /* last statement was a 'spawn' (1: to be owned) */
 } FuncState;
 

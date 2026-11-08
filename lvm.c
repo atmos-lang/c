@@ -30,6 +30,7 @@
 #include "ltable.h"
 #include "ltm.h"
 #include "lvm.h"
+#include "lualib.h"  /* Atmos: luaB_tagmatch for OP_CATCH */
 
 
 /*
@@ -859,6 +860,67 @@ static void pushclosure (lua_State *L, Proto *p, UpVal **encup, StkId base,
 /*
 ** finish execution of an opcode interrupted by a yield
 */
+/*
+** {==================================================================
+** Atmos: try regions (see .claude/plans/catch.md)
+** ===================================================================
+*/
+
+/* body of a nested region: run the frame until its OP_ENDTRY/handler */
+static void trynested (lua_State *L, void *ud) {
+  luaV_execute(L, cast(CallInfo *, ud));
+}
+
+
+/*
+** Matching of a 'catch': condition in R[A] ('ra'), 'n' error values
+** at R[A+1]..; 'cidx' is the stack index of the condition. Returns
+** whether it matched; a function condition replaces the values by its
+** results after 'true'. Leaves 'L->top' after the values.
+*/
+static int catchmatch (lua_State *L, StkId ra, int n, int cidx) {
+  TValue *cnd = s2v(ra);
+  switch (ttype(cnd)) {
+    case LUA_TBOOLEAN:
+      return !l_isfalse(cnd);  /* 'true' catches anything, 'false' nothing */
+    case LUA_TFUNCTION: {
+      ptrdiff_t rarel = savestack(L, ra);
+      StkId func;
+      int i, m;
+      luaD_checkstack(L, n + 1);
+      ra = restorestack(L, rarel);
+      func = L->top.p;
+      setobjs2s(L, func, ra);  /* the condition function */
+      for (i = 0; i < n; i++)
+        setobjs2s(L, func + 1 + i, ra + 1 + i);  /* the error values */
+      L->top.p = func + 1 + n;
+      luaD_call(L, func, LUA_MULTRET);
+      ra = restorestack(L, rarel);
+      func = ra + 1 + n;
+      m = cast_int(L->top.p - func);  /* number of results */
+      if (m >= 1 && ttisboolean(s2v(func)) && !l_isfalse(s2v(func))) {
+        for (i = 1; i < m; i++)  /* the other results replace the values */
+          setobjs2s(L, ra + i, func + i);
+        L->top.p = ra + m;
+        L->trynres = m - 1;
+        return 1;
+      }
+      L->top.p = func;  /* drop the results */
+      return 0;
+    }
+    default: {  /* e1 ?? cnd (through the API: release the lock) */
+      int res;
+      lua_unlock(L);
+      res = luaB_tagmatch(L, cidx + 1, cidx);
+      lua_lock(L);
+      return res;
+    }
+  }
+}
+
+/* }================================================================== */
+
+
 void luaV_finishOp (lua_State *L) {
   CallInfo *ci = L->ci;
   StkId base = ci->func.p + 1;
@@ -1968,6 +2030,72 @@ void luaV_execute (lua_State *L, CallInfo *ci) {
           L->oldpc = 1;  /* next opcode will be seen as a "new" line */
         }
         updatebase(ci);  /* function has new base after adjustment */
+        vmbreak;
+      }
+      vmcase(OP_TRY) {  /* Atmos: open a try region */
+        StkId ra = RA(i);
+        const Instruction *handler = pc + GETARG_sBx(i);
+        savestate(L, ci);
+        if (yieldable(L))  /* recovered through 'lua_resume' */
+          luaD_pushtry(L, ci, handler, ra + 1, 0);
+        else {  /* non-yieldable: run the region under a protected call */
+          luaD_pushtry(L, ci, handler, ra + 1, 1);
+          luaD_runnested(L, trynested, ci);  /* (recovers at the handler) */
+          updatebase(ci);
+          pc = ci->u.l.savedpc;
+          updatetrap(ci);
+        }
+        vmbreak;
+      }
+      vmcase(OP_ENDTRY) {  /* Atmos: leave a try region */
+        StkId ra = RA(i);
+        int b = GETARG_B(i);
+        int nested;
+        savepc(ci);
+        nested = luaD_poptry(L);
+        if (TESTARG_k(i)) {  /* normal end of a 'catch': true, body values */
+          setbtvalue(s2v(ra));
+          L->trynres = b - 1;  /* for OP_CATCHRES */
+        }
+        if (nested) {  /* back to the OP_TRY that runs this region */
+          ci->u.l.savedpc = pc;
+          return;
+        }
+        vmbreak;
+      }
+      vmcase(OP_CATCH) {  /* Atmos: handler of a region */
+        StkId ra = RA(i);
+        int mode = GETARG_B(i);
+        TStatus st = L->trystatus;
+        int n = L->nerr;  /* error values, at R[A+1].. */
+        L->top.p = ra + 1 + n;
+        L->trynres = n;  /* for OP_CATCHRES */
+        savepc(ci);
+        if (mode == 2 || (mode == 1 && st != LUA_ERRJUMP))
+          luaD_thrown(L, st, n);  /* rethrow */
+        if (mode == 0) {  /* 'catch': match the condition */
+          if (st == LUA_ERRJUMP || !catchmatch(L, ra, n, GETARG_A(i) + 1)) {
+            ra = RA(i);
+            luaD_thrown(L, st, cast_int(L->top.p - (ra + 1)));
+          }
+          updatebase(ci);
+          ra = RA(i);
+          setbfvalue(s2v(ra));  /* false, values */
+          updatetrap(ci);
+        }
+        vmbreak;
+      }
+      vmcase(OP_CATCHRES) {  /* Atmos: results of a 'catch' expression */
+        StkId ra = RA(i);
+        int nres = GETARG_C(i) - 1;
+        int n = 1 + L->trynres;  /* the flag and the values */
+        if (nres < 0)  /* open results: 'L->top' marks their end */
+          L->top.p = ra + n;
+        else {
+          for (; n < nres; n++)
+            setnilvalue(s2v(ra + n));
+          L->top.p = ci->top.p;
+        }
         vmbreak;
       }
       vmcase(OP_PINCHK) {  /* Atmos: a task or pool being assigned */

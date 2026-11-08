@@ -430,7 +430,7 @@ int luaK_codeABx (FuncState *fs, OpCode o, int A, int Bc) {
 /*
 ** Format and emit an 'iAsBx' instruction.
 */
-static int codeAsBx (FuncState *fs, OpCode o, int A, int Bc) {
+int luaK_codeAsBx (FuncState *fs, OpCode o, int A, int Bc) {
   int b = Bc + OFFSET_sBx;
   lua_assert(getOpMode(o) == iAsBx);
   lua_assert(A <= MAXARG_A && b <= MAXARG_Bx);
@@ -696,7 +696,7 @@ static int fitsBx (lua_Integer i) {
 
 void luaK_int (FuncState *fs, int reg, lua_Integer i) {
   if (fitsBx(i))
-    codeAsBx(fs, OP_LOADI, reg, cast_int(i));
+    luaK_codeAsBx(fs, OP_LOADI, reg, cast_int(i));
   else
     luaK_codek(fs, reg, luaK_intK(fs, i));
 }
@@ -705,7 +705,7 @@ void luaK_int (FuncState *fs, int reg, lua_Integer i) {
 static void luaK_float (FuncState *fs, int reg, lua_Number f) {
   lua_Integer fi;
   if (luaV_flttointeger(f, &fi, F2Ieq) && fitsBx(fi))
-    codeAsBx(fs, OP_LOADF, reg, cast_int(fi));
+    luaK_codeAsBx(fs, OP_LOADF, reg, cast_int(fi));
   else
     luaK_codek(fs, reg, luaK_numberK(fs, f));
 }

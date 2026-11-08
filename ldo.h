@@ -69,6 +69,16 @@ typedef void (*Pfunc) (lua_State *L, void *ud);
 
 LUAI_FUNC l_noret luaD_errerr (lua_State *L);
 LUAI_FUNC void luaD_seterrorobj (lua_State *L, TStatus errcode, StkId oldtop);
+
+/* Atmos: try regions (see .claude/plans/catch.md) */
+LUAI_FUNC void luaD_pushtry (lua_State *L, CallInfo *ci,
+                             const Instruction *handler, StkId level,
+                             int nested);
+LUAI_FUNC int luaD_poptry (lua_State *L);
+LUAI_FUNC void luaD_droptry (lua_State *L, CallInfo *ci);
+LUAI_FUNC void luaD_tryrecover (lua_State *L, CallInfo *ci, TStatus status,
+                                int yy);
+LUAI_FUNC void luaD_runnested (lua_State *L, Pfunc f, CallInfo *ci);
 LUAI_FUNC TStatus luaD_protectedparser (lua_State *L, ZIO *z,
                                                   const char *name,
                                                   const char *mode);

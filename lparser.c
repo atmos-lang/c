@@ -44,6 +44,35 @@
 
 
 /*
+** Jumps out of task bodies ('break'/'until'/'while', 'escape',
+** 'return' inside 'spawn { }', 'par' branches, 'toggle on' bodies)
+** are throws of status LUA_ERRJUMP caught by a try region of the
+** block that owns the task (or around the 'par'/'toggle' call), whose
+** handler dispatches them to their targets. (See catch.md, option B.)
+*/
+#define JK_BREAK	1
+#define JK_ESCAPE	2
+#define JK_RETURN	3
+
+#define MAXJUMPS	8
+
+typedef struct JumpRec {
+  int kind;
+  TString *tag;  /* escape tag */
+  struct BlockCnt *target;  /* loop or 'do :tag' block (NULL for return) */
+} JumpRec;
+
+typedef struct Owner {
+  struct Owner *previous;  /* enclosing open owner region */
+  int pc;  /* its OP_TRY */
+  int reg;  /* its register (values at reg+1..) */
+  int needtry;  /* some task body jumps out */
+  int njumps;
+  JumpRec jumps[MAXJUMPS];
+} Owner;
+
+
+/*
 ** nodes for block list (list of active blocks)
 */
 typedef struct BlockCnt {
@@ -57,7 +86,10 @@ typedef struct BlockCnt {
   /* Atmos */
   TString *tag;  /* tag of a 'do :tag' block (NULL otherwise) */
   lu_byte hasescape;  /* true if block has pending escapes */
+  lu_byte nregions;  /* try regions to pop when leaving the block */
   short resreg;  /* register holding the block value (or -1) */
+  struct Owner *owner;  /* region owning the tasks spawned in the block */
+  struct Owner ownerbuf;  /* its storage (no heap: parse errors longjmp) */
 } BlockCnt;
 
 
@@ -81,6 +113,12 @@ static int parenlist (LexState *ls, expdesc *v);
 static void tuple2value (LexState *ls, expdesc *v, int n);
 static void spawnexp (LexState *ls, expdesc *v, int promote);
 static void ownspawn (LexState *ls, expdesc *v);
+struct Owner;
+static void blockowner (LexState *ls);
+static void openowner (LexState *ls, struct Owner *o, int reg);
+static void closeowner (LexState *ls, struct Owner *o, int line);
+static void breakjump (LexState *ls, BlockCnt *bl, int line);
+static int newgotoentry (LexState *ls, TString *name, int line);
 static void pattexp (LexState *ls, expdesc *e);
 static void pattbin (LexState *ls, expdesc *e);
 static int explist (LexState *ls, expdesc *v);
@@ -875,7 +913,9 @@ static void enterblock (FuncState *fs, BlockCnt *bl, lu_byte isloop) {
   bl->insidetbc = (fs->bl != NULL && fs->bl->insidetbc);
   bl->tag = NULL;
   bl->hasescape = 0;
+  bl->nregions = 0;
   bl->resreg = -1;
+  bl->owner = NULL;
   bl->previous = fs->bl;  /* link block in function's block list */
   fs->bl = bl;
   lua_assert(fs->freereg == luaY_nvarstack(fs));
@@ -897,6 +937,11 @@ static void leaveblock (FuncState *fs) {
   BlockCnt *bl = fs->bl;
   LexState *ls = fs->ls;
   lu_byte stklevel = reglevel(fs, bl->nactvar);  /* level outside block */
+  if (bl->owner != NULL) {  /* tasks spawned in the block? */
+    bl->nregions--;  /* the handler runs with the region popped */
+    closeowner(ls, bl->owner, ls->linenumber);
+    bl->owner = NULL;
+  }
   if (bl->previous && bl->upval)  /* need a 'close'? */
     luaK_codeABC(fs, OP_CLOSE, stklevel, 0, 0);
   fs->freereg = stklevel;  /* free registers */
@@ -968,6 +1013,7 @@ static void open_func (LexState *ls, FuncState *fs, BlockCnt *bl) {
   fs->nactvar = 0;
   fs->needclose = 0;
   fs->iscatch = 0;
+  fs->owner = NULL;
   fs->spawnval = 0;
   fs->firstlocal = ls->dyd->actvar.n;
   fs->firstlabel = ls->dyd->label.n;
@@ -1491,14 +1537,12 @@ static void lambda (LexState *ls, expdesc *e, int line) {
 ** ('catch' bodies cannot 'return': that would return from the closure
 ** instead of from the enclosing function.)
 */
-/* kinds of blocks compiled as closures ('FuncState.iscatch') */
-#define CB_CATCH	1
+/* kinds of blocks compiled as closures ('FuncState.iscatch'): the
+   bodies of tasks ('catch' and 'watching' bodies are inline, see
+   .claude/plans/catch.md) */
 #define CB_PAR		2
-#define CB_WATCHING	3
 #define CB_TOGGLE	4
-
-static const char *const cbnames[] =
-  {"", "catch", "par", "watching", "toggle"};
+#define CB_SPAWN	5
 
 static void closurebody (LexState *ls, expdesc *e, int line, int iscatch) {
   FuncState new_fs;
@@ -1516,28 +1560,75 @@ static void closurebody (LexState *ls, expdesc *e, int line, int iscatch) {
 
 
 /*
-** catch -> 'catch' expr funcblock
-** Compiled as a call 'catch(expr, function () body end)' of the base
-** function 'catch', which does the protected call and the matching.
-** (See .claude/plans/catch.md.)
+** catch -> 'catch' expr block
+** An inline block under a try region (see .claude/plans/catch.md):
+**
+**     CND -> R[A]; OP_TRY A -> handler
+**     body (value at R[A+1], locals above)
+**     OP_ENDTRY A -> join           (R[A] := true)
+**   handler: OP_CATCH A 0          (match, or rethrow)
+**   join: OP_CATCHRES A C          (a VCALL-like expression at A)
+**
+** Hidden locals '(cnd)' and '(val)' keep the two slots below the body's
+** locals (called through 'compoundexp', so live temporaries are kept
+** too). Jumps out of the body pop the region ('popregions').
 */
-static void catchexp (LexState *ls, expdesc *v, int line) {
+static int catchstat (LexState *ls, expdesc *v) {
   FuncState *fs = ls->fs;
-  expdesc cnd, f;
-  int base;
+  int line = ls->linenumber;
+  int base = luaY_nvarstack(fs);
+  int nactvar = fs->nactvar;
+  int pctry, pcend, pcres, nvals;
+  expdesc cnd;
+  BlockCnt bl;
   luaX_next(ls);  /* skip 'catch' */
-  buildvar(ls, luaX_newstring(ls, "catch", 5), v);  /* base function */
-  luaK_exp2nextreg(fs, v);
-  base = v->u.info;
+  lua_assert(base == fs->freereg);
   expr(ls, &cnd);  /* condition, evaluated before the body */
-  luaK_exp2nextreg(fs, &cnd);
-  check(ls, '{');
-  closurebody(ls, &f, line, CB_CATCH);
-  luaK_exp2nextreg(fs, &f);
-  init_exp(v, VCALL, luaK_codeABC(fs, OP_CALL, base, 3, 2));
+  luaK_exp2nextreg(fs, &cnd);  /* at 'base' */
+  new_localvarliteral(ls, "(cnd)");
+  new_localvarliteral(ls, "(val)");
+  luaK_reserveregs(fs, 1);  /* the value slot */
+  adjustlocalvars(ls, 2);
+  pctry = luaK_codeAsBx(fs, OP_TRY, base, 0);
   luaK_fixline(fs, line);
-  fs->freereg = cast_byte(base + 1);  /* call removes function and arguments
-                                         and leaves one result (unless changed later) */
+  enterblock(fs, &bl, 0);
+  bl.nregions = 1;
+  bl.resreg = cast_short(base + 1);
+  checknext(ls, '{');
+  {  /* the body values go to R[base+1]..: none, one, or a tuple's */
+    expdesc bv;
+    int n;
+    statlist(ls, &bv, &n);
+    if (bv.k == VVOID)
+      nvals = 0;
+    else if (n == 1) {
+      store_value(ls, base + 1, &bv);  /* (a call gives one value) */
+      nvals = 1;
+    }
+    else {  /* tuple: values above the body locals; move them down */
+      int first = luaY_nvarstack(fs);
+      int i;
+      luaK_exp2nextreg(fs, &bv);
+      lua_assert(n == fs->freereg - first);
+      for (i = 0; i < n; i++)
+        luaK_codeABC(fs, OP_MOVE, base + 1 + i, first + i, 0);
+      nvals = n;
+    }
+    ls->blockline = ls->lastline;
+  }
+  check_match(ls, '}', '{', line);
+  leaveblock(fs);
+  luaK_codeABCk(fs, OP_ENDTRY, base, nvals + 1, 0, 1);
+  pcend = luaK_jump(fs);  /* to the join */
+  SETARG_sBx(fs->f->code[pctry], luaK_getlabel(fs) - (pctry + 1));
+  luaK_codeABC(fs, OP_CATCH, base, 0, 0);
+  luaK_fixline(fs, line);
+  luaK_patchtohere(fs, pcend);
+  pcres = luaK_codeABC(fs, OP_CATCHRES, base, 0, 2);
+  removevars(fs, nactvar);  /* the hidden locals */
+  fs->freereg = cast_byte(base + 1);
+  init_exp(v, VCALL, pcres);
+  return 1;
 }
 
 
@@ -1641,14 +1732,14 @@ static void spawnexp (LexState *ls, expdesc *v, int promote) {
       int base2;
       base = callbegin(ls, "spawn");
       base2 = callbegin(ls, "task");
-      closurebody(ls, &f, line, 0);
+      closurebody(ls, &f, line, CB_SPAWN);
       luaK_exp2nextreg(fs, &f);
       callend(ls, &f, base2, 0, line);
       luaK_exp2nextreg(fs, &f);
     }
     else {
       base = callbegin(ls, "do_spawn");
-      closurebody(ls, &f, line, 0);
+      closurebody(ls, &f, line, CB_SPAWN);
       luaK_exp2nextreg(fs, &f);
     }
     callend(ls, v, base, 0, line);
@@ -1731,7 +1822,10 @@ static void chkassign (LexState *ls, expdesc *e) {
 ** 'ownspawn', called by 'statlist'.
 */
 static int spawnstat (LexState *ls, expdesc *v) {
-  int inpool = (luaX_lookahead(ls) == '@');
+  int la = luaX_lookahead(ls);
+  int inpool = (la == '@');
+  if (la == '{')  /* a block: the enclosing block owns it (jumps out) */
+    blockowner(ls);
   spawnexp(ls, v, 0);
   ls->fs->spawnval = (lu_byte)(inpool ? 2 : 1);
   return 1;
@@ -1980,14 +2074,21 @@ static void parexp (LexState *ls, expdesc *v) {
     else luaX_syntaxerror(ls, "invalid par : invalid tag");
     luaX_next(ls);
   }
-  base = callbegin(ls, name);
-  do {
-    expdesc f;
-    check(ls, '{');
-    closurebody(ls, &f, line, CB_PAR);
-    luaK_exp2nextreg(fs, &f);
-  } while (testnext(ls, TK_WITH));
-  callend(ls, v, base, 0, line);
+  {  /* a region around the call, for the jumps out of the branches
+        (its register is the call base: the values of a jump replace
+        the call's) */
+    Owner o;
+    openowner(ls, &o, fs->freereg);
+    base = callbegin(ls, name);
+    do {
+      expdesc f;
+      check(ls, '{');
+      closurebody(ls, &f, line, CB_PAR);
+      luaK_exp2nextreg(fs, &f);
+    } while (testnext(ls, TK_WITH));
+    callend(ls, v, base, 0, line);
+    closeowner(ls, &o, line);
+  }
 }
 
 
@@ -2008,9 +2109,12 @@ static void toggleexp (LexState *ls, expdesc *v) {
   int line = ls->linenumber;
   int base;
   luaX_next(ls);  /* skip 'toggle' */
-  base = callbegin(ls, "toggle");
-  if (testnext(ls, TK_ON)) {  /* block form */
+  if (ls->t.token == TK_ON) {  /* block form, in a region for its jumps */
     expdesc tag, f;
+    Owner o;
+    openowner(ls, &o, fs->freereg);  /* region at the call base */
+    base = callbegin(ls, "toggle");
+    luaX_next(ls);  /* skip 'on' */
     check(ls, TK_TAG);
     codestring(&tag, ls->t.seminfo.ts);
     luaX_next(ls);
@@ -2020,8 +2124,12 @@ static void toggleexp (LexState *ls, expdesc *v) {
     check(ls, '{');
     closurebody(ls, &f, line, CB_TOGGLE);
     luaK_exp2nextreg(fs, &f);
+    callend(ls, v, base, 0, line);
+    closeowner(ls, &o, line);
+    return;
   }
-  else {  /* call form */
+  base = callbegin(ls, "toggle");
+  {  /* call form */
     expdesc t;
     primaryexp(ls, &t);
     if (!(suffixloop(ls, &t, 1) && ls->t.token == '('))
@@ -2041,20 +2149,74 @@ static void toggleexp (LexState *ls, expdesc *v) {
 }
 
 
-/* watching P { } -> watching(P, \{ }) */
-static void watchingexp (LexState *ls, expdesc *v) {
+/*
+** watching P { body }: an inline body under a try region; a hidden
+** watcher task awaits P and throws itself (with the event) at the
+** body's pending await; the region catches it (see catch.md):
+**
+**     OP_TRY A -> handler
+**     R[A] = _ENV["watching.spawn"](P); (watcher) <close> = R[A]
+**     body (value at R[A+1])
+**     OP_ENDTRY A; JMP join
+**   handler: OP_CATCH A 0         (e1 == watcher)
+**   join: OP_CATCHRES A 4; value = R[A] ? R[A+1] : R[A+2]
+*/
+static int watchingstat (LexState *ls, expdesc *v) {
   FuncState *fs = ls->fs;
   int line = ls->linenumber;
-  expdesc e, f;
-  int base;
+  int base = luaY_nvarstack(fs);
+  int nactvar = fs->nactvar;
+  int pctry, pcend, toclose, jf, jend;
+  expdesc e, bv;
+  BlockCnt bl;
+  int n;
   luaX_next(ls);  /* skip 'watching' */
-  base = callbegin(ls, "watching");
-  pattexp(ls, &e);
-  luaK_exp2nextreg(fs, &e);
-  check(ls, '{');
-  closurebody(ls, &f, line, CB_WATCHING);
-  luaK_exp2nextreg(fs, &f);
-  callend(ls, v, base, 0, line);
+  new_localvarliteral(ls, "(cnd)");
+  new_localvarliteral(ls, "(val)");
+  luaK_reserveregs(fs, 2);
+  adjustlocalvars(ls, 2);
+  pctry = luaK_codeAsBx(fs, OP_TRY, base, 0);
+  luaK_fixline(fs, line);
+  enterblock(fs, &bl, 0);
+  bl.nregions = 1;
+  bl.resreg = cast_short(base + 1);
+  {  /* the watcher, pinned by the block, and the condition */
+    int cb = callbegin(ls, "watching.spawn");
+    pattexp(ls, &e);
+    luaK_exp2nextreg(fs, &e);
+    callend(ls, &e, cb, 0, line);
+    luaK_exp2nextreg(fs, &e);  /* at base+2 */
+    new_varkind(ls, luaX_newstring(ls, "(watcher)", 9), RDKTOCLOSE);
+    toclose = fs->nactvar;
+    adjustlocalvars(ls, 1);
+    checktoclose(fs, toclose);
+    luaK_codeABC(fs, OP_MOVE, base, base + 2, 0);  /* CND = the watcher */
+  }
+  checknext(ls, '{');
+  statlist(ls, &bv, &n);
+  store_value(ls, base + 1, &bv);
+  ls->blockline = ls->lastline;
+  check_match(ls, '}', '{', line);
+  leaveblock(fs);  /* closes the watcher */
+  luaK_codeABCk(fs, OP_ENDTRY, base, 2, 0, 1);
+  pcend = luaK_jump(fs);
+  SETARG_sBx(fs->f->code[pctry], luaK_getlabel(fs) - (pctry + 1));
+  luaK_codeABC(fs, OP_CATCH, base, 0, 0);
+  luaK_fixline(fs, line);
+  luaK_patchtohere(fs, pcend);
+  luaK_codeABC(fs, OP_CATCHRES, base, 0, 4);  /* flag, v1, v2 */
+  /* value: flag ? v1 (body) : v2 (event) */
+  luaK_codeABCk(fs, OP_TEST, base, 0, 0, 0);
+  jf = luaK_jump(fs);  /* taken when the flag is false */
+  luaK_codeABC(fs, OP_MOVE, base, base + 1, 0);
+  jend = luaK_jump(fs);
+  luaK_patchtohere(fs, jf);
+  luaK_codeABC(fs, OP_MOVE, base, base + 2, 0);
+  luaK_patchtohere(fs, jend);
+  removevars(fs, nactvar);
+  fs->freereg = cast_byte(base + 1);
+  init_exp(v, VNONRELOC, base);
+  return 1;
 }
 
 
@@ -2334,10 +2496,7 @@ static void primaryexp (LexState *ls, expdesc *v) {
         codestring(v, tag);
       return;
     }
-    case TK_CATCH: {
-      catchexp(ls, v, line);
-      return;
-    }
+    case TK_CATCH: compoundexp(ls, v, catchstat); return;
     case TK_TASK: taskexp(ls, v); return;
     case TK_TASKS: {
       luaX_next(ls);
@@ -2348,7 +2507,7 @@ static void primaryexp (LexState *ls, expdesc *v) {
     case TK_EMIT: emitexp(ls, v); return;
     case TK_AWAIT: awaitexp(ls, v); return;
     case TK_PAR: parexp(ls, v); return;
-    case TK_WATCHING: watchingexp(ls, v); return;
+    case TK_WATCHING: compoundexp(ls, v, watchingstat); return;
     case TK_TOGGLE: toggleexp(ls, v); return;
     case TK_PUB: pubexp(ls, v); return;
     case TK_NIL: {
@@ -2931,14 +3090,238 @@ static int cond (LexState *ls) {
 /*
 ** Find the innermost enclosing loop block.
 */
-static BlockCnt *loopblock (LexState *ls, const char *what) {
+/*
+** A jump leaving blocks with try regions ('catch' bodies) pops them
+** first (OP_ENDTRY without a jump), like OP_CLOSE for 'pin's. 'target'
+** is the block being jumped to (NULL: the function returns).
+*/
+static void popregions (FuncState *fs, BlockCnt *target) {
   BlockCnt *bl;
-  for (bl = ls->fs->bl; bl != NULL; bl = bl->previous) {
-    if (bl->isloop)  /* found one? */
+  for (bl = fs->bl; bl != target && bl != NULL; bl = bl->previous) {
+    int i;
+    for (i = 0; i < bl->nregions; i++)
+      luaK_codeABC(fs, OP_ENDTRY, 0, 0, 0);  /* pop only */
+  }
+}
+
+
+static BlockCnt *findloop (FuncState *fs) {
+  BlockCnt *bl;
+  for (bl = fs->bl; bl != NULL; bl = bl->previous) {
+    if (bl->isloop)
       return bl;
   }
-  luaX_syntaxerror(ls, luaO_pushfstring(ls->L, "%s outside loop", what));
-  return NULL;  /* to avoid warnings */
+  return NULL;
+}
+
+
+/* a closure that is the body of a task: jumps out of it are throws */
+#define istaskbody(fs) \
+  ((fs)->iscatch == CB_SPAWN || (fs)->iscatch == CB_PAR || \
+   (fs)->iscatch == CB_TOGGLE)
+
+
+/*
+** Registers a jump of 'kind' out of the task body being compiled: the
+** target function is the first enclosing one that is not a task body;
+** its innermost open owner region gets the dispatch (and the target is
+** checked there, so a jump with no target is a compile error).
+*/
+static BlockCnt *findtag (FuncState *fs, TString *tag) {
+  BlockCnt *bl;
+  for (bl = fs->bl; bl != NULL; bl = bl->previous) {
+    if (bl->tag == tag) return bl;
+  }
+  return NULL;
+}
+
+static void registerjump (LexState *ls, int kind, TString *tag) {
+  FuncState *tf = ls->fs->prev;  /* the enclosing functions, outwards */
+  Owner *o;
+  BlockCnt *target = NULL;
+  int i;
+  for (;;) {  /* the first enclosing function with the target */
+    if (kind == JK_BREAK) target = findloop(tf);
+    else if (kind == JK_ESCAPE) target = findtag(tf, tag);
+    if (target != NULL || !istaskbody(tf))
+      break;  /* found, or a real function: it is the target of 'return' */
+    tf = tf->prev;  /* a task body: look further out */
+  }
+  if (kind == JK_BREAK && target == NULL)
+    luaK_semerror(ls, "break outside loop");
+  if (kind == JK_ESCAPE && target == NULL)
+    luaK_semerror(ls, "no enclosing block ':%s' for <escape>", getstr(tag));
+  o = tf->owner;
+  if (o == NULL)
+    luaK_semerror(ls, "no owning block for a jump out of a task");
+  o->needtry = 1;
+  for (i = 0; i < o->njumps; i++) {
+    if (o->jumps[i].kind == kind && o->jumps[i].tag == tag)
+      return;  /* already registered */
+  }
+  if (o->njumps >= MAXJUMPS)
+    luaK_semerror(ls, "too many kinds of jumps out of tasks in a block");
+  o->jumps[o->njumps].kind = kind;
+  o->jumps[o->njumps].tag = tag;
+  o->jumps[o->njumps].target = target;
+  o->njumps++;
+}
+
+
+/* starts a 'jump out' call: _ENV["atm.jump"](kind, [tag,] values) */
+static int jumpbegin (LexState *ls, int kind, TString *tag) {
+  FuncState *fs = ls->fs;
+  int base = callbegin(ls, "atm.jump");
+  luaK_int(fs, fs->freereg, kind);
+  luaK_reserveregs(fs, 1);
+  if (tag != NULL) {
+    expdesc t;
+    codestring(&t, tag);
+    luaK_exp2nextreg(fs, &t);
+  }
+  return base;
+}
+
+static void jumpend (LexState *ls, int base, int open, int line) {
+  expdesc v;
+  callend(ls, &v, base, open, line);
+  discard(ls, &v);
+  ls->fs->freereg = cast_byte(base);
+}
+
+
+/*
+** Opens an owner region at register 'reg' (speculative: patched into
+** a no-op by 'closeowner' when no task body jumps out).
+*/
+static void openowner (LexState *ls, Owner *o, int reg) {
+  FuncState *fs = ls->fs;
+  o->previous = fs->owner;
+  fs->owner = o;
+  o->pc = luaK_codeAsBx(fs, OP_TRY, reg, 0);
+  o->reg = reg;
+  o->needtry = 0;
+  o->njumps = 0;
+}
+
+
+/*
+** A value left by the handler at register 'reg' as an expression: a
+** copy in a fresh temporary (above all the handler's values, which
+** the code generated here must not clobber), so the register
+** discipline ('freeexp') holds.
+*/
+static void handlerval (FuncState *fs, expdesc *e, int reg) {
+  int r = fs->freereg;
+  luaK_reserveregs(fs, 1);
+  luaK_codeABC(fs, OP_MOVE, r, reg, 0);
+  init_exp(e, VNONRELOC, r);
+}
+
+
+/* dispatch of the jumps registered in 'o' (its handler code) */
+static void jumpdispatch (LexState *ls, Owner *o, int line) {
+  FuncState *fs = ls->fs;
+  int oldfree = fs->freereg;
+  int i;
+  /* temporaries above the kind, tag and value of the handler */
+  fs->freereg = cast_byte((o->reg + 4 > luaY_nvarstack(fs)) ? o->reg + 4
+                                                             : luaY_nvarstack(fs));
+  for (i = 0; i < o->njumps; i++) {
+    JumpRec *j = &o->jumps[i];
+    expdesc c, k;
+    int vreg = o->reg + 2;
+    handlerval(fs, &c, o->reg + 1);  /* the kind */
+    init_exp(&k, VKINT, 0);
+    k.u.ival = j->kind;
+    luaK_infix(fs, OPR_EQ, &c);
+    luaK_posfix(fs, OPR_EQ, &c, &k, line);
+    luaK_goiftrue(fs, &c);
+    if (j->kind == JK_ESCAPE) {  /* and the tag */
+      expdesc t, s;
+      handlerval(fs, &t, o->reg + 2);
+      codestring(&s, j->tag);
+      luaK_infix(fs, OPR_EQ, &t);
+      luaK_posfix(fs, OPR_EQ, &t, &s, line);
+      luaK_goiftrue(fs, &t);
+      luaK_concat(fs, &c.f, t.f);
+      vreg = o->reg + 3;
+    }
+    switch (j->kind) {
+      case JK_BREAK: {
+        expdesc v;
+        handlerval(fs, &v, vreg);
+        if (j->target->resreg >= 0) store_value(ls, j->target->resreg, &v);
+        breakjump(ls, j->target, line);
+        break;
+      }
+      case JK_ESCAPE: {
+        expdesc v;
+        handlerval(fs, &v, vreg);
+        if (j->target->resreg >= 0) store_value(ls, j->target->resreg, &v);
+        popregions(fs, j->target);
+        j->target->hasescape = 1;
+        newgotoentry(ls, j->tag, line);
+        break;
+      }
+      default: {  /* return: all the values */
+        popregions(fs, NULL);
+        luaK_codeABC(fs, OP_CATCHRES, o->reg, 0, 0);  /* open: 'top' after them */
+        luaK_ret(fs, vreg, LUA_MULTRET);
+        break;
+      }
+    }
+    luaK_patchtohere(fs, c.f);
+  }
+  fs->freereg = cast_byte(oldfree);
+}
+
+
+/*
+** Closes the owner region 'o': no jumps registered, its OP_TRY becomes
+** a no-op; otherwise emits the pop of the region for the normal path
+** and the handler (OP_CATCH mode 1: only jump throws) with the
+** dispatch, ending in a rethrow (mode 2).
+*/
+static void closeowner (LexState *ls, Owner *o, int line) {
+  FuncState *fs = ls->fs;
+  lua_assert(fs->owner == o);
+  fs->owner = o->previous;
+  if (!o->needtry)
+    fs->f->code[o->pc] = CREATE_ABCk(OP_MOVE, o->reg, o->reg, 0, 0);
+  else {
+    int jmp;
+    luaK_codeABC(fs, OP_ENDTRY, o->reg, 0, 0);  /* normal path: pop */
+    jmp = luaK_jump(fs);
+    SETARG_sBx(fs->f->code[o->pc], luaK_getlabel(fs) - (o->pc + 1));
+    luaK_codeABC(fs, OP_CATCH, o->reg, 1, 0);
+    luaK_fixline(fs, line);
+    jumpdispatch(ls, o, line);
+    luaK_codeABC(fs, OP_CATCH, o->reg, 2, 0);  /* unmatched: rethrow */
+    luaK_patchtohere(fs, jmp);
+  }
+}
+
+
+/*
+** Owner region of a block, for 'spawn { }' statements/declarations:
+** opened by the first block spawn of the block at statement level (no
+** live temporaries), with a hidden local '(try)' below the task's pin,
+** so that leaving the block by a jump aborts the task.
+*/
+static void blockowner (LexState *ls) {
+  FuncState *fs = ls->fs;
+  BlockCnt *bl = fs->bl;
+  if (bl->owner == NULL && fs->freereg == luaY_nvarstack(fs)) {
+    Owner *o = &bl->ownerbuf;
+    int reg = fs->freereg;
+    new_localvarliteral(ls, "(try)");
+    luaK_reserveregs(fs, 1);
+    adjustlocalvars(ls, 1);
+    openowner(ls, o, reg);
+    bl->owner = o;
+    bl->nregions++;
+  }
 }
 
 
@@ -2946,6 +3329,7 @@ static BlockCnt *loopblock (LexState *ls, const char *what) {
 ** Jump to the end of loop block 'bl' (a 'goto break').
 */
 static void breakjump (LexState *ls, BlockCnt *bl, int line) {
+  popregions(ls->fs, bl);
   bl->isloop = 2;  /* signal that block has pending breaks */
   newgotoentry(ls, ls->brkn, line);
 }
@@ -2974,39 +3358,82 @@ static void storeextra (LexState *ls, BlockCnt *bl, expdesc *def) {
 }
 
 
+/* the loop targeted by 'what', or NULL inside a task body (a jump out) */
+static BlockCnt *jumploop (LexState *ls, const char *what) {
+  BlockCnt *bl = findloop(ls->fs);
+  if (bl == NULL && !istaskbody(ls->fs))
+    luaX_syntaxerror(ls, luaO_pushfstring(ls->L, "%s outside loop", what));
+  return bl;
+}
+
+
 static void breakstat (LexState *ls, int line) {
   /* breakstat -> BREAK '(' [explist] ')' */
-  BlockCnt *bl = loopblock(ls, "break");
+  FuncState *fs = ls->fs;
+  BlockCnt *bl = jumploop(ls, "break");
   expdesc nilv;
   int paren;
+  int base = -1;
   luaX_next(ls);  /* skip 'break' */
+  if (bl == NULL) {  /* out of the task: atm.jump(JK_BREAK, value) */
+    registerjump(ls, JK_BREAK, NULL);
+    base = jumpbegin(ls, JK_BREAK, NULL);
+  }
   paren = kwopen(ls);
   init_exp(&nilv, VNIL, 0);
   if (!paren || ls->t.token != ')') {
     expdesc e;
     expr(ls, &e);
     while (testnext(ls, ',')) {
-      luaK_exp2nextreg(ls->fs, &e);
+      luaK_exp2nextreg(fs, &e);
       expr(ls, &e);
     }
-    if (bl->resreg >= 0) store_value(ls, bl->resreg, &e);
+    if (bl == NULL) luaK_exp2nextreg(fs, &e);
+    else if (bl->resreg >= 0) store_value(ls, bl->resreg, &e);
     else discard(ls, &e);
   }
+  else if (bl == NULL) luaK_exp2nextreg(fs, &nilv);
   else if (bl->resreg >= 0)
     store_value(ls, bl->resreg, &nilv);
   kwclose(ls, paren);
-  breakjump(ls, bl, line);
+  if (bl == NULL)
+    jumpend(ls, base, 0, line);
+  else
+    breakjump(ls, bl, line);
+}
+
+
+/*
+** 'until'/'while' inside a task body without a loop: the value (extra
+** or 'def') goes to a jump out of the task.
+*/
+static void jumpextra (LexState *ls, expdesc *def, int line) {
+  FuncState *fs = ls->fs;
+  int base = jumpbegin(ls, JK_BREAK, NULL);
+  expdesc e;
+  if (testnext(ls, ',')) {
+    expr(ls, &e);
+    while (testnext(ls, ',')) {
+      luaK_exp2nextreg(fs, &e);
+      expr(ls, &e);
+    }
+  }
+  else
+    e = *def;
+  luaK_exp2nextreg(fs, &e);
+  jumpend(ls, base, 0, line);
 }
 
 
 static void untilstat (LexState *ls, int line) {
   /* untilstat -> UNTIL '(' cond [',' explist] ')'  (break when true) */
   FuncState *fs = ls->fs;
-  BlockCnt *bl = loopblock(ls, "until");
+  BlockCnt *bl = jumploop(ls, "until");
   expdesc e, c;
   int jf;
   int paren;
   luaX_next(ls);  /* skip 'until' */
+  if (bl == NULL) registerjump(ls, JK_BREAK, NULL);
   paren = kwopen(ls);
   expr(ls, &e);
   luaK_exp2anyreg(fs, &e);  /* condition value (to be the loop value) */
@@ -3014,8 +3441,12 @@ static void untilstat (LexState *ls, int line) {
   luaK_goiftrue(fs, &c);  /* jump if false (frees the register) */
   luaK_reserveregs(fs, 1);  /* keep the condition value for the store */
   jf = c.f;
-  storeextra(ls, bl, &e);  /* true: loop value is extra or condition */
-  breakjump(ls, bl, line);
+  if (bl == NULL)
+    jumpextra(ls, &e, line);  /* out of the task */
+  else {
+    storeextra(ls, bl, &e);  /* true: loop value is extra or condition */
+    breakjump(ls, bl, line);
+  }
   luaK_patchtohere(fs, jf);
   kwclose(ls, paren);
 }
@@ -3024,47 +3455,75 @@ static void untilstat (LexState *ls, int line) {
 static void whilestat (LexState *ls, int line) {
   /* whilestat -> WHILE '(' cond [',' explist] ')'  (break when false) */
   FuncState *fs = ls->fs;
-  BlockCnt *bl = loopblock(ls, "while");
+  BlockCnt *bl = jumploop(ls, "while");
   expdesc nilv;
   int jf, jt;
   int paren;
   luaX_next(ls);  /* skip 'while' */
+  if (bl == NULL) registerjump(ls, JK_BREAK, NULL);
   paren = kwopen(ls);
   jf = cond(ls);  /* jump if false */
   jt = luaK_jump(fs);  /* true: continue loop */
   luaK_patchtohere(fs, jf);
   init_exp(&nilv, VNIL, 0);
-  storeextra(ls, bl, &nilv);  /* false: loop value is extra or nil */
-  breakjump(ls, bl, line);
+  if (bl == NULL)
+    jumpextra(ls, &nilv, line);
+  else {
+    storeextra(ls, bl, &nilv);  /* false: loop value is extra or nil */
+    breakjump(ls, bl, line);
+  }
   luaK_patchtohere(fs, jt);
   kwclose(ls, paren);
 }
 
 
 static void escapestat (LexState *ls, int line) {
-  /* escapestat -> ESCAPE '(' TAG [constructor] [',' explist] ')' */
+  /* escapestat -> ESCAPE ('(' TAG [constructor] [',' explist] ')' |
+                           TAG [constructor]) */
   FuncState *fs = ls->fs;
   BlockCnt *bl;
   TString *tag;
   expdesc tv;
   int paren;
+  int base = -1;
   luaX_next(ls);  /* skip 'escape' */
-  paren = kwopen(ls);
+  paren = (ls->t.token == TK_TAG) ? 0 : kwopen(ls);  /* 'escape :X' */
   check(ls, TK_TAG);
   tag = ls->t.seminfo.ts;
   for (bl = fs->bl; bl != NULL; bl = bl->previous) {
     if (bl->tag == tag)  /* found matching block? */
       break;
   }
-  if (bl == NULL)
-    luaK_semerror(ls, "no enclosing block ':%s' for <escape>", getstr(tag));
+  if (bl == NULL) {
+    if (!istaskbody(fs))
+      luaK_semerror(ls, "no enclosing block ':%s' for <escape>", getstr(tag));
+    registerjump(ls, JK_ESCAPE, tag);  /* out of the task (checked there) */
+    base = jumpbegin(ls, JK_ESCAPE, tag);
+  }
   luaX_next(ls);  /* skip tag */
   if (ls->t.token == '[' && sameline(ls))
     tagconstructor(ls, &tv, tag);
   else
     codestring(&tv, tag);
+  if (bl == NULL) {
+    expdesc e;
+    if (testnext(ls, ',')) {
+      expr(ls, &e);
+      while (testnext(ls, ',')) {
+        luaK_exp2nextreg(fs, &e);
+        expr(ls, &e);
+      }
+    }
+    else
+      e = tv;
+    luaK_exp2nextreg(fs, &e);
+    kwclose(ls, paren);
+    jumpend(ls, base, 0, line);
+    return;
+  }
   storeextra(ls, bl, &tv);
   kwclose(ls, paren);
+  popregions(fs, bl);
   bl->hasescape = 1;
   newgotoentry(ls, tag, line);
 }
@@ -3658,6 +4117,8 @@ static void localstat (LexState *ls, int line) {
   if (testnext(ls, '=')) {  /* initialization? */
     /* tasks and pools: 'pin' owns a fresh value ('pin.set'); other
        declarations of a spawn or pool require an owned one ('pin.chk') */
+    if (ls->t.token == TK_SPAWN && luaX_lookahead(ls) == '{')
+      blockowner(ls);  /* a spawned block: a region for its jumps */
     if (kind == RDKTOCLOSE) {  /* pin: owns the value */
       if (ls->t.token == TK_SPAWN) {
         spawnexp(ls, &e, 1);  /* 'pin t = spawn { }' promotes the block */
@@ -3749,10 +4210,26 @@ static void retstat (LexState *ls) {
   int first = luaY_nvarstack(fs);  /* first slot to be returned */
   int line = ls->linenumber;
   int paren;
-  if (fs->iscatch)
-    luaK_semerror(ls, luaO_pushfstring(ls->L,
-      "cannot use 'return' inside '%s'", cbnames[fs->iscatch]));
   luaX_next(ls);  /* skip 'return' */
+  if (istaskbody(fs)) {  /* returns from the owner: a jump out */
+    int base;
+    int open = 0;
+    registerjump(ls, JK_RETURN, NULL);
+    base = jumpbegin(ls, JK_RETURN, NULL);
+    paren = kwopen(ls);
+    if (!(paren && ls->t.token == ')')) {
+      if (paren)
+        explist(ls, &e);
+      else
+        expr(ls, &e);
+      open = callarg(ls, &e);
+    }
+    if (paren)
+      check_match(ls, ')', '(', line);
+    jumpend(ls, base, open, line);
+    return;
+  }
+  popregions(fs, NULL);  /* leaving the function: pop its regions */
   paren = kwopen(ls);
   if (paren && ls->t.token == ')')
     nret = 0;  /* return no values */
@@ -3765,7 +4242,8 @@ static void retstat (LexState *ls) {
     }
     if (hasmultret(e.k)) {
       luaK_setmultret(fs, &e);
-      if (e.k == VCALL && nret == 1 && !fs->bl->insidetbc) {  /* tail call? */
+      if (e.k == VCALL && nret == 1 && !fs->bl->insidetbc &&
+          GET_OPCODE(getinstruction(fs, &e)) == OP_CALL) {  /* tail call? */
         SET_OPCODE(getinstruction(fs,&e), OP_TAILCALL);
         lua_assert(GETARG_A(getinstruction(fs,&e)) == luaY_nvarstack(fs));
       }

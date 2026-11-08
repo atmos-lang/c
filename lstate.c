@@ -244,6 +244,10 @@ static void preinit_thread (lua_State *L, global_State *g) {
   L->status = LUA_OK;
   L->errfunc = 0;
   L->nerr = 1;
+  L->tryregions = NULL;
+  L->ntry = L->sizetry = 0;
+  L->trystatus = LUA_OK;
+  L->trynres = 0;
   L->oldpc = 0;
   L->base_ci.previous = L->base_ci.next = NULL;
 }
@@ -251,7 +255,8 @@ static void preinit_thread (lua_State *L, global_State *g) {
 
 lu_mem luaE_threadsize (lua_State *L) {
   lu_mem sz = cast(lu_mem, sizeof(LX))
-            + cast_uint(L->nci) * sizeof(CallInfo);
+            + cast_uint(L->nci) * sizeof(CallInfo)
+            + cast_uint(L->sizetry) * sizeof(TryRegion);  /* Atmos: regions */
   if (L->stack.p != NULL)
     sz += cast_uint(stacksize(L) + EXTRA_STACK) * sizeof(StackValue);
   return sz;
@@ -271,6 +276,7 @@ static void close_state (lua_State *L) {
   }
   luaM_freearray(L, G(L)->strt.hash, cast_sizet(G(L)->strt.size));
   freestack(L);
+  luaM_freearray(L, L->tryregions, cast_sizet(L->sizetry));
   lua_assert(gettotalbytes(g) == sizeof(global_State));
   (*g->frealloc)(g->ud, g, sizeof(global_State), 0);  /* free main block */
 }
@@ -309,12 +315,14 @@ void luaE_freethread (lua_State *L, lua_State *L1) {
   lua_assert(L1->openupval == NULL);
   luai_userstatefree(L, L1);
   freestack(L1);
+  luaM_freearray(L, L1->tryregions, cast_sizet(L1->sizetry));
   luaM_free(L, l);
 }
 
 
 TStatus luaE_resetthread (lua_State *L, TStatus status) {
   resetCI(L);
+  L->ntry = 0;  /* Atmos: drop the try regions */
   if (status == LUA_YIELD)
     status = LUA_OK;
   status = luaD_closeprotected(L, 1, status);

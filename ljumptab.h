@@ -110,6 +110,10 @@ static const void *const disptab[NUM_OPCODES] = {
 &&L_OP_ERRNNIL,
 &&L_OP_VARARGPREP,
 &&L_OP_PINCHK,
+&&L_OP_TRY,
+&&L_OP_ENDTRY,
+&&L_OP_CATCH,
+&&L_OP_CATCHRES,
 &&L_OP_EXTRAARG
 
 };

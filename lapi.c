@@ -1255,6 +1255,18 @@ LUA_API int lua_gc (lua_State *L, int what, ...) {
 */
 
 
+/* Atmos: raise the 'n' top values with the given status (a jump out of
+   a task body, 'LUA_ERRJUMP', has no message handler) */
+LUA_API int lua_errorstatus (lua_State *L, int status, int n) {
+  if (status == LUA_ERRRUN)
+    return lua_errorn(L, n);
+  lua_lock(L);
+  api_checkpop(L, n);
+  luaD_thrown(L, cast(TStatus, status), n);
+  return 0;  /* to avoid warnings */
+}
+
+
 LUA_API int lua_errorn (lua_State *L, int n) {
   lua_lock(L);
   api_checkpop(L, n);

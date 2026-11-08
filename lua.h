@@ -51,6 +51,7 @@
 #define LUA_ERRSYNTAX	3
 #define LUA_ERRMEM	4
 #define LUA_ERRERR	5
+#define LUA_ERRJUMP	7  /* Atmos: a jump leaving a task body (internal) */
 
 
 typedef struct lua_State lua_State;
@@ -309,6 +310,8 @@ LUA_API int (lua_dump) (lua_State *L, lua_Writer writer, void *data, int strip);
 */
 LUA_API int  (lua_yieldk)     (lua_State *L, int nresults, lua_KContext ctx,
                                lua_KFunction k);
+LUA_API int  (lua_resumethrow) (lua_State *L, lua_State *from, int status,
+                                int nerr, int *nres);
 LUA_API int  (lua_resumeerror) (lua_State *L, lua_State *from, int nerr,
                                 int *nres);
 LUA_API int  (lua_resume)     (lua_State *L, lua_State *from, int narg,
@@ -368,6 +371,7 @@ LUA_API int (lua_gc) (lua_State *L, int what, ...);
 
 LUA_API int   (lua_error) (lua_State *L);
 LUA_API int   (lua_errorn) (lua_State *L, int n);
+LUA_API int   (lua_errorstatus) (lua_State *L, int status, int n);
 
 LUA_API int   (lua_next) (lua_State *L, int idx);
 

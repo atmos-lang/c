@@ -57,3 +57,7 @@ VM, libraries and bytecode format stay Lua's.
   statement, ownership checks are `OP_PINCHK` (`__pinchk` metamethod of
   tasks and pools), dead tasks are swept by `atmos.gc()`; environments
   (`atmos.env`, `atmos.env.clock` built in) are driven by `atmos.loop`.
+- `catch` and `watching` bodies are inline blocks under VM try regions
+  (`OP_TRY`/`OP_CATCH`, `.claude/plans/catch.md`); jumps out of task
+  bodies (`spawn { }`, `par`, `toggle on`) reach the owner's loop,
+  `do :X` or function as throws of status `LUA_ERRJUMP`.

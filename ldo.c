@@ -10,6 +10,7 @@
 #include "lprefix.h"
 
 
+#include <limits.h>
 #include <setjmp.h>
 #include <stdlib.h>
 #include <string.h>
@@ -189,6 +190,121 @@ TStatus luaD_rawrunprotected (lua_State *L, Pfunc f, void *ud) {
   L->errorJmp = lj.previous;  /* restore old error handler */
   L->nCcalls = oldnCcalls;
   return lj.status;
+}
+
+/* }====================================================== */
+
+
+/*
+** {==================================================================
+** Atmos: try regions ('catch' blocks and owning blocks of spawned
+** tasks; see .claude/plans/catch.md). An error inside a region is
+** recovered at its handler: for a yieldable thread, through the
+** 'precover' loop of 'lua_resume' ('findpcall' stops at frames with
+** regions); otherwise 'OP_TRY' runs the region under its own protected
+** call ('nested').
+** ===================================================================
+*/
+
+void luaD_pushtry (lua_State *L, CallInfo *ci, const Instruction *handler,
+                   StkId level, int nested) {
+  TryRegion *r;
+  if (L->ntry >= L->sizetry)
+    luaM_growvector(L, L->tryregions, L->ntry, L->sizetry, TryRegion,
+                    INT_MAX, "try regions");
+  r = &L->tryregions[L->ntry++];
+  r->ci = ci;
+  r->handler = handler;
+  r->level = savestack(L, level);
+  r->errfunc = L->errfunc;
+  r->nCcalls = L->nCcalls;
+  r->allowhook = L->allowhook;
+  r->nested = cast_byte(nested);
+  ci->callstatus |= CIST_TRY;
+  L->errfunc = 0;  /* a caught error must not run an outer handler */
+}
+
+
+/* pops the top region; returns whether it was nested */
+int luaD_poptry (lua_State *L) {
+  TryRegion *r;
+  lua_assert(L->ntry > 0);
+  r = &L->tryregions[--L->ntry];
+  L->errfunc = r->errfunc;
+  if (L->ntry == 0 || L->tryregions[L->ntry - 1].ci != r->ci)
+    r->ci->callstatus &= ~CIST_TRY;
+  return r->nested;
+}
+
+
+/* drops the regions of a frame that is being left */
+void luaD_droptry (lua_State *L, CallInfo *ci) {
+  while (L->ntry > 0 && L->tryregions[L->ntry - 1].ci == ci)
+    luaD_poptry(L);
+  ci->callstatus &= ~CIST_TRY;
+}
+
+
+/*
+** Recovers the error 'status' (values at the top of the stack) at the
+** top region of frame 'ci': closes the variables of the region, then
+** pops the region, moves the error values to the region's level and
+** sets the handler as the next instruction of the frame. As in
+** 'pcall', the region stays active while its variables are closed: an
+** error raised by a '__close' replaces the error and is recovered again
+** by this same region, and (in recovery mode, 'yy') a yield inside a
+** '__close' re-enters here through 'unroll' (the frame keeps its
+** recovery status until the handler is set).
+*/
+void luaD_tryrecover (lua_State *L, CallInfo *ci, TStatus status, int yy) {
+  TryRegion *r;
+  const Instruction *handler;
+  ptrdiff_t levelrel;
+  StkId level;
+  while (L->ntry > 0 && L->tryregions[L->ntry - 1].ci != ci)
+    L->ntry--;  /* regions of frames already unwound */
+  lua_assert(L->ntry > 0);
+  r = &L->tryregions[L->ntry - 1];
+  handler = r->handler;
+  levelrel = r->level;
+  L->ci = ci;
+  L->allowhook = r->allowhook;
+  L->nCcalls = r->nCcalls;
+  L->trystatus = status;
+  luaF_close(L, restorestack(L, levelrel), status, yy);  /* may raise/yield */
+  luaD_poptry(L);  /* restores 'errfunc' */
+  level = restorestack(L, levelrel);  /* (the stack may have moved) */
+  luaD_seterrorobj(L, status, level);  /* error values at 'level' */
+  ci->u.l.savedpc = handler;
+  setcistrecst(ci, LUA_OK);  /* recovery done */
+  luaD_shrinkstack(L);
+}
+
+
+/* 'luaD_tryrecover' as a protected function (nested regions) */
+typedef struct TryRecover {
+  CallInfo *ci;
+  TStatus status;
+} TryRecover;
+
+static void tryrecoverp (lua_State *L, void *ud) {
+  TryRecover *tr = cast(TryRecover *, ud);
+  luaD_tryrecover(L, tr->ci, tr->status, 0);
+}
+
+/*
+** Runs 'f' (the rest of a frame, up to the end of its nested region)
+** in protected mode; on an error, recovers it at the region, repeating
+** while the recovery itself raises (errors in '__close').
+*/
+void luaD_runnested (lua_State *L, Pfunc f, CallInfo *ci) {
+  TStatus status = luaD_rawrunprotected(L, f, ci);
+  while (status != LUA_OK) {
+    TryRecover tr;
+    lua_assert(status != LUA_YIELD);  /* non-yieldable */
+    tr.ci = ci; tr.status = status;
+    status = luaD_rawrunprotected(L, tryrecoverp, &tr);
+  }
 }
 
 /* }====================================================== */
@@ -628,6 +744,8 @@ l_sinline void moveresults (lua_State *L, StkId res, int nres,
 */
 void luaD_poscall (lua_State *L, CallInfo *ci, int nres) {
   l_uint32 fwanted = ci->callstatus & (CIST_TBC | CIST_NRESULTS);
+  if (l_unlikely(ci->callstatus & CIST_TRY))
+    luaD_droptry(L, ci);  /* Atmos: regions left open (abnormal exit) */
   if (l_unlikely(L->hookmask) && !(fwanted & CIST_TBC))
     rethook(L, ci, nres);
   /* move results to proper place */
@@ -895,7 +1013,11 @@ static void unroll (lua_State *L, void *ud) {
     if (!isLua(ci))  /* C function? */
       finishCcall(L, ci);  /* complete its execution */
     else {  /* Lua function */
-      luaV_finishOp(L);  /* finish interrupted instruction */
+      TStatus st = cast(TStatus, getcistrecst(ci));
+      if (l_unlikely(st != LUA_OK))  /* Atmos: error for a region? */
+        luaD_tryrecover(L, ci, st, 1);  /* continue at the handler */
+      else
+        luaV_finishOp(L);  /* finish interrupted instruction */
       luaV_execute(L, ci);  /* execute down to higher C 'boundary' */
     }
   }
@@ -909,7 +1031,7 @@ static void unroll (lua_State *L, void *ud) {
 static CallInfo *findpcall (lua_State *L) {
   CallInfo *ci;
   for (ci = L->ci; ci != NULL; ci = ci->previous) {  /* search for a pcall */
-    if (ci->callstatus & CIST_YPCALL)
+    if (ci->callstatus & (CIST_YPCALL | CIST_TRY))  /* or a region (Atmos) */
       return ci;
   }
   return NULL;  /* no pending pcall */
@@ -944,6 +1066,7 @@ static int resume_error (lua_State *L, const char *msg, int narg,
 typedef struct ResumeInfo {
   int n;  /* number of arguments */
   int raise;  /* raise the arguments as an error at the yield point? */
+  TStatus status;  /* status of that error */
 } ResumeInfo;
 
 
@@ -954,6 +1077,8 @@ static void resume (lua_State *L, void *ud) {
   CallInfo *ci = L->ci;
   if (ri->raise) {  /* 'lua_resumeerror' */
     L->status = LUA_OK;  /* mark that it is running (again) */
+    if (ri->status != LUA_ERRRUN)  /* a jump (no message handler) */
+      luaD_thrown(L, ri->status, n);
     luaG_errormsgn(L, n);  /* the pending yield (or the start) raises */
   }
   if (L->status == LUA_OK)  /* starting a coroutine? */
@@ -996,7 +1121,8 @@ static TStatus precover (lua_State *L, TStatus status) {
   while (errorstatus(status) && (ci = findpcall(L)) != NULL) {
     L->ci = ci;  /* go down to recovery functions */
     setcistrecst(ci, status);  /* status to finish 'pcall' */
-    ci->u.c.nerr = L->nerr;  /* number of error values to finish 'pcall' */
+    if (!isLua(ci))  /* (a Lua frame recovers a region: see 'unroll') */
+      ci->u.c.nerr = L->nerr;  /* number of error values to finish 'pcall' */
     status = luaD_rawrunprotected(L, unroll, NULL);
   }
   return status;
@@ -1020,7 +1146,7 @@ static void duperrvalues (lua_State *L, void *ud) {
 
 
 static int resume_aux (lua_State *L, lua_State *from, int nargs,
-                       int *nresults, int raise) {
+                       int *nresults, int raise, TStatus rstatus) {
   TStatus status;
   ResumeInfo ri;
   lua_lock(L);
@@ -1039,7 +1165,7 @@ static int resume_aux (lua_State *L, lua_State *from, int nargs,
   L->nCcalls++;
   luai_userstateresume(L, nargs);
   api_checkpop(L, (L->status == LUA_OK) ? nargs + 1 : nargs);
-  ri.n = nargs; ri.raise = raise;
+  ri.n = nargs; ri.raise = raise; ri.status = rstatus;
   status = luaD_rawrunprotected(L, resume, &ri);
    /* continue running after recoverable errors */
   status = precover(L, status);
@@ -1068,7 +1194,7 @@ static int resume_aux (lua_State *L, lua_State *from, int nargs,
 
 LUA_API int lua_resume (lua_State *L, lua_State *from, int nargs,
                                       int *nresults) {
-  return resume_aux(L, from, nargs, nresults, 0);
+  return resume_aux(L, from, nargs, nresults, 0, LUA_OK);
 }
 
 
@@ -1078,7 +1204,14 @@ LUA_API int lua_resume (lua_State *L, lua_State *from, int nargs,
 */
 LUA_API int lua_resumeerror (lua_State *L, lua_State *from, int nerr,
                                            int *nresults) {
-  return resume_aux(L, from, nerr, nresults, 1);
+  return resume_aux(L, from, nerr, nresults, 1, LUA_ERRRUN);
+}
+
+
+/* as 'lua_resumeerror', with the status of the error */
+LUA_API int lua_resumethrow (lua_State *L, lua_State *from, int status,
+                             int nerr, int *nresults) {
+  return resume_aux(L, from, nerr, nresults, 1, cast(TStatus, status));
 }
 
 

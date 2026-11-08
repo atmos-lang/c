@@ -740,6 +740,8 @@ static int luaB_select (lua_State *L) {
 ** ignored).
 */
 static int finishpcall (lua_State *L, int status, lua_KContext extra) {
+  if (status == LUA_ERRJUMP)  /* a jump out of a task body: not an error */
+    return lua_errorstatus(L, status, lua_gettop(L) - (int)extra - 1);
   if (l_unlikely(status != LUA_OK && status != LUA_YIELD)) {  /* error? */
     /* error values are above the 'true' at position 'extra + 1' */
     luaL_checkstack(L, 1, "too many error values");

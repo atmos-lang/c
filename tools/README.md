@@ -90,10 +90,17 @@ Semantics assumed for the Atmos implementation (the tests rely on them):
   raising the values at its pending yield (a not-started coroutine dies
   without running); C API `lua_resumeerror`
 - `catch CND { }` evaluates to `true, values` or `false, e1, ..., en`;
-  the body is a closure (no `break`/`escape`/`return` across it, no
-  `...`); `defer { }` is a closure in a hidden to-be-closed slot: a
-  function as a to-be-closed value is called on close (see
-  `.claude/plans/catch.md`, `testes/catch.atm`)
+  the body is an inline block under a VM try region, so
+  `break`/`until`/`while`/`escape`/`return` and `...` work inside it;
+  `defer { }` is a closure in a hidden to-be-closed slot: a function as
+  a to-be-closed value is called on close (see `.claude/plans/catch.md`,
+  `testes/catch.atm`)
+- a `break`/`until`/`while`, `escape` or `return` inside a task body
+  (`spawn { }`, a `par` branch, a `toggle on` body) with no target in
+  the body reaches the owner task's loop, `do :X` block or function
+  (as the reference), checked at compile time; `watching P { }` has an
+  inline body (jumps work); `escape :X [..]` is accepted without
+  parentheses (`testes/jumps.atm`)
 - errors carry several values: `throw(e1, ..., en)` raises them all (no
   position prefix), `pcall` returns `false, e1, ..., en`, `xpcall`
   handlers receive them all and their results replace them, `__close`
@@ -111,9 +118,8 @@ Semantics assumed for the Atmos implementation (the tests rely on them):
   `coroutine.yield()` there suspends the program, and `os.exit(code,
   true)` closes all tasks (their `defer`s and pins run); `atmos.gc()`
   removes dead tasks from pools
-- `par { } with { }` (`par :any`, `par :all`) and `watching P { }` run
-  their blocks as transparent tasks (closures: no `break`/`return`/
-  `escape` across them); `loop [ids] on P { }` is a loop whose turn
+- `par { } with { }` (`par :any`, `par :all`) run their blocks as
+  transparent tasks; `loop [ids] on P { }` is a loop whose turn
   starts with `await(P)` (inline: `break` works); `await <PAT>` with
   `||`, `&&`, `!`, `until (c)`, `while (c)`, nested `<P>`, `T(args)`
   (spawns), `(E)` values; a bare variable in pattern position is a

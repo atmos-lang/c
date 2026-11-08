@@ -708,7 +708,7 @@ static void taskresult (lua_State *L, int tidx, int status, int nres) {
     luaL_checkstack(L, nres, "task error");
     lua_xmove(t->th, L, nres);  /* error values */
     closextask(L, tidx);  /* abort its subtree */
-    lua_errorn(L, nres);  /* propagate */
+    lua_errorstatus(L, status, nres);  /* propagate (jumps keep their status) */
   }
   else if (t->status == ST_ABORTED) {  /* aborted while running? */
     lua_settop(t->th, 0);
@@ -716,8 +716,8 @@ static void taskresult (lua_State *L, int tidx, int status, int nres) {
   }
   else if (status == LUA_OK) {  /* finished */
     if (nres >= 1) {
-      lua_xmove(t->th, L, 1);  /* first result */
-      lua_settop(t->th, 0);
+      lua_xmove(t->th, L, nres);  /* the results */
+      lua_pop(L, nres - 1);  /* keep the first */
     }
     else
       lua_pushnil(L);
@@ -782,6 +782,7 @@ static void emittree (lua_State *L, lua_Integer time, int tidx, int eidx) {
   int isx;
   int base;
   int err = 0;
+  int errstatus = LUA_OK;
   lua_Integer n, i;
   tidx = lua_absindex(L, tidx);
   eidx = lua_absindex(L, eidx);
@@ -809,7 +810,8 @@ static void emittree (lua_State *L, lua_Integer time, int tidx, int eidx) {
     lua_pushinteger(L, time);
     lua_rawgeti(L, -4 + 1, i);  /* dns[i] (dns is below the function and time) */
     lua_pushvalue(L, eidx);
-    if (lua_pcall(L, 3, 0, 0) != LUA_OK)
+    errstatus = lua_pcall(L, 3, 0, 0);
+    if (errstatus != LUA_OK)
       err = lua_gettop(L) - top;  /* number of error values (on the stack) */
   }
   DEPTH--;
@@ -822,13 +824,13 @@ static void emittree (lua_State *L, lua_Integer time, int tidx, int eidx) {
         luaL_checkstack(t->th, err, "task error");
         lua_xmove(L, t->th, err);
         lua_remove(L, base + 1);  /* dns */
-        status = lua_resumeerror(t->th, L, err, &nres);
+        status = lua_resumethrow(t->th, L, errstatus, err, &nres);
         taskresult(L, tidx, status, nres);  /* re-raises if not handled */
         return;
       }
       else {
         lua_remove(L, base + 1);  /* dns */
-        lua_errorn(L, err);
+        lua_errorstatus(L, errstatus, err);
       }
     }
     else if (t->time < time && costatus(L, tidx) == CO_SUSPENDED) {
@@ -841,7 +843,7 @@ static void emittree (lua_State *L, lua_Integer time, int tidx, int eidx) {
   }
   else if (err) {
     lua_remove(L, base + 1);
-    lua_errorn(L, err);
+    lua_errorstatus(L, errstatus, err);
   }
   lua_settop(L, base);
 }
@@ -1729,7 +1731,44 @@ static int atm_par_all (lua_State *L) {
   return parall_k(L, LUA_OK, setidx);
 }
 
-/* watching(P, f): par_any of 'await(P)' and 'f' */
+/*
+** The watcher of an inline 'watching P { body }' (see catch.md): a
+** transparent task that awaits P and then throws itself with the
+** results, caught by the region around the body in the owner.
+*/
+static int watcher_k (lua_State *L, int status, lua_KContext ctx) {
+  int n = lua_gettop(L);
+  (void)status; (void)ctx;
+  pushme(L, 1);
+  lua_insert(L, 1);
+  return lua_errorn(L, n + 1);
+}
+
+static int watcherbody (lua_State *L) {
+  lua_settop(L, 0);
+  lua_pushcfunction(L, atm_await);
+  lua_pushvalue(L, lua_upvalueindex(1));
+  lua_callk(L, 1, LUA_MULTRET, 0, watcher_k);
+  return watcher_k(L, LUA_OK, 0);
+}
+
+static int atm_watching_spawn (lua_State *L) {  /* watching.spawn(P) */
+  luaL_checkany(L, 1);
+  lua_settop(L, 1);
+  lua_pushvalue(L, 1);
+  lua_pushcclosure(L, watcherbody, 1);  /* at 2 */
+  return spawnaux(L, 0, 1, 2, 0);
+}
+
+
+/* atm.jump(kind, ...): a jump out of a task body, as a throw of status
+   LUA_ERRJUMP, caught by the owner's region (see catch.md) */
+static int atm_jump (lua_State *L) {
+  return lua_errorstatus(L, LUA_ERRJUMP, lua_gettop(L));
+}
+
+
+/* watching(P, f): par_any of 'await(P)' and 'f' (library form) */
 static int atm_watching (lua_State *L) {
   luaL_checkany(L, 1);
   if (lua_gettop(L) != 2 || lua_type(L, 2) != LUA_TFUNCTION)
@@ -2231,6 +2270,7 @@ static const luaL_Reg task_funcs[] = {
   {"await.and", atm_await_and}, {"await.not", atm_await_not},
   {"par", atm_par}, {"par_any", atm_par_any}, {"par_all", atm_par_all},
   {"watching", atm_watching}, {"toggle", atm_toggle},
+  {"watching.spawn", atm_watching_spawn}, {"atm.jump", atm_jump},
   {NULL, NULL}
 };
 
