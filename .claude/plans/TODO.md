@@ -77,7 +77,14 @@ in the VM; pipes, `match` and lambda operator shortcuts in the parser.
 Tests: `testes/ops.atm`. `where` deferred (see the plan: needs either a
 scan-ahead or a code rollback; `do { val ...; e }` covers it).
 
-## 8. Tail calls
+## 8. Tasks
+
+See [tasks.md](tasks.md): model from the reference, design (C runtime
+`latmlib.c`, parser desugaring to calls, await pattern constructors as
+non-identifier globals), three stages. Tests: `testes/tasks1.atm`
+(218 cases converted by `tools/tst2atm.py`), stage 2 files to come.
+
+## 9. Tail calls
 
 - Tail call optimization is bad for error messages / tracebacks
   (`(...tail calls...)`). Could it be disabled? Or made explicit

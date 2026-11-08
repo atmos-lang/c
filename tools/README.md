@@ -91,3 +91,20 @@ Semantics assumed for the Atmos implementation (the tests rely on them):
   receives `e1` only; `error(v, level)` is unchanged and
   `errorn(level, e1, ..., en)` is `error` with the level first and n
   values (`testes/throw.atm`)
+
+## tst2atm.py
+
+Extracts the test cases of the reference implementation
+(`atmos-lang/atmos/tst/*.lua`: Atmos sources inside Lua strings with the
+expected output) into an Atmos test file made of `T(name, src, exp)`
+calls on the harness of `testes/tasks1.atm`:
+
+```
+python3 tools/tst2atm.py ../atmos-lang/atmos/tst/tasks.lua 101 3609
+```
+
+Expectations: a string (exact output), `TX` (trimmed), `P`/`TP` (Lua
+pattern), `F` (substring), `E(pre, msg)`/`EP(pre, pattern)` (an error
+with that message after the output `pre`; only the last line of the
+reference's "==> ERROR:" trace is compared). Unrecognized shapes become
+`;; TODO(tst2atm)` comments.
