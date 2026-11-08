@@ -37,11 +37,10 @@ the `catch` stack-trace output of the reference, tasks interactions
 
 ## Mechanism for `catch`
 
-Status: implemented with option (A) (`luaB_catch` in `lbaselib.c`,
-`catchexp`/`deferstat` in `lparser.c`, function values closable in
-`lfunc.c`); (B) stays as the planned replacement when `break`/`escape`/
-`return` across `catch` are needed. `testes/catch.atm` passes; its
-"jumps across catch" cases are compile errors for now.
+Status: (A) was implemented first (`luaB_catch` in `lbaselib.c`,
+`catchexp` in `lparser.c`); (B) replaces it: VM try regions (design
+below), `watching` inline, jumps across task bodies. `defer` is
+unchanged (function values closable in `lfunc.c`).
 
 Two bugs of the Atmos front end surfaced with `defer` in value blocks
 and were fixed on the way: (1) `val x = <expr>` predeclared `x` before
@@ -79,67 +78,139 @@ Two options.
 - Message handlers of an enclosing `xpcall` do not see caught errors
   (`pcall` resets `errfunc`), as expected.
 
-### (B) try regions in the VM (planned alternative)
+### (B) try regions in the VM (implemented design)
 
-Three opcodes and a per-thread stack of active regions.
+Scope: `catch` as an inline block; `watching P { }` with an inline body;
+`break`/`until`/`while`/`escape`/`return` crossing the closures that
+are task bodies (`spawn { }`, `par`/`par :any`/`par :all` branches,
+`toggle on` bodies) to the owner task's loop, `do :X` block or
+function, as the reference does for all closures (there by making every
+jump a throw; here only at the task boundary). `defer` bodies stay
+functions: no jumps out of them.
 
-- `OP_TRY A Bx`: push region {ci, handler pc, stack level A, saved
-  `errfunc`, `nCcalls`, `allowhook`}; set `L->errfunc = 0`. The region
-  records that frame `ci` is in a `catch`.
-- `OP_ENDTRY A`: pop the region (normal end). Also emitted before a
-  `break`/`escape`/`return` that leaves the block, like `OP_CLOSE` is
-  for `pin`; a `return` from the frame pops all regions of the frame.
-- `OP_CATCH A`: at the handler, with `CND` in `R[A]` and the error
-  values at `R[A+1] .. top` (open, like call results): apply the
-  matching rules; on match set `R[A] = false` and keep the values; else
-  re-throw all the values (`luaD_thrown`). Calling a function condition
-  uses `luaD_call` (yieldable).
-- Catching: `luaV_execute` keeps one `lua_longjmp` per C invocation. The
-  first `OP_TRY` of an invocation chains it in `L->errorJmp` with a
-  `setjmp` right there (the opcode runs inside the invocation's C frame,
-  so the buffer is valid); the last `OP_ENDTRY` unchains it. On a
-  longjmp into it: scan regions from the top down to the invocation's
-  fresh frame; the first one found gives the frame to continue in:
-  close upvalues/tbc down to its level with the error status
-  (`luaD_closeprotected`, which may run `defer`s and replace the error),
-  move the error values to `R[A+1]` (`luaD_seterrorobj`), set
-  `L->ci`, `savedpc = handler`, restore `nCcalls`/`allowhook`/`errfunc`,
-  `luaD_shrinkstack`, reload `base`/`pc` and continue the loop. No
-  region in this invocation: unchain and re-throw to the previous
-  handler (an outer invocation's buffer or a `pcall`/`resume`).
-- Yields: a yield inside the body longjmps with `LUA_YIELD` into our
-  buffer: unchain and re-throw it; the regions stay recorded in the
-  thread. When `luaV_execute` is re-entered for a frame that has
-  regions (flag `CIST_TRY` in `callstatus`), it chains the buffer again
-  before running. So `await` inside `catch` works in tasks.
-- C boundaries: a `catch` inside a callback called from C (`sort`,
-  `gsub`, iterators) works, because the buffer belongs to the
-  callback's own `luaV_execute` invocation, which is still alive; the
-  C frames above it are discarded exactly as `pcall` does.
-- `break`/`escape`/`return`/`until`/`while` work across `catch`
-  (same frame, plain jumps plus `OP_ENDTRY`).
-- Cost: a `setjmp` per `catch` entry (as `pcall` has), no closure, no
-  table. Size: ~300 lines (`lopcodes`, `lvm.c`, `ldo.c`, `lstate.h`,
-  `lparser.c`, `ldebug.c` for the new opcodes).
-- Caveats: locals of `luaV_execute` are reloaded from `ci` after the
-  longjmp (`base`, `pc`, `k`, `cl`, `trap`), the same way the `trap`
-  paths do; the region stack is per thread (`L->tryregions`, grown on
-  demand) and popped when frames are unwound by errors or
-  `coroutine.close` (`luaE_resetthread` drops all regions).
+Regions. A per-thread stack `L->tryregions` of records {`ci`, `handler`
+(pc), `level` (stack index of the first error value), `oldtop`,
+`nCcalls`, `allowhook`, `errfunc`, `nested`}. Frames with regions carry
+`CIST_TRY`. New opcodes (`lopcodes`, `lvm.c`):
 
-Decision: (A) first, because it is simpler and matches the reference;
-(B) is the alternative to switch to when `break`/`escape`/`return`
-across `catch` (or the closure cost) matter. Scope of (B) also covers
-`watching P { body }` (tasks.md, stage 2a): the body would run inline
-in the current task, a hidden child task awaiting `P` would wake it at
-its pending `await` with a private error (the `lua_resumeerror` path),
-caught by the region; and with stackless coroutines (coroutine.md c)
-only inline bodies can `await`, so `catch` A and `watching` as a closure
-would not allow `await` inside. With (B), `catch` becomes
-a real block like `do :X {}` and the error values stay on the stack end
-to end. Switching replaces `catchexp` (parser) and `luaB_catch`; the
-tests stay, minus the "jumps across catch are errors" cases.
+- `OP_TRY A sBx`: pushes a region for this frame with handler `pc +
+  sBx`, level `A+1`; saves and zeroes `L->errfunc` (a caught error must
+  not run an outer `xpcall` handler). Two modes, decided at run time:
+  *recovery* when the thread is yieldable (`yieldable(L)`: every C
+  frame below has a continuation, which holds inside tasks), *nested*
+  otherwise (main thread, REPL lines, inside callbacks of `sort`,
+  `gsub`, metamethods called from C). In nested mode the opcode runs
+  the rest of the frame under `luaD_rawrunprotected` with a recursive
+  `luaV_execute` that returns at the matching `OP_ENDTRY`/`OP_CATCH`
+  (region flag `nested`), as `pcall` does, so `catch` works anywhere
+  `pcall` would; yields cannot happen there (non-yieldable).
+- `OP_ENDTRY A sBx`: normal end: pops the region, restores `errfunc`,
+  `R[A] = true`, `L->top = A+2` (the body value is at `A+1`), jumps to
+  `pc + sBx` (the join).
+- `OP_CATCH A B`: the handler. The error values are at `A+1..top-1`
+  (placed by the recovery) and `L->trystatus` holds the status. B = 0
+  (`catch`): the condition is `R[A]`; matching as today (`true`, a
+  function called with the values whose other results replace them,
+  else `e1 ?? CND`); jump throws (status `LUA_ERRJUMP`) never match;
+  on match `R[A] = false`, values at `A+1..`, `L->top` after them; else
+  rethrow all values with the original status (`luaD_thrown`). B = 1
+  (jump handler of an owning block, see below): matches only jump
+  throws; other errors are rethrown.
+- `OP_CATCHRES A C`: the join: adjusts the values at `A..top-1` to
+  `C-1` results (`C = 0`: keep `L->top`, open), so the parser treats
+  the whole `catch` as a `VCALL`-like expression (`luaK_setreturns`
+  patches `C`, `luaK_setoneret` gives `R[A]`).
 
+Recovery (`ldo.c`). Errors inside a region in recovery mode unwind to
+`lua_resume`'s `luaD_rawrunprotected`; `findpcall` now also stops at a
+frame with `CIST_TRY` (whichever is nearer the top: an inner `pcall`
+wins over an outer region and vice versa); `precover` sets the status
+in the frame (`setcistrecst`) and `unroll` recovers it before
+re-entering `luaV_execute`: pop the region, `L->trystatus = status`,
+`luaF_close` the to-be-closed variables and upvalues down to `level`
+(an error in a `defer` there becomes the new error, found by the next
+iteration of `precover` with the next region), move the error values to
+`level` (`luaD_seterrorobj`, n values), restore `nCcalls`/`allowhook`/
+`errfunc`, set `savedpc` to the handler, `luaD_shrinkstack`. A region
+is recoverable only if no C frame without continuation lies between
+its frame and the recovery point; `OP_TRY` guarantees it by choosing
+nested mode otherwise, so `findpcall` needs no check. Nested mode does
+the same recovery in place when `luaD_rawrunprotected` returns an
+error. `luaE_resetthread`/`lua_closethread` drop the regions of the
+thread; a region is also dropped when its frame returns (the parser
+always emits `OP_ENDTRY`/`OP_CATCH` before leaving it, and jumps out of
+a region (`break` etc.) pop it with `OP_ENDTRY` emitted by the jump
+code, like `OP_CLOSE` for `pin`).
+
+Parser, `catch CND { body }` (register layout: `A` = CND then result,
+`A+1` = body value, hidden locals `(cnd)`/`(val)` as `compoundexp`
+does, so body locals sit above):
+
+    CND -> R[A]
+    OP_TRY A -> handler
+    body (block with resreg A+1; its locals >= A+2)
+    OP_ENDTRY A -> join
+    handler: OP_CATCH A 0
+    join: OP_CATCHRES A C      (VCALL-like expression at A)
+
+A `break`/`until`/`while`/`escape`/`return` inside the body is a plain
+jump: before it, `OP_ENDTRY` pops the regions of the blocks being left
+(tracked in `BlockCnt.region`), and `OP_CLOSE`/`OP_RETURN k` close the
+to-be-closed variables as usual. `...` inside the body is now allowed.
+
+`watching P { body }` (inline): `A` = watcher/result, `A+1` = body
+value, `A+2` = hidden pin `(watcher)`:
+
+    OP_TRY A -> handler
+    R[A] = _ENV["watching.spawn"](P)   (a transparent task: await(P),
+                                       then throw(itself, results...))
+    (watcher) <close> = R[A]           (aborted when the block ends)
+    body (resreg A+1)
+    OP_ENDTRY A -> join
+    handler: OP_CATCH A 0              (CND = the watcher: e1 == watcher)
+    join: OP_CATCHRES A 4; value = R[A] ? R[A+1] : R[A+2]
+
+The watcher's throw reaches the body as an error at its pending `await`
+(child error, `lua_resumeerror`) or synchronously during an `emit` of
+the body; the region catches it, the body's pins and the watcher are
+closed by the unwinding; the value is the event. A `break`/`return`/
+`escape` in the body is a plain jump out of the region.
+
+Task-crossing jumps. Inside a task-body closure (`spawn { }`, `par`
+branches, `toggle on` bodies; kinds `CB_SPAWN`/`CB_PAR`/`CB_TOGGLE`),
+a `break`/`until`/`while` with no enclosing loop in the closure, an
+`escape :X` with no enclosing `do :X`, and a `return` compile to a
+throw of status `LUA_ERRJUMP` with the values `(kind, [tag,] vals...)`
+(`OP_JUMPOUT A B` with `kind` in B, the values at `A..top`), and the
+jump is registered in the *owning block*: the block of the enclosing
+function where the spawn/par statement is (the block that pins the
+task). That block gets a region opened right before the spawn/par call
+(`OP_TRY` with `A` below the call, so the hidden pin at `A+1` is closed
+by the unwinding) and closed at the block end, with a jump handler
+(`OP_CATCH A 1`) that dispatches on `kind` (and the tag for escapes) to
+the registered targets: the loop break (values to its result
+register, `goto break`), the `do :X` escape, or `OP_RETURN` of the
+values; an unmatched jump is rethrown (an outer owning block may own the
+target). The error reaches the owner synchronously (a jump before the
+task's first `await`, raised by `task_result` in the spawn call) or at
+the owner's `await` (`lua_resumeerror`), both inside the region. The
+same owning-block region serves every spawn of the block (opened by the
+first one). `pcall`/`catch` never intercept jump throws (`catch` by
+status; `pcall` passes `LUA_ERRJUMP` on: `finishpcall` rethrows it).
+Jumps from a child of a child propagate the same way, level by level.
+`escape :X` also accepts the juxtaposed tag form (`escape :X [..]`), as
+`throw :X` does.
+
+Not covered, by design: `break` inside a plain function breaking the
+caller's loop and `escape` to a missing block as a catchable error (the
+reference's "dynamic scope" bugs: compile errors here); jumps out of
+`defer` bodies; a `catch` nested in a non-yieldable C callback inside a
+task still works (nested mode) but cannot `await` (as any code there).
+
+Decision: (A) was implemented first, matching the reference; (B)
+replaces it (this design) to allow jumps across `catch`, `watching`
+and task bodies, to remove the closure per `catch`, and because the
+stackless coroutines of coroutine.md (c) need inline blocks.
 ## `defer`
 
 `defer { BODY }` compiles to a closure stored in a hidden to-be-closed

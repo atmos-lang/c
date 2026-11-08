@@ -4,78 +4,78 @@
 
 dofile("ref/harness.atm")
 R.begin("throw.lua")
-;; R.T("throw.lua:16 spawn-return pre", """
-;;         val T = task () {
-;;             spawn {
-;;                 return(10)
-;;             }
-;;             await(:X)
-;;             print(:alive)
-;;         }
-;;         pin t = spawn T()
-;;         emit(:X)
-;;         print((await(t)))
-;;         print(:end)
-;;     """,
-;;   """
-;; 10
-;; end
-;; """)
-;; R.T("throw.lua:34 spawn-return pos", """
-;;         val T = task () {
-;;             spawn {
-;;                 await(:go)
-;;                 return(10)
-;;             }
-;;             await(:X)
-;;             print(:alive)
-;;         }
-;;         pin t = spawn T()
-;;         emit(:go)
-;;         emit(:X)
-;;         print((await(t)))
-;;         print(:end)
-;;     """,
-;;   """
-;; 10
-;; end
-;; """)
-;; R.T("throw.lua:54 spawn-break pre", """
-;;         val T = task () {
-;;             val v = loop {
-;;                 spawn {
-;;                     break(10)
-;;                 }
-;;                 await(false)
-;;             }
-;;             print(v)
-;;         }
-;;         spawn T()
-;;         print(:end)
-;;     """,
-;;   """
-;; 10
-;; end
-;; """)
-;; R.T("throw.lua:72 spawn-break pos", """
-;;         val T = task () {
-;;             val v = loop {
-;;                 spawn {
-;;                     await(:go)
-;;                     break(10)
-;;                 }
-;;                 await(false)
-;;             }
-;;             print(v)
-;;         }
-;;         spawn T()
-;;         emit(:go)
-;;         print(:end)
-;;     """,
-;;   """
-;; 10
-;; end
-;; """)
+R.T("throw.lua:16 spawn-return pre", """
+        val T = task () {
+            spawn {
+                return(10)
+            }
+            await(:X)
+            print(:alive)
+        }
+        pin t = spawn T()
+        emit(:X)
+        print((await(t)))
+        print(:end)
+    """,
+  """
+10
+end
+""")
+R.T("throw.lua:34 spawn-return pos", """
+        val T = task () {
+            spawn {
+                await(:go)
+                return(10)
+            }
+            await(:X)
+            print(:alive)
+        }
+        pin t = spawn T()
+        emit(:go)
+        emit(:X)
+        print((await(t)))
+        print(:end)
+    """,
+  """
+10
+end
+""")
+R.T("throw.lua:54 spawn-break pre", """
+        val T = task () {
+            val v = loop {
+                spawn {
+                    break(10)
+                }
+                await(false)
+            }
+            print(v)
+        }
+        spawn T()
+        print(:end)
+    """,
+  """
+10
+end
+""")
+R.T("throw.lua:72 spawn-break pos", """
+        val T = task () {
+            val v = loop {
+                spawn {
+                    await(:go)
+                    break(10)
+                }
+                await(false)
+            }
+            print(v)
+        }
+        spawn T()
+        emit(:go)
+        print(:end)
+    """,
+  """
+10
+end
+""")
 R.T("throw.lua:92 spawn-throw pre", """
         val T = task () {
             val ok, e, v = catch :X {
@@ -112,41 +112,41 @@ R.T("throw.lua:110 spawn-throw pos", """
 false	X	10
 end
 """)
-;; R.T("throw.lua:130 spawn-escape pre", """
-;;         val T = task () {
-;;             val v = do :X {
-;;                 spawn {
-;;                     escape(:X, 10)
-;;                 }
-;;                 await(false)
-;;             }
-;;             print(v)
-;;         }
-;;         spawn T()
-;;         print(:end)
-;;     """,
-;;   """
-;; 10
-;; end
-;; """)
-;; R.T("throw.lua:148 spawn-escape pos", """
-;;         val T = task () {
-;;             val v = do :X {
-;;                 spawn {
-;;                     await(:go)
-;;                     escape(:X, 10)
-;;                 }
-;;                 await(false)
-;;             }
-;;             print(v)
-;;         }
-;;         spawn T()
-;;         emit(:go)
-;;         print(:end)
-;;     """,
-;;   """
-;; 10
-;; end
-;; """)
+R.T("throw.lua:130 spawn-escape pre", """
+        val T = task () {
+            val v = do :X {
+                spawn {
+                    escape(:X, 10)
+                }
+                await(false)
+            }
+            print(v)
+        }
+        spawn T()
+        print(:end)
+    """,
+  """
+10
+end
+""")
+R.T("throw.lua:148 spawn-escape pos", """
+        val T = task () {
+            val v = do :X {
+                spawn {
+                    await(:go)
+                    escape(:X, 10)
+                }
+                await(false)
+            }
+            print(v)
+        }
+        spawn T()
+        emit(:go)
+        print(:end)
+    """,
+  """
+10
+end
+""")
 
 R.finish()

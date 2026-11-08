@@ -469,3 +469,8 @@ Reference: `run.lua` (`M.env`, `M.loop` step loop, `M.start`,
   `start`/`stop` (inside a nested loop: `stop` aborts the innermost
   loop body, which otherwise is the test itself), the clock env.
   `testes/ref/tst/guide.atm` (real-time clock, 5 seconds) is not run.
+
+Note: exec `loop 7` (`loop k,v in [x=1,y=2]`) accepts two output orders
+in the reference (`assert(out == a or out == b)`); the converter keeps
+the first only and string hashing is randomized per run, so the case is
+flaky and stays disabled.

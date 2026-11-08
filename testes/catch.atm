@@ -252,17 +252,72 @@ do {
     throw(:X)
   }
   assert(v == 1)
-  ;; 'break', 'escape' and 'return' cannot cross a 'catch' (the body is
-  ;; a closure): compile-time errors (see .claude/plans/catch.md)
-  val func err (src, msg) {
-    val f, m = load(src)
-    assert(!f && string.find(m, msg, 1, true), m)
+  ;; 'break', 'until', 'escape' and 'return' cross a 'catch' (the body
+  ;; is an inline block: VM try regions, see .claude/plans/catch.md)
+  do {
+    var n = 0
+    val r = loop {
+      set n = n + 1
+      catch :X {
+        if n == 3 { break(n * 10) }
+      }
+    }
+    assert((n == 3) && (r == 30))
+    var m = 0
+    loop {
+      set m = m + 1
+      catch :X { until(m == 2) }
+    }
+    assert(m == 2)
+    val e = do :T {
+      catch :X { escape(:T, 10) }
+      99
+    }
+    assert(e == 10)
+    val func f () {
+      catch :X { return(1) }
+      2
+    }
+    assert(f() == 1)
+    val func g (...) {  ;; '...' inside the body
+      val ok, v = catch :X { (...) }
+      v
+    }
+    assert(g(7, 8) == 7)
+    ;; jumps out of the body close its pending variables and regions
+    var closed = ""
+    loop {
+      catch :X {
+        defer { set closed = closed ++ "d" }
+        pin p = setmetatable([], [__close = \{ set closed = closed ++ "p" }])
+        break()
+      }
+    }
+    assert(closed == "pd")
+    ;; after a jump out of a catch, an error is not caught by it
+    val ok2, e2 = pcall(\{
+      loop { catch true { break() } }
+      error("out", 0)
+    })
+    assert(!ok2 && (e2 == "out"))
   }
-  err("loop { catch :X { break() } }", "break outside loop")
-  err("loop { catch :X { until(true) } }", "until outside loop")
-  err("do :T { catch :X { escape(:T) } }", "no enclosing block ':T' for <escape>")
-  err("func f () { catch :X { return(1) } }", "cannot use 'return' inside 'catch'")
-  err("func f (...) { catch :X { (...) } }", "cannot use '...' outside a vararg function")
+  ;; a caught error does not reach the handler of an enclosing 'xpcall'
+  do {
+    var h = 0
+    val ok, v = xpcall(\{
+      val ok, e = catch true { error("x", 0) }
+      assert(!ok && (e == "x"))
+      1
+    }, \{ set h = h + 1 })
+    assert(ok && (v == 1) && (h == 0))
+  }
+  ;; the error comes from deep inside (nested calls, a metamethod)
+  do {
+    val t = setmetatable([], [__index = \(_, k) { throw(:K, k) }])
+    val func deep (n) { if n == 0 { t.missing } else { deep(n - 1) } }
+    val ok, e, k = catch :K { deep(5) }
+    assert(!ok && (e == "K") && (k == "missing"))
+  }
   ;; (loops and blocks inside the body are fine)
   val ok, v = catch :X {
     val r = loop { break(1) }

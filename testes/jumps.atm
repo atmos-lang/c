@@ -1,0 +1,304 @@
+;; Jumps across blocks: 'watching' with an inline body, and
+;; 'break'/'until'/'escape'/'return' from task bodies ('spawn { }', 'par'
+;; branches, 'toggle on') to the owner task's loop, block or function.
+;; See .claude/plans/catch.md (option B) and the reference tests
+;; (atmos-lang/atmos tst/throw.lua, enabled in testes/ref/throw.atm).
+
+print("testing jumps across catch, watching and task bodies")
+
+val realprint = print
+var out = ""
+val func print (...) {
+  val t = table.pack(...)
+  loop i in (1, t.n) {
+    set t@i = tostring(t@i)
+  }
+  set out = out ++ table.concat(t, "\t") ++ "\n"
+}
+val func check (exp) {
+  assert(out == exp, out)
+  set out = ""
+}
+
+;; ---- watching: inline body
+
+do {  ;; break out of a watching body
+  spawn {
+    val r = loop {
+      watching :X {
+        await(:go)
+        break(10)
+      }
+      print(:never)
+    }
+    print(r)
+  }
+  emit(:go)
+  check("10\n")
+}
+
+do {  ;; return from a watching body
+  task T () {
+    watching :X {
+      await(:go)
+      return(20)
+    }
+    print(:never)
+  }
+  pin t = spawn T()
+  emit(:go)
+  print(t.ret)
+  check("20\n")
+}
+
+do {  ;; escape from a watching body; the watcher is aborted
+  spawn {
+    val v = do :E {
+      watching :X {
+        defer { print(:defer) }
+        await(:go)
+        escape(:E, 30)
+      }
+      print(:never)
+    }
+    print(v)
+    emit(:X)  ;; the watching is over: nothing happens
+    print(:ok)
+  }
+  emit(:go)
+  check("defer\n30\nok\n")
+}
+
+do {  ;; the event wins: the value is the event, the body is aborted
+  spawn {
+    val v = watching :X {
+      defer { print(:defer) }
+      await(false)
+    }
+    print(v)
+  }
+  emit(:X)
+  check("defer\nX\n")
+}
+
+do {  ;; the body wins: the value is the body's
+  spawn {
+    val v = watching :X {
+      await(:go)
+      40
+    }
+    print(v)
+  }
+  emit(:go)
+  check("40\n")
+}
+
+do {  ;; 'until' and locals of the owner used inside the body
+  spawn {
+    var n = 0
+    loop {
+      watching :X {
+        set n = n + 1
+        await(:go)
+      }
+      until(n == 2)
+    }
+    print(n)
+  }
+  emit(:go)
+  emit(:go)
+  check("2\n")
+}
+
+;; ---- spawn blocks: jumps to the owner
+
+do {  ;; break before the first await ("pre") and after it ("pos")
+  task T () {
+    val a = loop {
+      spawn {
+        break(1)
+      }
+      await(false)
+    }
+    val b = loop {
+      spawn {
+        await(:go)
+        break(2)
+      }
+      await(false)
+    }
+    print(a, b)
+  }
+  spawn T()
+  emit(:go)
+  check("1\t2\n")
+}
+
+do {  ;; return from a spawn block returns from the owner task
+  task T () {
+    spawn {
+      await(:go)
+      return(10, 20)
+    }
+    await(false)
+    print(:never)
+  }
+  pin t = spawn T()
+  emit(:go)
+  print(t.ret)
+  check("10\n")
+}
+
+do {  ;; escape from a spawn block to the owner's block
+  task T () {
+    val v = do :X {
+      spawn {
+        await(:go)
+        escape(:X, 30)
+      }
+      await(false)
+    }
+    print(v)
+  }
+  spawn T()
+  emit(:go)
+  check("30\n")
+}
+
+do {  ;; the escaping task and its siblings are aborted
+  task T () {
+    val v = do :X {
+      spawn {
+        defer { print(:sibling) }
+        await(false)
+      }
+      spawn {
+        defer { print(:escaper) }
+        await(:go)
+        escape(:X, 1)
+      }
+      await(false)
+    }
+    print(v)
+  }
+  spawn T()
+  emit(:go)
+  check("escaper\nsibling\n1\n")
+}
+
+do {  ;; two levels: a child of a child escapes to the grandparent
+  task T () {
+    val v = do :X {
+      spawn {
+        spawn {
+          await(:go)
+          escape(:X, 2)
+        }
+        await(false)
+      }
+      await(false)
+    }
+    print(v)
+  }
+  spawn T()
+  emit(:go)
+  check("2\n")
+}
+
+do {  ;; jumps are not errors: 'catch true' lets them through
+  task T () {
+    val v = loop {
+      val ok, e = catch true {
+        spawn {
+          await(:go)
+          break(3)
+        }
+        await(false)
+      }
+      print(:never, ok, e)
+    }
+    print(v)
+  }
+  spawn T()
+  emit(:go)
+  check("3\n")
+}
+
+do {  ;; an escape with no matching block in the owner is an error
+  task T () {
+    spawn {
+      await(:go)
+      escape(:Z, 1)
+    }
+    await(false)
+  }
+  spawn T()
+  val ok, e = pcall(emit, :go)
+  assert(!ok)
+  print(:ok)
+  check("ok\n")
+}
+
+;; ---- par branches and toggle bodies
+
+do {  ;; return from a par branch returns from the function
+  task T () {
+    par {
+      await(:go)
+      return(5)
+    } with {
+      await(false)
+    }
+    print(:never)
+  }
+  pin t = spawn T()
+  emit(:go)
+  print(t.ret)
+  check("5\n")
+}
+
+do {  ;; break from a par :any branch
+  spawn {
+    val v = loop {
+      par :any {
+        await(:go)
+        break(6)
+      } with {
+        await(false)
+      }
+    }
+    print(v)
+  }
+  emit(:go)
+  check("6\n")
+}
+
+do {  ;; break from a 'toggle on' body
+  spawn {
+    val v = loop {
+      toggle on :T {
+        await(:go)
+        break(7)
+      }
+    }
+    print(v)
+  }
+  emit(:go)
+  check("7\n")
+}
+
+;; ---- juxtaposed tag in escape
+
+do {
+  val v = do :X {
+    escape :X [1, 2]
+  }
+  assert((v ?? :X) && (v@2 == 2))
+  val w = do :Y {
+    escape :Y
+    99
+  }
+  assert(w == "Y")
+}
+
+realprint("OK")

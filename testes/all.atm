@@ -198,6 +198,7 @@ do {  ;; (
   dofile('ref/toggle.atm')
   dofile('ref/timers.atm')
   dofile('envs.atm')
+  dofile('jumps.atm')
   dofile('ref/streams.atm')
   dofile('ref/thread.atm')
   dofile('math.atm')
