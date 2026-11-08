@@ -8,8 +8,7 @@ harness_begin("thread.lua")
 ;; TODO(tst2atm): unrecognized case 'val x = thread { 10 }'
 ;; TODO(tst2atm): unrecognized case 'var n = 10 '
 ;; TODO(tst2atm): unrecognized case 'thread { print(:ok) }'
-;; line 55
-;; T("thread exec 00", """
+;; T("0:55 thread exec 00", """
 ;;         spawn {
 ;;             thread { await :OK }
 ;;         }
@@ -19,8 +18,7 @@ harness_begin("thread.lua")
 ;;   P("""
 ;;         ==> invalid await : expected enclosing task
 ;;     """))
-;; line 70
-;; T("thread exec 01", """
+;; T("0:70 thread exec 01", """
 ;;         spawn {
 ;;             val v = thread { 42 }
 ;;             print(v)
@@ -31,8 +29,7 @@ harness_begin("thread.lua")
 ;;   """
 ;; 42
 ;; """)
-;; line 84
-;; T("thread exec 02", """
+;; T("0:84 thread exec 02", """
 ;;         spawn {
 ;;             val v = thread {
 ;;                 ;; non-awaiting heavy computation
@@ -50,8 +47,7 @@ harness_begin("thread.lua")
 ;;   """
 ;; 5050
 ;; """)
-;; line 105
-;; T("thread exec 03", """
+;; T("0:105 thread exec 03", """
 ;;         math.randomseed()
 ;;
 ;;         val func cpu (max) {

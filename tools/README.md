@@ -108,3 +108,12 @@ pattern), `F` (substring), `E(pre, msg)`/`EP(pre, pattern)` (an error
 with that message after the output `pre`; only the last line of the
 reference's "==> ERROR:" trace is compared). Unrecognized shapes become
 `;; TODO(tst2atm)` comments.
+
+Flow: the reference `tst/` directory is copied as is to
+`testes/ref/tst/` (`COMMIT.txt` records the reference commit); each
+test file is generated to `testes/ref/<name>.atm` with `--commented`
+(every case disabled) and then with `--enabled LIST` where `LIST` holds
+the keys (`<file>:<line> <name>`, see `--list`) of the cases expected
+to pass; `testes/ref/harness.atm` runs them. To enable new cases:
+generate the file without options into a scratch copy, run it, remove
+the `FAIL:` keys from the `--list` output, regenerate with `--enabled`.

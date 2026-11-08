@@ -17,8 +17,7 @@ harness_begin("toggle.lua")
 
 ;; ---- TOGGLE FILTER : EXEC
 
-;; line 94
-;; T("toggle filter combinator", """
+;; T("0:94 toggle filter combinator", """
 ;;         val T = task () {
 ;;             spawn (task () { loop on :Draw  { print(:draw)  } }) ()
 ;;             spawn (task () { loop on :Click { print(:click) } }) ()
@@ -39,8 +38,7 @@ harness_begin("toggle.lua")
 ;; click
 ;; tick
 ;; """)
-;; line 114
-;; T("toggle pool target", """
+;; T("0:114 toggle pool target", """
 ;;         val T = task (v) {
 ;;             loop {
 ;;                 await(true)

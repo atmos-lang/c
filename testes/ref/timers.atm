@@ -7,8 +7,7 @@ harness_begin("timers.lua")
 
 ;; ---- TIMERS
 
-;; line 9
-;; T("timers 1: residual carried", """
+;; T("0:9 timers 1: residual carried", """
 ;;         spawn {
 ;;             await(10ms)
 ;;             await(10ms)
@@ -19,8 +18,7 @@ harness_begin("timers.lua")
 ;;   """
 ;; ok
 ;; """)
-;; line 21
-;; T("timers 2: time order in one tick", """
+;; T("0:21 timers 2: time order in one tick", """
 ;;         spawn {
 ;;             par :any {
 ;;                 await(20ms)
@@ -35,8 +33,7 @@ harness_begin("timers.lua")
 ;;   """
 ;; b
 ;; """)
-;; line 37
-;; T("timers 3: periodic catch-up", """
+;; T("0:37 timers 3: periodic catch-up", """
 ;;         spawn {
 ;;             loop i in 3 {
 ;;                 await(10ms)
@@ -50,8 +47,7 @@ harness_begin("timers.lua")
 ;; 2
 ;; 3
 ;; """)
-;; line 50
-;; T("timers 4: late returned", """
+;; T("0:50 timers 4: late returned", """
 ;;         spawn {
 ;;             print(await(10ms))
 ;;             print(await(10ms))
@@ -62,8 +58,7 @@ harness_begin("timers.lua")
 ;; 15000
 ;; 5000
 ;; """)
-;; line 61
-;; T("timers 5: clock pieces", """
+;; T("0:61 timers 5: clock pieces", """
 ;;         spawn {
 ;;             await(10ms)
 ;;         }
@@ -80,8 +75,7 @@ harness_begin("timers.lua")
 ;; 10000	15000
 ;; 15000	0
 ;; """)
-;; line 78
-;; T("timers 6: timer born mid-tick", """
+;; T("0:78 timers 6: timer born mid-tick", """
 ;;         spawn {
 ;;             await(10ms)
 ;;             spawn {
@@ -95,8 +89,7 @@ harness_begin("timers.lua")
 ;;   """
 ;; B
 ;; """)
-;; line 93
-;; T("timers 7: toggle freezes timer", """
+;; T("0:93 timers 7: toggle freezes timer", """
 ;;         pin t = spawn {
 ;;             await(10ms)
 ;;             print(:ok)
@@ -112,8 +105,7 @@ harness_begin("timers.lua")
 ;; -
 ;; ok
 ;; """)
-;; line 109
-;; T("timers 8: toggle on re-reports timer", """
+;; T("0:109 timers 8: toggle on re-reports timer", """
 ;;         spawn {
 ;;             await(20ms)
 ;;             print(:b)
@@ -131,8 +123,7 @@ harness_begin("timers.lua")
 ;; a
 ;; b
 ;; """)
-;; line 127
-;; T("timers 9: next", """
+;; T("0:127 timers 9: next", """
 ;;         print(atmos.next())             ;; no timer
 ;;         spawn {
 ;;             await(10ms)

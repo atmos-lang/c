@@ -4,8 +4,7 @@
 
 dofile("ref/harness.atm")
 harness_begin("throw.lua")
-;; line 16
-;; T("spawn-return pre", """
+;; T("0:16 spawn-return pre", """
 ;;         val T = task () {
 ;;             spawn {
 ;;                 return(10)
@@ -22,8 +21,7 @@ harness_begin("throw.lua")
 ;; 10
 ;; end
 ;; """)
-;; line 34
-;; T("spawn-return pos", """
+;; T("0:34 spawn-return pos", """
 ;;         val T = task () {
 ;;             spawn {
 ;;                 await(:go)
@@ -42,8 +40,7 @@ harness_begin("throw.lua")
 ;; 10
 ;; end
 ;; """)
-;; line 54
-;; T("spawn-break pre", """
+;; T("0:54 spawn-break pre", """
 ;;         val T = task () {
 ;;             val v = loop {
 ;;                 spawn {
@@ -60,8 +57,7 @@ harness_begin("throw.lua")
 ;; 10
 ;; end
 ;; """)
-;; line 72
-;; T("spawn-break pos", """
+;; T("0:72 spawn-break pos", """
 ;;         val T = task () {
 ;;             val v = loop {
 ;;                 spawn {
@@ -80,8 +76,7 @@ harness_begin("throw.lua")
 ;; 10
 ;; end
 ;; """)
-;; line 92
-;; T("spawn-throw pre", """
+;; T("0:92 spawn-throw pre", """
 ;;         val T = task () {
 ;;             val ok, e, v = catch :X {
 ;;                 spawn {
@@ -98,8 +93,7 @@ harness_begin("throw.lua")
 ;; false	X	10
 ;; end
 ;; """)
-;; line 110
-;; T("spawn-throw pos", """
+;; T("0:110 spawn-throw pos", """
 ;;         val T = task () {
 ;;             val ok, e, v = catch :X {
 ;;                 spawn {
@@ -118,8 +112,7 @@ harness_begin("throw.lua")
 ;; false	X	10
 ;; end
 ;; """)
-;; line 130
-;; T("spawn-escape pre", """
+;; T("0:130 spawn-escape pre", """
 ;;         val T = task () {
 ;;             val v = do :X {
 ;;                 spawn {
@@ -136,8 +129,7 @@ harness_begin("throw.lua")
 ;; 10
 ;; end
 ;; """)
-;; line 148
-;; T("spawn-escape pos", """
+;; T("0:148 spawn-escape pos", """
 ;;         val T = task () {
 ;;             val v = do :X {
 ;;                 spawn {
