@@ -118,6 +118,12 @@ Semantics assumed for the Atmos implementation (the tests rely on them):
   `||`, `&&`, `!`, `until (c)`, `while (c)`, nested `<P>`, `T(args)`
   (spawns), `(E)` values; a bare variable in pattern position is a
   compile error (write `await(x)`)
+- clock durations (`1s`, `10ms`, `1min2s3ms`) are numbers in
+  microseconds; `await(n)` is a timer, `emit @:global n` a tick split at
+  the nearest timer (`late` returned), `await(:clock)` any tick; `toggle
+  t(false) [with P]` / `toggle t(true)` / `toggle on :T [with P] { }` as
+  the reference; `atmos.next()`, `atmos.stop()` (aborts the innermost
+  `atmos.loop` body)
 
 ## tst2atm.py
 

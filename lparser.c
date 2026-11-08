@@ -1495,8 +1495,10 @@ static void lambda (LexState *ls, expdesc *e, int line) {
 #define CB_CATCH	1
 #define CB_PAR		2
 #define CB_WATCHING	3
+#define CB_TOGGLE	4
 
-static const char *const cbnames[] = {"", "catch", "par", "watching"};
+static const char *const cbnames[] =
+  {"", "catch", "par", "watching", "toggle"};
 
 static void closurebody (LexState *ls, expdesc *e, int line, int iscatch) {
   FuncState new_fs;
@@ -1989,6 +1991,56 @@ static void parexp (LexState *ls, expdesc *v) {
 }
 
 
+/*
+** toggle on :T [with P {, P}] { } -> toggle(:T, P..., \{ })
+** toggle f(args) [with P {, P}] -> toggle(f, args..., P...)
+*/
+static void togglepatts (LexState *ls) {
+  do {
+    expdesc p;
+    pattexp(ls, &p);
+    luaK_exp2nextreg(ls->fs, &p);
+  } while (testnext(ls, ','));
+}
+
+static void toggleexp (LexState *ls, expdesc *v) {
+  FuncState *fs = ls->fs;
+  int line = ls->linenumber;
+  int base;
+  luaX_next(ls);  /* skip 'toggle' */
+  base = callbegin(ls, "toggle");
+  if (testnext(ls, TK_ON)) {  /* block form */
+    expdesc tag, f;
+    check(ls, TK_TAG);
+    codestring(&tag, ls->t.seminfo.ts);
+    luaX_next(ls);
+    luaK_exp2nextreg(fs, &tag);
+    if (testnext(ls, TK_WITH))
+      togglepatts(ls);
+    check(ls, '{');
+    closurebody(ls, &f, line, CB_TOGGLE);
+    luaK_exp2nextreg(fs, &f);
+  }
+  else {  /* call form */
+    expdesc t;
+    primaryexp(ls, &t);
+    if (!(suffixloop(ls, &t, 1) && ls->t.token == '('))
+      luaX_syntaxerror(ls, "expected call syntax");
+    luaK_exp2nextreg(fs, &t);
+    luaX_next(ls);  /* skip '(' */
+    if (ls->t.token != ')') {
+      expdesc args;
+      explist(ls, &args);
+      luaK_exp2nextreg(fs, &args);
+    }
+    check_match(ls, ')', '(', line);
+    if (testnext(ls, TK_WITH))
+      togglepatts(ls);
+  }
+  callend(ls, v, base, 0, line);
+}
+
+
 /* watching P { } -> watching(P, \{ }) */
 static void watchingexp (LexState *ls, expdesc *v) {
   FuncState *fs = ls->fs;
@@ -2297,6 +2349,7 @@ static void primaryexp (LexState *ls, expdesc *v) {
     case TK_AWAIT: awaitexp(ls, v); return;
     case TK_PAR: parexp(ls, v); return;
     case TK_WATCHING: watchingexp(ls, v); return;
+    case TK_TOGGLE: toggleexp(ls, v); return;
     case TK_PUB: pubexp(ls, v); return;
     case TK_NIL: {
       init_exp(v, VNIL, 0);
@@ -3795,7 +3848,7 @@ static int statement (LexState *ls, expdesc *v) {
       n = exprlist(ls, v);  /* expression statement */
       break;
     }
-    case TK_TOGGLE: case TK_THREAD: {
+    case TK_THREAD: {
       luaX_syntaxerror(ls, "statement not implemented");
       break;
     }

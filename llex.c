@@ -357,7 +357,7 @@ static int read_numeral (LexState *ls, SemInfo *seminfo) {
     int isflt;
     if (read_clock(ls, seminfo, &isflt)) {  /* clock duration? */
       luaZ_buffremove(ls->buff, 1);  /* remove '\0' */
-      return TK_CLK;
+      return (isflt ? TK_FLT : TK_INT);  /* a clock is a number (us) */
     }
     luaZ_buffremove(ls->buff, 1);  /* remove '\0' */
     lexerror(ls, "malformed number", TK_FLT);

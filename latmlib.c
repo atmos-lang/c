@@ -10,6 +10,7 @@
 
 #include "lprefix.h"
 
+#include <math.h>
 #include <string.h>
 
 #include "lua.h"
@@ -317,6 +318,7 @@ static const luaL_Reg X_funcs[] = {
 typedef struct XTask {
   lua_State *th;  /* its coroutine (anchored in the user value table) */
   lua_Integer time;  /* time stamp of its current await */
+  lua_Integer pass;  /* time of the last emit let through by its gate */
   unsigned char tra;  /* transparent task */
   unsigned char pin;  /* owned by a block or a pool */
   unsigned char status;  /* ST_* */
@@ -324,9 +326,24 @@ typedef struct XTask {
 
 typedef struct Pool {
   lua_Integer max;  /* maximum number of tasks (-1: unbounded) */
+  lua_Integer pass;
   unsigned char pin;
   unsigned char isroot;
+  unsigned char status;  /* ST_OK or ST_TOGGLED */
 } Pool;
+
+/* the clock: nearest reported timer and the remainder of the current
+   tick after the piece being broadcast (see tasks.md, stage 2b) */
+static lua_Number CLKMIN = HUGE_VAL;
+static lua_Number CLKLATE = 0;
+
+/* pushes 'x' as an integer when it has an integral value */
+static void pushnum (lua_State *L, lua_Number x) {
+  if (x == floor(x) && x >= -9.2e18 && x <= 9.2e18)
+    lua_pushinteger(L, (lua_Integer)x);
+  else
+    lua_pushnumber(L, x);
+}
 
 /* broadcast time stamp and nesting of emits (for the sweep of dead tasks) */
 static lua_Integer TIME = 1;
@@ -586,6 +603,7 @@ static XTask *newxtask (lua_State *L, int fidx, int tra) {
   lua_xmove(L, th, 1);  /* body function into the thread */
   t->th = th;
   t->time = 0;
+  t->pass = 0;
   t->tra = (unsigned char)tra;
   t->pin = 0;
   t->status = ST_OK;
@@ -651,6 +669,9 @@ static void closepool (lua_State *L, int idx) {
     closeany(L, -1);
     lua_pop(L, 1);
   }
+  lua_pop(L, 1);
+  if (uvget(L, idx, "gate") != LUA_TNIL)
+    closextask(L, -1);
   lua_pop(L, 1);
   markgc(L, idx);
 }
@@ -757,8 +778,19 @@ static void emittree (lua_State *L, lua_Integer time, int tidx, int eidx) {
   tidx = lua_absindex(L, tidx);
   eidx = lua_absindex(L, eidx);
   isx = isxtask(L, tidx);
-  if (isx && (xtaskof(L, tidx))->status == ST_TOGGLED)
-    return;  /* toggled off (filters: stage 2) */
+  if ((isx ? (xtaskof(L, tidx))->status : (poolof(L, tidx))->status)
+      == ST_TOGGLED) {  /* toggled off: only what its gate lets through */
+    int pass = 0;
+    if (uvget(L, tidx, "gate") != LUA_TNIL) {
+      lua_Integer *p = isx ? &(xtaskof(L, tidx))->pass
+                           : &(poolof(L, tidx))->pass;
+      *p = 0;
+      emittree(L, time, -1, eidx);  /* the gate reacts first... */
+      pass = (*p != 0);  /* ...and stamps if the filter matched */
+    }
+    lua_pop(L, 1);
+    if (!pass) return;
+  }
   base = lua_gettop(L);
   uvget(L, tidx, "dns");
   n = (lua_Integer)lua_rawlen(L, -1);
@@ -957,6 +989,8 @@ static int atm_tasks (lua_State *L) {  /* tasks([max]) */
   p->max = max;
   p->pin = 0;
   p->isroot = 0;
+  p->status = ST_OK;
+  p->pass = 0;
   link(L, 1, 2);
   return 1;
 }
@@ -1016,6 +1050,42 @@ static int atm_gc (lua_State *L) {  /* atmos.gc(): sweep dead tasks */
   return 0;
 }
 
+static int atm_next (lua_State *L) {  /* atmos.next(): nearest timer */
+  if (CLKMIN == HUGE_VAL) lua_pushnil(L);
+  else pushnum(L, CLKMIN);
+  return 1;
+}
+
+/*
+** atmos.stop(): aborts the program, that is, the body of the innermost
+** 'atmos.loop' (the ancestor of the running task directly under the
+** root) and resets the clock. (The reference closes the whole root
+** pool; here nested loops, as the test harness, must survive.)
+*/
+static int atm_stop (lua_State *L) {
+  lua_settop(L, 0);
+  pushme(L, 1);
+  if (isxtask(L, 1)) {
+    for (;;) {
+      uvget(L, -1, "up");
+      if (isrootpool(L, -1) || lua_isnil(L, -1)) {
+        lua_pop(L, 1);
+        break;
+      }
+      lua_remove(L, -2);
+    }
+    closextask(L, -1);
+  }
+  else {  /* no running task: the whole root */
+    lua_getfield(L, LUA_REGISTRYINDEX, ATM_ROOT);
+    closepool(L, -1);
+  }
+  sweep(L);
+  CLKMIN = HUGE_VAL;
+  CLKLATE = 0;
+  return 0;
+}
+
 
 static int atm_status (lua_State *L) {  /* atmos.status(t) */
   if (!isxtask(L, 1))
@@ -1070,9 +1140,34 @@ static void pushtarget (lua_State *L, int idx) {
 }
 
 
+/*
+** A numeric emit is a clock tick, to the root only; it is split in
+** pieces, each ending at the nearest reported timer (timers re-report
+** when they wake); 'CLKLATE' is what remains of the tick after the
+** piece being broadcast (nested ticks restore it).
+*/
 static int emitaux (lua_State *L, int tgtidx, int eidx) {
+  int tgt;
+  eidx = lua_absindex(L, eidx);
   pushtarget(L, tgtidx);
-  emitto(L, lua_gettop(L), eidx);
+  tgt = lua_gettop(L);
+  if (lua_type(L, eidx) == LUA_TNUMBER) {
+    lua_Number n = lua_tonumber(L, eidx);
+    lua_Number late = CLKLATE;
+    if (!isrootpool(L, tgt)) luaL_error(L, "invalid emit : expected global");
+    do {
+      lua_Number d = (CLKMIN < n) ? CLKMIN : n;
+      n -= d;
+      CLKMIN = HUGE_VAL;
+      CLKLATE = n;
+      pushnum(L, d);
+      emitto(L, tgt, lua_gettop(L));
+      lua_pop(L, 1);
+    } while (n > 0);
+    CLKLATE = late;
+  }
+  else
+    emitto(L, tgt, eidx);
   lua_pop(L, 1);
   yieldifaborted(L, 0);
 }
@@ -1254,6 +1349,28 @@ static int awaitmatch (lua_State *L, int hasevent) {
     lua_getfield(L, 1, "ret");
     lua_pushvalue(L, 1);
     return 2;
+  }
+  if (lua_type(L, 1) == LUA_TNUMBER) {  /* timer: a countdown */
+    lua_Number clk;
+    if (hasevent) {
+      if (lua_type(L, 3) != LUA_TNUMBER) return -1;
+      pushnum(L, lua_tonumber(L, 1) - lua_tonumber(L, 3));
+      lua_replace(L, 1);  /* the remainder */
+    }
+    clk = lua_tonumber(L, 1);
+    if (clk <= 0) {  /* expired: how late */
+      pushnum(L, CLKLATE - clk);
+      return 1;
+    }
+    if (clk < CLKMIN) CLKMIN = clk;  /* report the timer */
+    return -1;
+  }
+  if (lua_type(L, 1) == LUA_TSTRING &&
+      strcmp(lua_tostring(L, 1), "clock") == 0) {  /* any tick */
+    if (!hasevent || lua_type(L, 3) != LUA_TNUMBER) return -1;
+    lua_pushvalue(L, 3);
+    pushnum(L, CLKLATE);
+    return 2;  /* elapsed, late */
   }
   if (!hasevent) return -1;
   switch (lua_type(L, 1)) {
@@ -1597,6 +1714,198 @@ static int atm_watching (lua_State *L) {
 
 
 /*
+** {------------------------------------------------------------------
+** toggle (see tasks.md, stage 2b)
+** -------------------------------------------------------------------
+*/
+
+static unsigned char *statusof (lua_State *L, int idx) {
+  return isxtask(L, idx) ? &(xtaskof(L, idx))->status
+                         : &(poolof(L, idx))->status;
+}
+
+static lua_Integer *passof (lua_State *L, int idx) {
+  return isxtask(L, idx) ? &(xtaskof(L, idx))->pass
+                         : &(poolof(L, idx))->pass;
+}
+
+static int atm_toggle (lua_State *L);
+
+/* body of a gate: loop { await(filter); node.pass = TIME } */
+static int gateloop (lua_State *L);
+
+static int gate_k (lua_State *L, int status, lua_KContext ctx) {
+  (void)status; (void)ctx;
+  *passof(L, lua_upvalueindex(2)) = TIME;  /* this emit goes through */
+  return gateloop(L);
+}
+
+static int gateloop (lua_State *L) {
+  lua_settop(L, 0);
+  lua_pushcfunction(L, atm_await);
+  lua_pushvalue(L, lua_upvalueindex(1));
+  lua_callk(L, 1, 0, 0, gate_k);
+  return gate_k(L, LUA_OK, 0);
+}
+
+/* the filters at 'first'..top as one pattern (an 'or' of several) */
+static void filterpatt (lua_State *L, int first) {
+  int n = lua_gettop(L) - first + 1;
+  if (n > 1) {
+    lua_pushcfunction(L, atm_await_or);
+    lua_insert(L, first);
+    lua_call(L, n, 1);
+  }
+}
+
+/* toggles off the node at 'idx' with the filters at 'first'..top */
+static void toggleoff (lua_State *L, int idx, int first) {
+  unsigned char *st = statusof(L, idx);
+  if (*st != ST_OK) luaL_error(L, "invalid toggle : expected awaiting task");
+  *st = ST_TOGGLED;
+  if (lua_gettop(L) >= first) {  /* filters: a gate task, off the tree */
+    XTask *g;
+    int status, nres;
+    filterpatt(L, first);
+    lua_pushvalue(L, idx);
+    lua_pushcclosure(L, gateloop, 2);
+    g = newxtask(L, -1, 1);
+    lua_remove(L, -2);  /* the function */
+    uvget(L, idx, "up");
+    uvset(L, -2, "up");
+    lua_pushvalue(L, -1);
+    uvset(L, idx, "gate");
+    status = resumetask(g->th, L, 0, &nres);  /* run to its first await */
+    taskresult(L, -1, status, nres);
+    lua_pop(L, 1);
+  }
+}
+
+static int atm_toggle_on (lua_State *L);
+
+static int atm_toggle (lua_State *L) {  /* toggle(t, bool, filters...) */
+  unsigned char *st;
+  if (lua_type(L, 1) == LUA_TSTRING)
+    return atm_toggle_on(L);
+  if (!(isxtask(L, 1) || ispool(L, 1)))
+    luaL_error(L, "invalid toggle : expected task");
+  if (lua_type(L, 2) != LUA_TBOOLEAN)
+    luaL_error(L, "invalid toggle : expected bool argument");
+  st = statusof(L, 1);
+  if (lua_toboolean(L, 2)) {  /* on */
+    if (lua_gettop(L) > 2) luaL_error(L, "invalid toggle : unexpected argument");
+    if (*st != ST_TOGGLED)
+      luaL_error(L, "invalid toggle : expected toggled off task");
+    *st = ST_OK;
+    if (uvget(L, 1, "gate") != LUA_TNIL) {
+      closextask(L, -1);
+      lua_pushnil(L);
+      uvset(L, 1, "gate");
+    }
+    lua_pop(L, 1);
+    lua_pushinteger(L, 0);  /* a zero tick: timers re-report, 'true' wakes */
+    emitto(L, 1, lua_gettop(L));
+    lua_pop(L, 1);
+    yieldifaborted(L, 0);
+  }
+  else {
+    toggleoff(L, 1, 3);
+    return 0;
+  }
+}
+
+/*
+** toggle on :T [filters] { body }: the body runs as a transparent task
+** controlled by a hidden task that toggles it off on ':T [false]' and
+** on on ':T [true]'; the value is the body's.
+*/
+static int ctl_k (lua_State *L, int status, lua_KContext ctx);
+
+static int ctlawait (lua_State *L, int on) {  /* await(:T [on]) */
+  lua_settop(L, 0);
+  lua_pushcfunction(L, atm_await);
+  lua_createtable(L, 1, 1);
+  lua_pushvalue(L, lua_upvalueindex(2));
+  lua_setfield(L, -2, "tag");
+  lua_pushboolean(L, on);
+  lua_rawseti(L, -2, 1);
+  lua_callk(L, 1, 0, on, ctl_k);
+  return ctl_k(L, LUA_OK, on);
+}
+
+static int ctl_k (lua_State *L, int status, lua_KContext ctx) {
+  (void)status;
+  if (ctx == 0) {  /* ':T [false]': toggle off, with the filter */
+    int nargs = 2;
+    lua_settop(L, 0);
+    lua_pushcfunction(L, atm_toggle);
+    lua_pushvalue(L, lua_upvalueindex(1));
+    lua_pushboolean(L, 0);
+    if (!lua_isnil(L, lua_upvalueindex(3))) {
+      lua_pushvalue(L, lua_upvalueindex(3));
+      nargs = 3;
+    }
+    lua_call(L, nargs, 0);
+    return ctlawait(L, 1);
+  }
+  else if (ctx == 1) {  /* ':T [true]': toggle on (may yield) */
+    lua_settop(L, 0);
+    lua_pushcfunction(L, atm_toggle);
+    lua_pushvalue(L, lua_upvalueindex(1));
+    lua_pushboolean(L, 1);
+    lua_callk(L, 2, 0, 2, ctl_k);
+    return ctl_k(L, LUA_OK, 2);
+  }
+  else
+    return ctlawait(L, 0);
+}
+
+static int ctlbody (lua_State *L) {  /* upvalues: body task, tag, filter */
+  return ctlawait(L, 0);
+}
+
+static int atm_toggle_on (lua_State *L) {  /* toggle(:T, filters..., body) */
+  int body = lua_gettop(L);
+  int setidx;
+  if (body < 2 || lua_type(L, body) != LUA_TFUNCTION)
+    luaL_error(L, "invalid toggle : expected task prototype");
+  pushme(L, 1);
+  if (!isxtask(L, -1)) luaL_error(L, "invalid toggle : expected enclosing task");
+  lua_pop(L, 1);
+  if (body > 2) {  /* filters at 2..body-1 */
+    lua_rotate(L, 2, 1);  /* body below the filters */
+    filterpatt(L, 3);  /* stack: tag, body, filter */
+    lua_rotate(L, 2, 1);  /* stack: tag, filter, body */
+  }
+  else {
+    lua_pushnil(L);
+    lua_insert(L, 2);  /* stack: tag, nil, body */
+  }
+  /* stack: tag, filter-or-nil, body */
+  lua_createtable(L, 2, 0);
+  luaL_setmetatable(L, PARSET);
+  lua_toclose(L, -1);
+  setidx = 4;
+  lua_pushvalue(L, 3);
+  spawncore(L, 0, 1, lua_gettop(L), 0);  /* the body */
+  lua_rawseti(L, setidx, 1);
+  if (isaborted(L)) return lua_yieldk(L, 0, 0, neverresumed);
+  if (!branchdead(L, setidx, 1)) {
+    lua_rawgeti(L, setidx, 1);
+    lua_pushvalue(L, 1);
+    lua_pushvalue(L, 2);
+    lua_pushcclosure(L, ctlbody, 3);
+    spawncore(L, 0, 1, lua_gettop(L), 0);  /* the controller */
+    lua_rawseti(L, setidx, 2);
+    if (isaborted(L)) return lua_yieldk(L, 0, 0, neverresumed);
+  }
+  return parany_k(L, LUA_OK, setidx);
+}
+
+/* }------------------------------------------------------------------ */
+
+
+/*
 ** '__pinchk' metamethod of tasks and pools, called by OP_PINCHK on the
 ** value of a declaration or assignment (the reference's
 ** 'atm_pin_chk_set'): mode 1 ('pin x = v') marks a fresh task/pool as
@@ -1715,7 +2024,7 @@ static const luaL_Reg task_funcs[] = {
   {"await.spawn", atm_await_spawn}, {"await.or", atm_await_or},
   {"await.and", atm_await_and}, {"await.not", atm_await_not},
   {"par", atm_par}, {"par_any", atm_par_any}, {"par_all", atm_par_all},
-  {"watching", atm_watching},
+  {"watching", atm_watching}, {"toggle", atm_toggle},
   {NULL, NULL}
 };
 
@@ -1742,6 +2051,7 @@ static void opentasks (lua_State *L) {  /* 'atmos' table on top */
   lua_setfield(L, LUA_REGISTRYINDEX, ATM_GC);
   root = (Pool *)newnamed(L, POOL, sizeof(Pool));
   root->max = -1; root->pin = 1; root->isroot = 1;
+  root->status = ST_OK; root->pass = 0;
   lua_setfield(L, LUA_REGISTRYINDEX, ATM_ROOT);
   lua_newuserdatauv(L, 0, 0);  /* exit sentinel: finalized at 'lua_close' */
   lua_createtable(L, 0, 1);
@@ -1759,6 +2069,10 @@ static void opentasks (lua_State *L) {  /* 'atmos' table on top */
   lua_setfield(L, -2, "status");
   lua_pushcfunction(L, atm_gc);
   lua_setfield(L, -2, "gc");
+  lua_pushcfunction(L, atm_next);
+  lua_setfield(L, -2, "next");
+  lua_pushcfunction(L, atm_stop);
+  lua_setfield(L, -2, "stop");
 }
 
 /* }====================================================================== */

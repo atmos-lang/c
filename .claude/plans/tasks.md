@@ -380,3 +380,28 @@ formats); tasks `every-clock`; await `op_clock_or`; x `is 3`;
 timers.lua all 9; toggle.lua EXEC (`toggle filter combinator`, `toggle
 pool target`; the PARSE section checks the reference's AST and is not
 convertible).
+
+### Status: implemented
+
+- Lexer: a clock duration is a numeral (`TK_INT`/`TK_FLT` in
+  microseconds; `TK_CLK` is no longer produced). Parser: `toggleexp`
+  (both forms; the block is a closure of kind `CB_TOGGLE`).
+- Runtime: `CLKMIN`/`CLKLATE` statics; `awaitmatch` handles a numeric
+  pattern as a countdown kept in the pattern slot and the tag `clock`;
+  `emitaux` splits numeric emits to the root in pieces; `atmos.next()`;
+  `atmos.stop()` aborts the body of the innermost `atmos.loop` (the
+  ancestor directly under the root) rather than the whole root pool, so
+  that nested loops, as the test harness, survive. Toggle: `status` and
+  `pass` in `XTask` and `Pool`; `toggleoff` builds the gate as a C
+  closure task (`gateloop`/`gate_k`) off the tree; `emittree` drives the
+  gate of a toggled node and lets the emit through when the gate
+  stamped `pass` during that drive (`pass` is cleared before driving
+  and tested for non-zero afterwards, not compared with the emit time:
+  here a branch termination inside the gate's `or` filter broadcasts a
+  new time stamp, while the reference's `par_any` ends by a throw);
+  `toggle on` is `atm_toggle_on`: body and controller tasks in a
+  to-be-closed set, waited with `parany_k`.
+- Several `with` filters are awaited as an `or` (the reference awaits
+  the first only).
+- Results: exec 189, tasks 210, await 17, x 22, timers 9, toggle 2, all
+  passing.
