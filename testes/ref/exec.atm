@@ -1653,373 +1653,373 @@ R.T("exec.lua:1744 coro 5", """
 
 ;; ---- TASKS
 
-;; R.T("exec.lua:1988 tasks 1", """
-;;         pin ts = tasks()
-;;         print(ts)
-;;     """,
-;;   R.P("tasks: 0x"))
-;; R.T("exec.lua:1996 tasks 2", """
-;;         pin ts = tasks()
-;;         print(type(ts))
-;;     """,
-;;   """
-;; table
-;; """)
-;; R.T("exec.lua:2004 tasks 3", """
-;;         val T = task () {
-;;             print(:in)
-;;         }
-;;         pin ts = tasks()
-;;         spawn @ts T()
-;;         print(:out)
-;;     """,
-;;   """
-;; in
-;; out
-;; """)
-;; R.T("exec.lua:2016 tasks 4", """
-;;         val T = task () {
-;;             print(:ok)
-;;         }
-;;         pin ts = tasks(2)
-;;         spawn @ts T()
-;;         spawn @ts T()
-;;     """,
-;;   """
-;; ok
-;; ok
-;; """)
-;; R.T("exec.lua:2028 tasks 5", """
-;;         var T
-;;         set T = task () {
-;;             await(true)
-;;         }
-;;         pin ts = tasks()
-;;         spawn @ts T(1)
-;;         spawn @ts T(2)
-;;         print(1)
-;;     """,
-;;   """
-;; 1
-;; """)
-;; R.T("exec.lua:2042 tasks 6", """
-;;         var T
-;;         set T = task (v) {
-;;             defer {
-;;                 print(v)
-;;             }
-;;             await(true)
-;;         }
-;;         pin ts = tasks()
-;;         spawn @ts T(1)
-;;         spawn @ts T(2)
-;;         print(0)
-;;     """,
-;;   """
-;; 0
-;; 1
-;; 2
-;; """)
-;; R.T("exec.lua:2059 tasks 7", """
-;;         do {
-;;             pin ts = tasks()
-;;             var T
-;;             set T = task (v) {
-;;                 print(v)
-;;                 val vx = await(true)
-;;                 print(vx)
-;;             }
-;;             spawn @ts T(1)
-;;         }
-;;         emit(:2)
-;;     """,
-;;   """
-;; 1
-;; """)
-;; R.T("exec.lua:2076 tasks 8: ts not pinned, no awake", """
-;;         do {
-;;             pin ts = tasks()
-;;             var T
-;;             set T = task (v) {
-;;                 print(v)
-;;                 val vx = await(true)
-;;                 print(vx)
-;;             }
-;;             spawn @ts T(1)
-;;         }
-;;         emit(:2)
-;;     """,
-;;   """
-;; 1
-;; """)
-;; R.T("exec.lua:2093 tasks 9: max", """
-;;         val T = task () {
-;;         }
-;;         pin ts = tasks(1)
-;;         val ok1 = spawn @ts T()
-;;         val ok2 = spawn @ts T()
-;;         print(type(ok1)=='table', type(ok2)=='table')
-;;     """,
-;;   """
-;; true	true
-;; """)
-;; R.T("exec.lua:2105 tasks 10: max", """
-;;         val T = task () {
-;;             await(true)
-;;         }
-;;         pin ts = tasks(1)
-;;         val ok1 = spawn @ts T()
-;;         val ok2 = spawn @ts T()
-;;         print(type(ok1)=='table', ok2)
-;;     """,
-;;   """
-;; true	nil
-;; """)
-;; R.T("exec.lua:2118 tasks 11: iter", """
-;;         val T = task () {
-;;             await(true)
-;;         }
-;;         pin ts = tasks()
-;;         spawn @ts T()
-;;         spawn @ts T()
-;;         loop _,t in ts {
-;;             print(t ?? :xtask)
-;;         }
-;;     """,
-;;   """
-;; true
-;; true
-;; """)
-;; R.T("exec.lua:2133 tasks 12: fake", """
-;;         val T = task () {
-;;             set pub = 10
-;;             print(pub)
-;;             spawn {
-;;                 set pub = 20
-;;                 print(pub)
-;;             }
-;;             print(pub)
-;;         }
-;;         spawn T()
-;;     """,
-;;   """
-;; 10
-;; 20
-;; 20
-;; """)
-;; R.T("exec.lua:2149 tasks 13: abort", """
-;;         spawn {
-;;             watching :X {
-;;                 defer {
-;;                     print:defer
-;;                 }
-;;                 await(false)
-;;             }
-;;             print:abort
-;;         }
-;;         print:antes
-;;         emit :X
-;;         print:depois
-;;     """,
-;;   """
-;; antes
-;; defer
-;; abort
-;; depois
-;; """)
-;; R.T("exec.lua:2167 tasks 13: abort", """
-;;         val T = task (i) {
-;;             loop on :X {
-;;                 print(:X, i)
-;;             }
-;;         }
-;;         spawn {
-;;             var i = 1
-;;             loop {
-;;                 watching :Y {
-;;                     pin ts = tasks()
-;;                     do {
-;;                         spawn @ts T(i)
-;;                         spawn @ts T(i+1)
-;;                     }
-;;                     emit(:X)
-;;                     await(false)
-;;                 }
-;;                 set i = i + 8
-;;             }
-;;         }
-;;         print '==='
-;;         emit :Y
-;;         print '---'
-;;         emit :X
-;;         print :ok
-;;     """,
-;;   """
-;; X	1
-;; X	2
-;; ===
-;; X	9
-;; X	10
-;; ---
-;; X	9
-;; X	10
-;; ok
-;; """)
-;; R.T("exec.lua:2198 tasks 14: loop", """
-;;         spawn {
-;;             loop {
-;;                 await(:X)
-;;                 print :1
-;;                 watching(:X) {
-;;                     await(:Y)
-;;                 }
-;;                 print :2
-;;             }
-;;         }
-;;         emit(:X)
-;;         emit(:X)
-;;     """,
-;;   """
-;; 1
-;; 2
-;; """)
+R.T("exec.lua:1988 tasks 1", """
+        pin ts = tasks()
+        print(ts)
+    """,
+  R.P("tasks: 0x"))
+R.T("exec.lua:1996 tasks 2", """
+        pin ts = tasks()
+        print(type(ts))
+    """,
+  """
+table
+""")
+R.T("exec.lua:2004 tasks 3", """
+        val T = task () {
+            print(:in)
+        }
+        pin ts = tasks()
+        spawn @ts T()
+        print(:out)
+    """,
+  """
+in
+out
+""")
+R.T("exec.lua:2016 tasks 4", """
+        val T = task () {
+            print(:ok)
+        }
+        pin ts = tasks(2)
+        spawn @ts T()
+        spawn @ts T()
+    """,
+  """
+ok
+ok
+""")
+R.T("exec.lua:2028 tasks 5", """
+        var T
+        set T = task () {
+            await(true)
+        }
+        pin ts = tasks()
+        spawn @ts T(1)
+        spawn @ts T(2)
+        print(1)
+    """,
+  """
+1
+""")
+R.T("exec.lua:2042 tasks 6", """
+        var T
+        set T = task (v) {
+            defer {
+                print(v)
+            }
+            await(true)
+        }
+        pin ts = tasks()
+        spawn @ts T(1)
+        spawn @ts T(2)
+        print(0)
+    """,
+  """
+0
+1
+2
+""")
+R.T("exec.lua:2059 tasks 7", """
+        do {
+            pin ts = tasks()
+            var T
+            set T = task (v) {
+                print(v)
+                val vx = await(true)
+                print(vx)
+            }
+            spawn @ts T(1)
+        }
+        emit(:2)
+    """,
+  """
+1
+""")
+R.T("exec.lua:2076 tasks 8: ts not pinned, no awake", """
+        do {
+            pin ts = tasks()
+            var T
+            set T = task (v) {
+                print(v)
+                val vx = await(true)
+                print(vx)
+            }
+            spawn @ts T(1)
+        }
+        emit(:2)
+    """,
+  """
+1
+""")
+R.T("exec.lua:2093 tasks 9: max", """
+        val T = task () {
+        }
+        pin ts = tasks(1)
+        val ok1 = spawn @ts T()
+        val ok2 = spawn @ts T()
+        print(type(ok1)=='table', type(ok2)=='table')
+    """,
+  """
+true	true
+""")
+R.T("exec.lua:2105 tasks 10: max", """
+        val T = task () {
+            await(true)
+        }
+        pin ts = tasks(1)
+        val ok1 = spawn @ts T()
+        val ok2 = spawn @ts T()
+        print(type(ok1)=='table', ok2)
+    """,
+  """
+true	nil
+""")
+R.T("exec.lua:2118 tasks 11: iter", """
+        val T = task () {
+            await(true)
+        }
+        pin ts = tasks()
+        spawn @ts T()
+        spawn @ts T()
+        loop _,t in ts {
+            print(t ?? :xtask)
+        }
+    """,
+  """
+true
+true
+""")
+R.T("exec.lua:2133 tasks 12: fake", """
+        val T = task () {
+            set pub = 10
+            print(pub)
+            spawn {
+                set pub = 20
+                print(pub)
+            }
+            print(pub)
+        }
+        spawn T()
+    """,
+  """
+10
+20
+20
+""")
+R.T("exec.lua:2149 tasks 13: abort", """
+        spawn {
+            watching :X {
+                defer {
+                    print:defer
+                }
+                await(false)
+            }
+            print:abort
+        }
+        print:antes
+        emit :X
+        print:depois
+    """,
+  """
+antes
+defer
+abort
+depois
+""")
+R.T("exec.lua:2167 tasks 13: abort", """
+        val T = task (i) {
+            loop on :X {
+                print(:X, i)
+            }
+        }
+        spawn {
+            var i = 1
+            loop {
+                watching :Y {
+                    pin ts = tasks()
+                    do {
+                        spawn @ts T(i)
+                        spawn @ts T(i+1)
+                    }
+                    emit(:X)
+                    await(false)
+                }
+                set i = i + 8
+            }
+        }
+        print '==='
+        emit :Y
+        print '---'
+        emit :X
+        print :ok
+    """,
+  """
+X	1
+X	2
+===
+X	9
+X	10
+---
+X	9
+X	10
+ok
+""")
+R.T("exec.lua:2198 tasks 14: loop", """
+        spawn {
+            loop {
+                await(:X)
+                print :1
+                watching(:X) {
+                    await(:Y)
+                }
+                print :2
+            }
+        }
+        emit(:X)
+        emit(:X)
+    """,
+  """
+1
+2
+""")
 
 ;; ---- AWAIT / TASK
 
-;; R.T("exec.lua:2220 await task 1", """
-;;         spawn {
-;;             pin t = spawn (task () { return(10) }) ()
-;;             val x = await(t)
-;;             print(:ok, x)
-;;         }
-;;     """,
-;;   """
-;; ok	10
-;; """)
-;; R.T("exec.lua:2231 await task 2", """
-;;         spawn {
-;;             pin t = spawn (task () {
-;;                 await(:X)
-;;                 return(10)
-;;             }) ()
-;;             val x = await(t)
-;;             print(:ok, x)
-;;         }
-;;         emit(:X)
-;;     """,
-;;   """
-;; ok	10
-;; """)
-;; R.T("exec.lua:2246 await task 3", """
-;;         task T (v) {
-;;             v * 2
-;;         }
-;;         spawn {
-;;             val x = await T(10)
-;;             print(x)
-;;         }
-;;     """,
-;;   """
-;; 20
-;; """)
-;; R.T("exec.lua:2261 await task 4 : throw : dbg loc", """
-;;         task T () {
-;;             throw(:x)
-;;         }
-;;         await T()
-;;     """,
-;;   R.E("", "x"))
-;; R.T("exec.lua:2279 await :any ts", """
-;;         spawn {
-;;             pin ts = tasks()
-;;             task T (v) {
-;;                 await(v)
-;;                 print(v)
-;;                 return(v)
-;;             }
-;;             spawn @ts T(:a)
-;;             spawn @ts T(:b)
-;;             val v = await :any ts
-;;             print(:any, v)
-;;         }
-;;         emit(:b)
-;;     """,
-;;   """
-;; b
-;; any	b
-;; """)
-;; R.T("exec.lua:2298 await :all ts", """
-;;         spawn {
-;;             pin ts = tasks()
-;;             task T (v) {
-;;                 await(true)
-;;                 print(v)
-;;                 return(v)
-;;             }
-;;             spawn @ts T(:a)
-;;             val b = spawn @ts T(:b)
-;;             val v,t,ts_ = await :all ts
-;;             print(:all, (v==:b) && (t==b) && (ts==ts_))
-;;         }
-;;         emit(true)
-;;     """,
-;;   """
-;; a
-;; b
-;; all	true
-;; """)
-;; R.T("exec.lua:2320 await :any ts consume", """
-;;         val task T () {
-;;             await :X
-;;         }
-;;         pin ts = tasks()
-;;         spawn @ts T()
-;;         spawn {
-;;             loop i in 3 {
-;;                 await :any ts
-;;                 print :ts
-;;             }
-;;         }
-;;         emit :X
-;;     """,
-;;   """
-;; ts
-;; """)
-;; R.T("exec.lua:2340 await :any ts broadcast", """
-;;         val task T () {
-;;             await :X
-;;             1
-;;         }
-;;         pin ts = tasks()
-;;         spawn @ts T()
-;;         spawn {
-;;             val v = await :any ts
-;;             print("A" ++ v)
-;;         }
-;;         spawn {
-;;             val v = await :any ts
-;;             print("B" ++ v)
-;;         }
-;;         emit :X
-;;     """,
-;;   """
-;; A1
-;; B1
-;; """)
-;; R.T("exec.lua:2363 await :any ts late", """
-;;         val task T () {
-;;             await :X
-;;         }
-;;         pin ts = tasks()
-;;         spawn @ts T()
-;;         emit :X
-;;         spawn {
-;;             await :any ts
-;;             print :late
-;;         }
-;;         emit :Y
-;;     """,
-;;   "")
+R.T("exec.lua:2220 await task 1", """
+        spawn {
+            pin t = spawn (task () { return(10) }) ()
+            val x = await(t)
+            print(:ok, x)
+        }
+    """,
+  """
+ok	10
+""")
+R.T("exec.lua:2231 await task 2", """
+        spawn {
+            pin t = spawn (task () {
+                await(:X)
+                return(10)
+            }) ()
+            val x = await(t)
+            print(:ok, x)
+        }
+        emit(:X)
+    """,
+  """
+ok	10
+""")
+R.T("exec.lua:2246 await task 3", """
+        task T (v) {
+            v * 2
+        }
+        spawn {
+            val x = await T(10)
+            print(x)
+        }
+    """,
+  """
+20
+""")
+R.T("exec.lua:2261 await task 4 : throw : dbg loc", """
+        task T () {
+            throw(:x)
+        }
+        await T()
+    """,
+  R.E("", "x"))
+R.T("exec.lua:2279 await :any ts", """
+        spawn {
+            pin ts = tasks()
+            task T (v) {
+                await(v)
+                print(v)
+                return(v)
+            }
+            spawn @ts T(:a)
+            spawn @ts T(:b)
+            val v = await :any ts
+            print(:any, v)
+        }
+        emit(:b)
+    """,
+  """
+b
+any	b
+""")
+R.T("exec.lua:2298 await :all ts", """
+        spawn {
+            pin ts = tasks()
+            task T (v) {
+                await(true)
+                print(v)
+                return(v)
+            }
+            spawn @ts T(:a)
+            val b = spawn @ts T(:b)
+            val v,t,ts_ = await :all ts
+            print(:all, (v==:b) && (t==b) && (ts==ts_))
+        }
+        emit(true)
+    """,
+  """
+a
+b
+all	true
+""")
+R.T("exec.lua:2320 await :any ts consume", """
+        val task T () {
+            await :X
+        }
+        pin ts = tasks()
+        spawn @ts T()
+        spawn {
+            loop i in 3 {
+                await :any ts
+                print :ts
+            }
+        }
+        emit :X
+    """,
+  """
+ts
+""")
+R.T("exec.lua:2340 await :any ts broadcast", """
+        val task T () {
+            await :X
+            1
+        }
+        pin ts = tasks()
+        spawn @ts T()
+        spawn {
+            val v = await :any ts
+            print("A" ++ v)
+        }
+        spawn {
+            val v = await :any ts
+            print("B" ++ v)
+        }
+        emit :X
+    """,
+  """
+A1
+B1
+""")
+R.T("exec.lua:2363 await :any ts late", """
+        val task T () {
+            await :X
+        }
+        pin ts = tasks()
+        spawn @ts T()
+        emit :X
+        spawn {
+            await :any ts
+            print :late
+        }
+        emit :Y
+    """,
+  "")
 
 ;; ---- AWAIT / CLOCK
 
