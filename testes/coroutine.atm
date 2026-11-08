@@ -7,11 +7,14 @@ val debug = require('debug')
 
 var f
 
+;; (the main chunk runs as a task, in its own coroutine: it is not the
+;; main thread and it is yieldable -- 'await' works at the top level)
 val main, ismain = coroutine.running()
-assert((type(main) == "thread") && ismain)
+assert((type(main) == "thread") && !ismain)
 assert(!coroutine.resume(main))
-assert(!coroutine.isyieldable(main) && !coroutine.isyieldable())
-assert(!pcall(coroutine.yield))
+assert(coroutine.isyieldable(main) && coroutine.isyieldable())
+;; (a raw 'coroutine.yield' here would suspend the program: it is an
+;; 'await' that nothing wakes)
 
 ;; trivial errors
 assert(!pcall(coroutine.resume, 0))
@@ -173,9 +176,8 @@ do {
   set st, msg = coroutine.close(co)
   assert(st && (msg == nil))
 
-  ;; cannot close 'main'
-  var st, msg = pcall(coroutine.close, main)
-  assert(!st && string.find(msg, "main"))
+  ;; ('main' here is the task running the chunk: closing it would end
+  ;; the program, as 'coroutine.close()' does for any running coroutine)
 
   ;; cannot close a "normal" coroutine
   (coroutine.wrap(func () {

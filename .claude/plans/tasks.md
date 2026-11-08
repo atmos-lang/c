@@ -176,3 +176,67 @@ expected "==> ERROR:" block compares only the message line. Stage 1
 takes the TASKS, AWAIT / TASK sections of `exec.lua` and the EMIT /
 SCOPE, PIN, TERMINATION, PUB, NESTED, ABORTION, THROW / CATCH, RETURN,
 TASKS sections of `tasks.lua`; stage 2 the rest.
+
+## Status: stage 1 implemented
+
+Runtime `latmlib.c`, parser desugaring in `lparser.c` ("Tasks" section),
+driver `lua.c`. Deviations from the design above, and decisions taken
+while implementing:
+
+- Tasks, xtasks and pools are tables, not userdata (`type(t)` is
+  `"table"`, as in the reference): the struct lives in field `_` (a
+  userdata), the links (`th`, `up`, `dns`, `gate`) in a user value
+  table, `pub`/`ret` are plain fields. The metatables are named
+  `"task"`/`"xtask"`/`"tasks"` so `??` matches them through `__name`.
+- Pin checks are an opcode, not calls. The reference wraps every
+  declaration and assignment in `atm_pin_chk_set(...)`; the first
+  version here called global functions `pin.chk`/`pin.set`/`pin.own`,
+  which added an `_ENV` upvalue and a C call to every assignment
+  (`debug.getupvalue`, hook traces and `db.atm` saw it). Now `OP_PINCHK
+  A B` runs the `__pinchk` metamethod of the value in `R[A]` when it has
+  one (only tasks and pools do; B is 0 check, 1 set, 2 own); other
+  values cost a type test. The parser skips it for constants,
+  closures, constructors and arithmetic. Only single-value
+  declarations/assignments are checked (`val a, b = f()` is not; the
+  reference checks the first value).
+- A statement `spawn` that is the last statement of its block is the
+  block's value (not pinned: `spawn T()` as the last statement of a
+  `do` block or a function flows out); otherwise the block owns it
+  through a hidden to-be-closed local `(spawn)`. `spawn @pool` is never
+  pinned (the pool owns it).
+- Dead tasks are swept only by `atmos.gc()` and by `atmos.loop` when the
+  body ends (the reference sweeps between reactions); a dead task stays
+  in its pool until then, but does not count for the pool limit.
+  `tasks(0)` is a full pool, `tasks()` is unbounded.
+- `atmos.loop(body, ...)` returns when the body dies or when it is
+  suspended with nothing to drive it (no environments yet, stage 3): a
+  raw `coroutine.yield()` or `await(false)` at the top level ends the
+  program silently. `lua.c` runs scripts and `-e` strings through
+  `atmos.loop`; REPL lines run in the main thread. Consequences in the
+  Lua suite: `coroutine.running()` at the top level is the task's
+  coroutine (not the main thread, yieldable), `coroutine.close(main)`
+  would end the program, `debug.getinfo` from an error handler does not
+  see the chunk's frames (another thread); `coroutine.atm`, `errors.atm`
+  and `main.atm` were adapted (TODO.md item 2).
+- SIGINT: the interpreter hooks the thread of the running task
+  (`atmos_running()` in `lualib.h`, tracked around each resume), not the
+  main thread.
+- `os.exit(code, true)` closes the whole task tree: a sentinel in the
+  registry with a `__gc` finalizer (run by `lua_close`) closes every
+  task, the running ones included, so pending `defer`s and pins run as
+  the to-be-closed variables of a Lua main chunk would.
+- Errors raised by a task propagate to the resumer with all their values
+  (`taskresult`); an error in a `defer` while closing is raised with its
+  values; `__pinchk` errors carry the position of the assignment.
+- Test harness `testes/ref/harness.atm` runs each case through
+  `pcall(atmos.loop, f)`, as the reference's `atm_test`; the enabled sets
+  are regenerated from a run of all cases (scratch `refgen.sh`:
+  `tst2atm.py --list`, run, `--enabled` with the passing keys).
+
+Reference cases passing (enabled): exec 173/217, tasks 187/217, x 21/23,
+await 3/18, throw 2/8; toggle, timers, streams, thread 0 (stage 2/3).
+The disabled ones need: `par`/`watching`/`loop on`/`every`, `toggle`,
+clock patterns (`1s`), `await` combinators `&&`/`||`/`!`, `where`,
+backtick natives, the reference's error-trace format and compile-error
+format, `return` inside `catch` (catch.md option B), `++` on pools
+(needs `__pairs` in table concatenation), `xtask(f)` message text.

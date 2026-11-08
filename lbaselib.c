@@ -140,7 +140,7 @@ static int luaB_throw (lua_State *L) {
 ** '.' boundary ('X' matches 'X.Y'), or 'e' is a table whose 'tag'
 ** field matches that way.
 */
-static int tagmatch (lua_State *L, int e, int x) {
+LUALIB_API int luaB_tagmatch (lua_State *L, int e, int x) {
   if (lua_compare(L, e, x, LUA_OPEQ))
     return 1;
   if (lua_type(L, x) != LUA_TSTRING)
@@ -152,6 +152,11 @@ static int tagmatch (lua_State *L, int e, int x) {
     int res;
     if (strcmp(sx, luaL_typename(L, e)) == 0)
       return 1;
+    if (luaL_getmetafield(L, e, "__name") != LUA_TNIL) {  /* named type? */
+      int eq = lua_isstring(L, -1) && strcmp(lua_tostring(L, -1), sx) == 0;
+      lua_pop(L, 1);
+      if (eq) return 1;
+    }
     if (lua_type(L, e) == LUA_TTABLE) {  /* tagged table? */
       lua_pushliteral(L, "tag");
       if (lua_rawget(L, e) != LUA_TSTRING) {
@@ -178,7 +183,7 @@ static int tagmatch (lua_State *L, int e, int x) {
 
 static int luaB_is (lua_State *L) {  /* a ?? b */
   lua_settop(L, 2);
-  lua_pushboolean(L, tagmatch(L, 1, 2));
+  lua_pushboolean(L, luaB_tagmatch(L, 1, 2));
   return 1;
 }
 
@@ -188,7 +193,7 @@ static int luaB_is (lua_State *L) {  /* a ?? b */
 ** dot-prefix of the string 'b', or every field of the table 'a' is
 ** '=>=' the corresponding field of 'b'. Indices must be absolute.
 */
-static int gte (lua_State *L, int a, int b, int depth) {
+LUALIB_API int luaB_gte (lua_State *L, int a, int b, int depth) {
   int ta = lua_type(L, a);
   if (ta != lua_type(L, b))
     return 0;
@@ -217,7 +222,7 @@ static int gte (lua_State *L, int a, int b, int depth) {
       int ok;
       lua_pushvalue(L, top + 1);
       lua_gettable(L, b);  /* b[k] at top+3 */
-      ok = gte(L, top + 2, top + 3, depth + 1);
+      ok = luaB_gte(L, top + 2, top + 3, depth + 1);
       lua_pop(L, 2);
       if (!ok) {
         lua_pop(L, 1);
@@ -233,14 +238,14 @@ static int gte (lua_State *L, int a, int b, int depth) {
 
 static int luaB_sup (lua_State *L) {  /* a =>= b */
   lua_settop(L, 2);
-  lua_pushboolean(L, gte(L, 1, 2, 0));
+  lua_pushboolean(L, luaB_gte(L, 1, 2, 0));
   return 1;
 }
 
 
 static int luaB_deq (lua_State *L) {  /* a === b */
   lua_settop(L, 2);
-  lua_pushboolean(L, gte(L, 1, 2, 0) && gte(L, 2, 1, 0));
+  lua_pushboolean(L, luaB_gte(L, 1, 2, 0) && luaB_gte(L, 2, 1, 0));
   return 1;
 }
 
@@ -252,9 +257,9 @@ static int luaB_deq (lua_State *L) {  /* a === b */
 */
 static int xinpair (lua_State *L, int k, int val) {
   if (lua_type(L, k) == LUA_TNUMBER)
-    return gte(L, 1, val, 0);
+    return luaB_gte(L, 1, val, 0);
   else
-    return gte(L, 1, k, 0) || gte(L, 1, val, 0);
+    return luaB_gte(L, 1, k, 0) || luaB_gte(L, 1, val, 0);
 }
 
 
@@ -270,7 +275,7 @@ static int luaB_xin (lua_State *L) {  /* v ?> t */
       lua_pushvalue(L, 5);
       lua_call(L, 2, 2);  /* 6: key, 7: value */
       if (lua_isnil(L, 6)) break;
-      if (lua_isnil(L, 7) ? gte(L, 1, 6, 0) : xinpair(L, 6, 7)) {
+      if (lua_isnil(L, 7) ? luaB_gte(L, 1, 6, 0) : xinpair(L, 6, 7)) {
         res = 1;
         break;
       }
@@ -285,7 +290,7 @@ static int luaB_xin (lua_State *L) {  /* v ?> t */
       lua_pushvalue(L, 2);
       lua_call(L, 0, 1);  /* 3: value */
       if (lua_isnil(L, 3)) break;
-      if (gte(L, 1, 3, 0)) {
+      if (luaB_gte(L, 1, 3, 0)) {
         res = 1;
         break;
       }
@@ -297,7 +302,7 @@ static int luaB_xin (lua_State *L) {  /* v ?> t */
     lua_Integer i;
     for (i = 1; i <= n && !res; i++) {  /* array part */
       lua_geti(L, 2, i);
-      res = gte(L, 1, 3, 0);
+      res = luaB_gte(L, 1, 3, 0);
       lua_settop(L, 2);
     }
     lua_pushnil(L);
@@ -357,7 +362,7 @@ static int catchcont (lua_State *L, int status, lua_KContext extra) {
       break;
     }
     default: {
-      if (!tagmatch(L, 3, 1))
+      if (!luaB_tagmatch(L, 3, 1))
         return lua_errorn(L, n);  /* re-raise */
       break;
     }

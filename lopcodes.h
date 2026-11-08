@@ -344,6 +344,8 @@ OP_ERRNNIL,/*	A Bx	raise error if R[A] ~= nil (K[Bx - 1] is global name)*/
 
 OP_VARARGPREP,/* 	(adjust varargs)				*/
 
+OP_PINCHK,/*	A B	__pinchk(R[A], B) if R[A] has it (0 chk, 1 set, 2 own) */
+
 OP_EXTRAARG/*	Ax	extra (larger) argument for previous opcode	*/
 } OpCode;
 

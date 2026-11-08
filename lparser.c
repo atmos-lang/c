@@ -77,6 +77,17 @@ static void singlepipes (LexState *ls, expdesc *v);
 static void lambda (LexState *ls, expdesc *e, int line);
 static UnOpr getunopr (int op);
 static BinOpr getbinopr (int op);
+static int parenlist (LexState *ls, expdesc *v);
+static void tuple2value (LexState *ls, expdesc *v, int n);
+static void spawnexp (LexState *ls, expdesc *v, int promote);
+static void ownspawn (LexState *ls, expdesc *v);
+static int explist (LexState *ls, expdesc *v);
+static void checktoclose (FuncState *fs, int level);
+static void suffixedexp (LexState *ls, expdesc *v);
+static void rotatecall (FuncState *fs, int r, int n, int k);
+static int funcname (LexState *ls, expdesc *v);
+static void discard (LexState *ls, expdesc *v);
+static void check_readonly (LexState *ls, expdesc *e);
 
 
 static l_noret error_expected (LexState *ls, int token) {
@@ -955,6 +966,7 @@ static void open_func (LexState *ls, FuncState *fs, BlockCnt *bl) {
   fs->nactvar = 0;
   fs->needclose = 0;
   fs->iscatch = 0;
+  fs->spawnval = 0;
   fs->firstlocal = ls->dyd->actvar.n;
   fs->firstlabel = ls->dyd->label.n;
   fs->bl = NULL;
@@ -1042,6 +1054,15 @@ static void statlist (LexState *ls, expdesc *v, int *n) {
       luaX_syntaxerror(ls, "';' or new line expected");
     *n = statement(ls, v);
     nstats++;
+    if (fs->spawnval) {  /* a 'spawn' statement? */
+      int own = (fs->spawnval == 1);
+      fs->spawnval = 0;
+      if (own && !block_follow(ls)) {  /* not the block value: own it */
+        ownspawn(ls, v);
+        init_exp(v, VVOID, 0);
+        *n = 0;
+      }
+    }
     if (!block_follow(ls)) {  /* not the last statement? */
       discard(ls, v);
       init_exp(v, VVOID, 0);
@@ -1509,6 +1530,378 @@ static void catchexp (LexState *ls, expdesc *v, int line) {
 }
 
 
+/*
+** {======================================================================
+** Tasks: 'task', 'tasks', 'spawn', 'emit', 'await' and 'pub' compile to
+** calls of the runtime functions of latmlib.c (see
+** .claude/plans/tasks.md), as the reference implementation does.
+** =======================================================================
+*/
+
+/* start a call to the global 'name': loads the function; its register */
+static int callbegin (LexState *ls, const char *name) {
+  FuncState *fs = ls->fs;
+  expdesc f;
+  buildvar(ls, luaX_newstring(ls, name, strlen(name)), &f);
+  luaK_exp2nextreg(fs, &f);
+  return f.u.info;
+}
+
+
+/* push the argument 'e' (all its values if open); returns 'open' */
+static int callarg (LexState *ls, expdesc *e) {
+  if (hasmultret(e->k)) {
+    luaK_setmultret(ls->fs, e);
+    return 1;
+  }
+  luaK_exp2nextreg(ls->fs, e);
+  return 0;
+}
+
+
+/* finish the call at 'base' with the arguments above it */
+static void callend (LexState *ls, expdesc *v, int base, int open, int line) {
+  FuncState *fs = ls->fs;
+  int nparams = open ? LUA_MULTRET : fs->freereg - (base + 1);
+  init_exp(v, VCALL, luaK_codeABC(fs, OP_CALL, base, nparams + 1, 2));
+  luaK_fixline(fs, line);
+  fs->freereg = cast_byte(base + 1);
+}
+
+
+/*
+** '(' expr ')' as a predicate function: a function expression as is,
+** otherwise '\it{ expr }'.
+*/
+static void predlambda (LexState *ls, expdesc *e) {
+  int line = ls->linenumber;
+  checknext(ls, '(');
+  if (ls->t.token == TK_FUNC || ls->t.token == '\\')
+    expr(ls, e);
+  else {
+    FuncState new_fs;
+    BlockCnt bl;
+    expdesc a;
+    enterlevel(ls);
+    new_fs.f = addprototype(ls);
+    new_fs.f->linedefined = line;
+    open_func(ls, &new_fs, &bl);
+    new_localvarliteral(ls, "it");
+    adjustlocalvars(ls, 1);
+    new_fs.f->numparams = 1;
+    luaK_reserveregs(ls->fs, 1);
+    expr(ls, &a);
+    tailreturn(ls, &a, 1);
+    new_fs.f->lastlinedefined = ls->linenumber;
+    codeclosure(ls, e);
+    close_func(ls);
+    leavelevel(ls);
+  }
+  checknext(ls, ')');
+}
+
+
+/* '@' target of spawn/emit: '(' expr ')' or a primary expression */
+static void attarget (LexState *ls, expdesc *tg) {
+  luaX_next(ls);  /* skip '@' */
+  if (ls->t.token == '(') {
+    int n = parenlist(ls, tg);
+    if (n > 1) tuple2value(ls, tg, n);
+  }
+  else
+    primaryexp(ls, tg);
+  luaK_exp2nextreg(ls->fs, tg);
+}
+
+
+/*
+** spawn -> SPAWN '{' block '}'                      (transparent task)
+**        | SPAWN ['@' target] prefixexp '(' [explist] ')'
+** 'promote': 'pin t = spawn { }' spawns the block as a prototype.
+*/
+static void spawnexp (LexState *ls, expdesc *v, int promote) {
+  FuncState *fs = ls->fs;
+  int line = ls->linenumber;
+  int base, open = 0;
+  luaX_next(ls);  /* skip 'spawn' */
+  if (ls->t.token == '{') {  /* spawn { ... } */
+    expdesc f;
+    if (promote) {
+      int base2;
+      base = callbegin(ls, "spawn");
+      base2 = callbegin(ls, "task");
+      closurebody(ls, &f, line, 0);
+      luaK_exp2nextreg(fs, &f);
+      callend(ls, &f, base2, 0, line);
+      luaK_exp2nextreg(fs, &f);
+    }
+    else {
+      base = callbegin(ls, "do_spawn");
+      closurebody(ls, &f, line, 0);
+      luaK_exp2nextreg(fs, &f);
+    }
+    callend(ls, v, base, 0, line);
+    return;
+  }
+  if (ls->t.token == '@') {  /* spawn @target T(...) */
+    expdesc tg;
+    base = callbegin(ls, "spawn_in");
+    attarget(ls, &tg);
+  }
+  else
+    base = callbegin(ls, "spawn");
+  {  /* the prototype and its arguments */
+    expdesc f;
+    primaryexp(ls, &f);
+    suffixloop(ls, &f, 1);
+    luaK_exp2nextreg(fs, &f);
+    if (ls->t.token != '(')
+      luaX_syntaxerror(ls, "expected call syntax");
+    luaX_next(ls);
+    if (ls->t.token != ')') {
+      expdesc args;
+      explist(ls, &args);
+      open = callarg(ls, &args);
+    }
+    check_match(ls, ')', '(', line);
+  }
+  callend(ls, v, base, open, line);
+}
+
+
+/*
+** Ownership check of the value of 'e' (already parsed), in place:
+** OP_PINCHK calls the '__pinchk' metamethod of tasks and pools with
+** 'mode' (PIN_CHK: must be owned or an ancestor; PIN_SET: 'pin'
+** declaration, becomes owned; PIN_OWN: hidden pin of a statement
+** 'spawn'). Other values are untouched.
+*/
+#define PIN_CHK		0
+#define PIN_SET		1
+#define PIN_OWN		2
+
+static void pinop (LexState *ls, expdesc *e, int mode) {
+  FuncState *fs = ls->fs;
+  int r = luaK_exp2anyreg(fs, e);
+  luaK_codeABC(fs, OP_PINCHK, r, mode, 0);
+}
+
+
+/*
+** Check of the value of a declaration or assignment (the reference's
+** 'atm_pin_chk_set'): a task or pool can only be assigned when it is
+** owned by a pin or is an ancestor of the running task. Skipped for
+** values that cannot be tasks (constants, closures, constructors,
+** arithmetic).
+*/
+static void chkassign (LexState *ls, expdesc *e) {
+  switch (e->k) {
+    case VNIL: case VTRUE: case VFALSE: case VK: case VKFLT: case VKINT:
+    case VKSTR: case VJMP: case VVOID:
+      return;
+    case VRELOC: {
+      OpCode op = GET_OPCODE(getinstruction(ls->fs, e));
+      if (op == OP_CLOSURE || op == OP_NEWTABLE || op == OP_CONCAT ||
+          op == OP_NOT || op == OP_LEN || op == OP_UNM || op == OP_BNOT ||
+          (op >= OP_ADDI && op <= OP_SHR))
+        return;
+      break;
+    }
+    default: break;
+  }
+  pinop(ls, e, PIN_CHK);
+}
+
+
+/*
+** Statement 'spawn ...': its value is the task. Unless it is the last
+** statement of its block (then the task flows out as the block value)
+** or it is spawned into a pool, the enclosing block owns the task: see
+** 'ownspawn', called by 'statlist'.
+*/
+static int spawnstat (LexState *ls, expdesc *v) {
+  int inpool = (luaX_lookahead(ls) == '@');
+  spawnexp(ls, v, 0);
+  ls->fs->spawnval = (lu_byte)(inpool ? 2 : 1);
+  return 1;
+}
+
+
+/* the block owns the task in 'v': a hidden to-be-closed local */
+static void ownspawn (LexState *ls, expdesc *v) {
+  FuncState *fs = ls->fs;
+  int toclose;
+  pinop(ls, v, PIN_OWN);
+  new_varkind(ls, luaX_newstring(ls, "(spawn)", 7), RDKTOCLOSE);
+  toclose = fs->nactvar;
+  adjust_assign(ls, 1, 1, v);
+  adjustlocalvars(ls, 1);
+  checktoclose(fs, toclose);
+}
+
+
+/* emit -> EMIT ['@' target] ('(' expr ')' | expr) */
+static void emitexp (LexState *ls, expdesc *v) {
+  FuncState *fs = ls->fs;
+  int line = ls->linenumber;
+  int base;
+  expdesc e;
+  luaX_next(ls);  /* skip 'emit' */
+  if (ls->t.token == '@') {
+    expdesc tg;
+    base = callbegin(ls, "emit_in");
+    attarget(ls, &tg);
+  }
+  else
+    base = callbegin(ls, "emit");
+  if (!testnext(ls, TK_LPIPE1)) testnext(ls, TK_LPIPE2);  /* emit <- e */
+  if (ls->t.token == '(') {
+    int n = parenlist(ls, &e);
+    if (n != 1)
+      luaX_syntaxerror(ls, "expected single argument");
+  }
+  else
+    expr(ls, &e);
+  luaK_exp2nextreg(fs, &e);
+  callend(ls, v, base, 0, line);
+}
+
+
+/*
+** await -> AWAIT '(' expr ')'                            (value)
+**        | AWAIT (':any' | ':all') suffixedexp           (pool)
+**        | AWAIT ('until' | 'while') '(' predicate ')'   (condition)
+**        | AWAIT prefixexp '(' [explist] ')'             (spawn and await)
+**        | AWAIT primary                                 (value)
+*/
+static void awaitexp (LexState *ls, expdesc *v) {
+  FuncState *fs = ls->fs;
+  int line = ls->linenumber;
+  int base;
+  expdesc e;
+  luaX_next(ls);  /* skip 'await' */
+  base = callbegin(ls, "await");
+  if (!testnext(ls, TK_LPIPE1)) testnext(ls, TK_LPIPE2);  /* await <- p */
+  if (ls->t.token == '<')
+    luaX_syntaxerror(ls, "await patterns not implemented");
+  if (ls->t.token == '(') {  /* value */
+    int n = parenlist(ls, &e);
+    if (n > 1) tuple2value(ls, &e, n);
+  }
+  else if (ls->t.token == TK_TAG &&
+           (strcmp(getstr(ls->t.seminfo.ts), "any") == 0 ||
+            strcmp(getstr(ls->t.seminfo.ts), "all") == 0)) {  /* pool */
+    const char *k = (getstr(ls->t.seminfo.ts)[1] == 'n') ? "await.any"
+                                                          : "await.all";
+    int base2;
+    luaX_next(ls);
+    base2 = callbegin(ls, k);
+    suffixedexp(ls, &e);
+    luaK_exp2nextreg(fs, &e);
+    callend(ls, &e, base2, 0, line);
+  }
+  else if (ls->t.token == TK_UNTIL || ls->t.token == TK_WHILE) {
+    const char *k = (ls->t.token == TK_UNTIL) ? "await.until" : "await.while";
+    int base2;
+    luaX_next(ls);
+    base2 = callbegin(ls, k);
+    predlambda(ls, &e);
+    luaK_exp2nextreg(fs, &e);
+    callend(ls, &e, base2, 0, line);
+  }
+  else {  /* primary; a call spawns the task and awaits it */
+    primaryexp(ls, &e);
+    if (suffixloop(ls, &e, 1) && ls->t.token == '(') {
+      int base2, open = 0;
+      luaK_exp2nextreg(fs, &e);  /* prototype */
+      base2 = callbegin(ls, "spawn");  /* above it */
+      rotatecall(fs, base2 - 1, 1, 1);  /* 'spawn' first */
+      base2--;
+      luaX_next(ls);  /* skip '(' */
+      if (ls->t.token != ')') {
+        expdesc args;
+        explist(ls, &args);
+        open = callarg(ls, &args);
+      }
+      check_match(ls, ')', '(', line);
+      callend(ls, &e, base2, open, line);
+    }
+  }
+  luaK_exp2nextreg(fs, &e);
+  callend(ls, v, base, 0, line);
+}
+
+
+/* pub -> xtask().pub */
+static void pubexp (LexState *ls, expdesc *v) {
+  FuncState *fs = ls->fs;
+  int line = ls->linenumber;
+  expdesc key;
+  int base;
+  luaX_next(ls);  /* skip 'pub' */
+  base = callbegin(ls, "xtask");
+  callend(ls, v, base, 0, line);
+  luaK_exp2anyreg(fs, v);
+  codestring(&key, luaX_newstring(ls, "pub", 3));
+  luaK_indexed(fs, v, &key);
+}
+
+
+/* task -> TASK body (prototype) | TASK (the running instance) */
+static void taskexp (LexState *ls, expdesc *v) {
+  FuncState *fs = ls->fs;
+  int line = ls->linenumber;
+  int base;
+  luaX_next(ls);  /* skip 'task' */
+  if (ls->t.token == '(' && sameline(ls)) {  /* prototype */
+    expdesc f;
+    base = callbegin(ls, "task");
+    body(ls, &f, 0, line);
+    luaK_exp2nextreg(fs, &f);
+    callend(ls, v, base, 0, line);
+  }
+  else {  /* the running task */
+    base = callbegin(ls, "xtask");
+    callend(ls, v, base, 0, line);
+  }
+}
+
+
+/* statement 'task NAME body': like 'func NAME' with a prototype */
+static void taskstat (LexState *ls, int line) {
+  FuncState *fs = ls->fs;
+  int ismethod, base;
+  expdesc v, b;
+  luaX_next(ls);  /* skip 'task' */
+  ismethod = funcname(ls, &v);
+  check_readonly(ls, &v);
+  base = callbegin(ls, "task");
+  body(ls, &b, ismethod, line);
+  luaK_exp2nextreg(fs, &b);
+  callend(ls, &b, base, 0, line);
+  luaK_storevar(fs, &v, &b);
+  luaK_fixline(fs, line);  /* definition "happens" in the first line */
+}
+
+
+/* 'val task NAME body' */
+static void localtask (LexState *ls, int line) {
+  expdesc b;
+  FuncState *fs = ls->fs;
+  int fvar = fs->nactvar;  /* variable index */
+  int base;
+  new_varkind(ls, str_checkname(ls), RDKCONST);
+  adjustlocalvars(ls, 1);  /* enter its scope */
+  base = callbegin(ls, "task");  /* at the variable's register */
+  body(ls, &b, 0, line);
+  luaK_exp2nextreg(fs, &b);
+  callend(ls, &b, base, 0, line);
+  localdebuginfo(fs, fvar)->startpc = fs->pc;
+}
+
+/* }====================================================================== */
+
+
 static int explist (LexState *ls, expdesc *v) {
   /* explist -> expr { ',' expr } */
   int n = 1;  /* at least one expression */
@@ -1719,6 +2112,16 @@ static void primaryexp (LexState *ls, expdesc *v) {
       catchexp(ls, v, line);
       return;
     }
+    case TK_TASK: taskexp(ls, v); return;
+    case TK_TASKS: {
+      luaX_next(ls);
+      buildvar(ls, luaX_newstring(ls, "tasks", 5), v);
+      return;
+    }
+    case TK_SPAWN: spawnexp(ls, v, 0); return;
+    case TK_EMIT: emitexp(ls, v); return;
+    case TK_AWAIT: awaitexp(ls, v); return;
+    case TK_PUB: pubexp(ls, v); return;
     case TK_NIL: {
       init_exp(v, VNIL, 0);
       break;
@@ -2259,6 +2662,8 @@ static void restassign (LexState *ls, struct LHS_assign *lh, int nvars) {
     int nexps;
     checknext(ls, '=');
     nexps = exprlist(ls, &e);
+    if (nvars == 1 && nexps == 1)
+      chkassign(ls, &e);  /* tasks must be owned */
     if (nexps != nvars)
       adjust_assign(ls, nvars, nexps, &e);
     else {
@@ -2980,14 +3385,36 @@ static void localstat (LexState *ls, int line) {
     localfunc(ls, line);
     return;
   }
+  if (kind == RDKCONST && ls->t.token == TK_TASK) {  /* val task? */
+    luaX_next(ls);
+    localtask(ls, line);
+    return;
+  }
   do {  /* for each variable */
     luaY_checklimit(fs, nvars + 1, MAXVARS, "local variables");
     names[nvars++] = str_checkname(ls);  /* get its name */
     if (kind == RDKTOCLOSE && nvars > 1)  /* to-be-closed list? */
       luaK_semerror(ls, "multiple to-be-closed variables in local list");
   } while (testnext(ls, ','));
-  if (testnext(ls, '='))  /* initialization? */
-    nexps = exprlist(ls, &e);
+  if (testnext(ls, '=')) {  /* initialization? */
+    /* tasks and pools: 'pin' owns a fresh value ('pin.set'); other
+       declarations of a spawn or pool require an owned one ('pin.chk') */
+    if (kind == RDKTOCLOSE) {  /* pin: owns the value */
+      if (ls->t.token == TK_SPAWN) {
+        spawnexp(ls, &e, 1);  /* 'pin t = spawn { }' promotes the block */
+        nexps = 1;
+      }
+      else
+        nexps = exprlist(ls, &e);
+      if (nexps == 1)
+        pinop(ls, &e, PIN_SET);
+    }
+    else {
+      nexps = exprlist(ls, &e);
+      if (nvars == 1 && nexps == 1)
+        chkassign(ls, &e);
+    }
+  }
   else {
     e.k = VVOID;
     nexps = 0;
@@ -3149,10 +3576,19 @@ static int statement (LexState *ls, expdesc *v) {
       deferstat(ls, line);
       break;
     }
-    case TK_AWAIT:
-    case TK_EMIT: case TK_SPAWN: case TK_TOGGLE: case TK_PAR:
-    case TK_WATCHING: case TK_THREAD: case TK_TASK: case TK_TASKS:
-    case TK_PUB: {
+    case TK_SPAWN: {
+      n = spawnstat(ls, v);
+      break;
+    }
+    case TK_TASK: {
+      if (luaX_lookahead(ls) == TK_NAME) {  /* declaration? */
+        taskstat(ls, line);
+        break;
+      }
+      n = exprlist(ls, v);  /* expression statement */
+      break;
+    }
+    case TK_TOGGLE: case TK_PAR: case TK_WATCHING: case TK_THREAD: {
       luaX_syntaxerror(ls, "statement not implemented");
       break;
     }

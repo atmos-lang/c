@@ -759,7 +759,10 @@ static int llex (LexState *ls, SemInfo *seminfo) {
                                            luaZ_bufflen(ls->buff));
           return TK_TAG;
         }
-        else return ':';
+        else {  /* bare ':': the empty tag */
+          seminfo->ts = luaX_newstring(ls, "", 0);
+          return TK_TAG;
+        }
       }
       case '"': case '\'': {  /* strings */
         return read_quoted(ls, ls->current, seminfo);

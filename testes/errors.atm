@@ -355,7 +355,8 @@ set f = func (n) {
 }
 assert(string.find(f(), "C stack overflow"))
 
-checkmessage("coroutine.yield()", "outside a coroutine")
+;; (no "yield outside a coroutine" here: the chunk runs as a task, so a
+;; raw 'coroutine.yield()' is an 'await' that nothing wakes)
 
 set f = coroutine.wrap(func () {
   table.sort([1, 2, 3], coroutine.yield)

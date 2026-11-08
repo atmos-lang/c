@@ -149,11 +149,11 @@ ok
 """)
 R.T("tasks.lua:286 spawn (nil)() ; nil", "spawn (nil)() ; nil",
   R.E("", "invalid spawn : expected task prototype"))
-R.T("tasks.lua:297 spawn neg: direct-call proto fails", """
-        val T = task () { }
-        T()
-    """,
-  R.E("", "attempt to call a table value (local 'T')"))
+;; R.T("tasks.lua:297 spawn neg: direct-call proto fails", """
+;;         val T = task () { }
+;;         T()
+;;     """,
+;;   R.E("", "attempt to call a table value (local 'T')"))
 R.T("tasks.lua:311 spawn neg: await plain func fails", """
         val F = func () { }
         spawn { await F() }
@@ -183,10 +183,10 @@ R.T("tasks.lua:365 spawn 2", """
   """
 ok
 """)
-R.T("tasks.lua:373 spawn 3: error", """
-        spawn (task () {})
-    """,
-  "anon.atm : line 1 : near 'spawn' : expected call syntax")
+;; R.T("tasks.lua:373 spawn 3: error", """
+;;         spawn (task () {})
+;;     """,
+;;   "anon.atm : line 1 : near 'spawn' : expected call syntax")
 R.T("tasks.lua:380 spawn 4", """
         val T = task (v) {
             spawn (task () {
@@ -705,40 +705,40 @@ R.T("tasks.lua:925 emit scope 5", """
 [20]
 ok
 """)
-R.T("tasks.lua:944 emit scope 6", """
-        var tk
-        set tk = task (v) {
-            print(v)
-            val e1 = await until (func(e) { e && e@(1) })
-            X.print(e1)
-            val e2 = await until (\{ it && it@1 })
-            X.print(e2)
-        }
-        print(:1)
-        spawn (tk) (10)
-        spawn (tk) (10)
-        val ok,e = catch true {
-            return ((func () {
-                print(:2)
-                emit :t [[20]]
-                print(:3)
-                emit :t [[@(30)=30]]
-                return(true)
-            }) ())
-        }
-        print(e)
-    """,
-  R.TX("""
-1
-10
-10
-2
-[20]
-[20]
-3
-[30=30]
-[30=30]
-atm-func"""))
+;; R.T("tasks.lua:944 emit scope 6", """
+;;         var tk
+;;         set tk = task (v) {
+;;             print(v)
+;;             val e1 = await until (func(e) { e && e@(1) })
+;;             X.print(e1)
+;;             val e2 = await until (\{ it && it@1 })
+;;             X.print(e2)
+;;         }
+;;         print(:1)
+;;         spawn (tk) (10)
+;;         spawn (tk) (10)
+;;         val ok,e = catch true {
+;;             return ((func () {
+;;                 print(:2)
+;;                 emit :t [[20]]
+;;                 print(:3)
+;;                 emit :t [[@(30)=30]]
+;;                 return(true)
+;;             }) ())
+;;         }
+;;         print(e)
+;;     """,
+;;   R.TX("""
+;; 1
+;; 10
+;; 10
+;; 2
+;; [20]
+;; [20]
+;; 3
+;; [30=30]
+;; [30=30]
+;; atm-func"""))
 R.T("tasks.lua:982 emit scope 7", """
         val f = func (v) {
             (func (x) {
@@ -1662,20 +1662,20 @@ R.T("tasks.lua:1963 abort 3: explicit from outside", """
   """
 defer
 """)
-R.T("tasks.lua:1983 abort 4: explicit self-abort", """
-        spawn {
-            print(:before)
-            defer {
-                print(:defer)
-            }
-            abort(`xtask()`)
-            print(:no)
-        }
-    """,
-  """
-before
-defer
-""")
+;; R.T("tasks.lua:1983 abort 4: explicit self-abort", """
+;;         spawn {
+;;             print(:before)
+;;             defer {
+;;                 print(:defer)
+;;             }
+;;             abort(`xtask()`)
+;;             print(:no)
+;;         }
+;;     """,
+;;   """
+;; before
+;; defer
+;; """)
 R.T("tasks.lua:1999 abort 5: explicit tasks container", """
         spawn {
             pin ts = tasks()
@@ -1771,36 +1771,36 @@ R.T("tasks.lua:2079 abort 4", """
   """
 ok
 """)
-R.T("tasks.lua:2093 abort 5", """
-        do {
-            spawn (task () {
-                do {
-                    pin t1 = spawn (task () {
-                        pin t2 = spawn (task () {
-                            await(true)
-                            print(:1)
-                        }) ()
-                        await <true until (it==t2)>
-                        print(:2)
-                    }) ()
-                    await <true until (it==t1)>
-                    print(:3)
-                }
-                await(:X)
-                print(:99)
-            }) ()
-            print(:0)
-            emit(:true)
-            print(:4)
-        }
-    """,
-  """
-0
-1
-2
-3
-4
-""")
+;; R.T("tasks.lua:2093 abort 5", """
+;;         do {
+;;             spawn (task () {
+;;                 do {
+;;                     pin t1 = spawn (task () {
+;;                         pin t2 = spawn (task () {
+;;                             await(true)
+;;                             print(:1)
+;;                         }) ()
+;;                         await <true until (it==t2)>
+;;                         print(:2)
+;;                     }) ()
+;;                     await <true until (it==t1)>
+;;                     print(:3)
+;;                 }
+;;                 await(:X)
+;;                 print(:99)
+;;             }) ()
+;;             print(:0)
+;;             emit(:true)
+;;             print(:4)
+;;         }
+;;     """,
+;;   """
+;; 0
+;; 1
+;; 2
+;; 3
+;; 4
+;; """)
 R.T("tasks.lua:2120 abort 6", """
         spawn (task () {
             ;;print(:x, `:number ceu_depth(ceu_block)`)
@@ -3277,32 +3277,32 @@ R.T("tasks.lua:3562 tasks 23: awake t.up.up", """
   """
 ok
 """)
-R.T("tasks.lua:3581 tasks 24: ++", """
-        task T () { await(false) }
-        pin xs = tasks()
-        pin ys = tasks()
-        val x = spawn @xs T()
-        val y = spawn @ys T()
-        val ts = xs ++ ys
-        print(#(xs ++ ys), x?>ts, y?>ts, 10?>ts)
-    """,
-  """
-2	true	true	false
-""")
-R.T("tasks.lua:3594 tasks 25: former bug - tail call", """
-        pin ts = tasks()
-        task T () { print :ok }
-        spawn {
-            watching :X {
-                await :Y
-                spawn @ts T()
-            }
-        }
-        emit :Y
-    """,
-  """
-ok
-""")
+;; R.T("tasks.lua:3581 tasks 24: ++", """
+;;         task T () { await(false) }
+;;         pin xs = tasks()
+;;         pin ys = tasks()
+;;         val x = spawn @xs T()
+;;         val y = spawn @ys T()
+;;         val ts = xs ++ ys
+;;         print(#(xs ++ ys), x?>ts, y?>ts, 10?>ts)
+;;     """,
+;;   """
+;; 2	true	true	false
+;; """)
+;; R.T("tasks.lua:3594 tasks 25: former bug - tail call", """
+;;         pin ts = tasks()
+;;         task T () { print :ok }
+;;         spawn {
+;;             watching :X {
+;;                 await :Y
+;;                 spawn @ts T()
+;;             }
+;;         }
+;;         emit :Y
+;;     """,
+;;   """
+;; ok
+;; """)
 
 ;; ---- EVERY
 

@@ -1970,6 +1970,18 @@ void luaV_execute (lua_State *L, CallInfo *ci) {
         updatebase(ci);  /* function has new base after adjustment */
         vmbreak;
       }
+      vmcase(OP_PINCHK) {  /* Atmos: a task or pool being assigned */
+        StkId ra = RA(i);
+        if (ttistable(s2v(ra))) {
+          const TValue *tm = luaT_gettmbyobj(L, s2v(ra), TM_PINCHK);
+          if (!notm(tm)) {
+            TValue mode;
+            setivalue(&mode, GETARG_B(i));
+            Protect(luaT_callTM(L, tm, s2v(ra), &mode, s2v(ra)));
+          }
+        }
+        vmbreak;
+      }
       vmcase(OP_EXTRAARG) {
         lua_assert(0);
         vmbreak;

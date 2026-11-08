@@ -51,3 +51,8 @@ VM, libraries and bytecode format stay Lua's.
   condition value (the case result for a lambda case of `match`);
   `test { }` runs only when `atmos.test` is true.
 - Error messages keep Lua's formats.
+- Tasks as in the reference (`.claude/plans/tasks.md`, runtime
+  `latmlib.c`): a script is the body of a root task (`atmos.loop`), a
+  statement `spawn` is owned by its block unless it is the last
+  statement, ownership checks are `OP_PINCHK` (`__pinchk` metamethod of
+  tasks and pools), dead tasks are swept by `atmos.gc()`.

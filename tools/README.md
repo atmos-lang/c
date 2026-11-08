@@ -100,6 +100,17 @@ Semantics assumed for the Atmos implementation (the tests rely on them):
   receives `e1` only; `error(v, level)` is unchanged and
   `errorn(level, e1, ..., en)` is `error` with the level first and n
   values (`testes/throw.atm`)
+- tasks follow the reference (`.claude/plans/tasks.md`): `task`, `spawn`,
+  `await`, `emit`, `pub`, `tasks`, `abort`, `defer`; `spawn` as a
+  statement is owned by its block unless it is the block's last
+  statement (then it is the block's value); `val`/`var`/`set` of a task
+  or pool require a pinned value or an ancestor, `pin` takes ownership
+  (`OP_PINCHK` and the `__pinchk` metamethod; other values are not
+  affected); a script runs as the body of a root task (`atmos.loop`), so
+  `coroutine.running()` at the top level is not the main thread, a raw
+  `coroutine.yield()` there suspends the program, and `os.exit(code,
+  true)` closes all tasks (their `defer`s and pins run); `atmos.gc()`
+  removes dead tasks from pools
 
 ## tst2atm.py
 

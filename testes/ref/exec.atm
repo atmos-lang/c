@@ -26,17 +26,17 @@ R.T("exec.lua:22 expr 3", """
   """
  b 
 """)
-;; R.T("exec.lua:29 multiline string", '''
-;;         val s = trim """
-;;             Hello
-;;             World
-;;         """
-;;         print(s)
-;;     ''',
-;;   """
-;; Hello
-;; World
-;; """)
+R.T("exec.lua:29 multiline string", '''
+        val s = trim """
+            Hello
+            World
+        """
+        print(s)
+    ''',
+  """
+Hello
+World
+""")
 R.T("exec.lua:40 string escape \\n", """
         print("a\nb")
     """,
@@ -793,19 +793,19 @@ R.T("exec.lua:1000 if 1", """
 t
 f
 """)
-;; R.T("exec.lua:1013 if 2", """
-;;         if 10 => \{
-;;             print(it)
-;;         }
-;;         if false {
-;;         } else {
-;;             print('false')
-;;         }
-;;     """,
-;;   """
-;; 10
-;; false
-;; """)
+R.T("exec.lua:1013 if 2", """
+        if 10 => \{
+            print(it)
+        }
+        if false {
+        } else {
+            print('false')
+        }
+    """,
+  """
+10
+false
+""")
 R.T("exec.lua:1026 print(if false => 1 => 2)", "print(if false => 1 => 2)",
   """
 2
@@ -826,14 +826,14 @@ R.T("exec.lua:1046 print(ifs { false=>0 ; true=>nil ; else=>99 })", "print(ifs {
   """
 nil
 """)
-;; R.T("exec.lua:1051 ifs 1", """
-;;         ifs {
-;;             100 => \{ print(it) }
-;;         }
-;;     """,
-;;   """
-;; 100
-;; """)
+R.T("exec.lua:1051 ifs 1", """
+        ifs {
+            100 => \{ print(it) }
+        }
+    """,
+  """
+100
+""")
 R.T("exec.lua:1060 match 1", """
         match 100 {
             10 => {}
@@ -878,14 +878,14 @@ R.T("exec.lua:1100 match 5", """
   """
 ok
 """)
-;; R.T("exec.lua:1109 match 6", """
-;;         match 100 {
-;;             \{(it==100) && 10} => \(...){print(...)}
-;;         }
-;;     """,
-;;   """
-;; 10
-;; """)
+R.T("exec.lua:1109 match 6", """
+        match 100 {
+            \{(it==100) && 10} => \(...){print(...)}
+        }
+    """,
+  """
+10
+""")
 R.T("exec.lua:1118 match 7", """
         match 100 {
             :number => \{print(it)}
@@ -934,15 +934,15 @@ R.T("exec.lua:1164 loop 2", """
 1
 2
 """)
-;; R.T("exec.lua:1177 loop num 1", """
-;;             loop x in 2 {
-;;                 print(x)
-;;             }
-;;         """,
-;;   """
-;; 1
-;; 2
-;; """)
+R.T("exec.lua:1177 loop num 1", """
+            loop x in 2 {
+                print(x)
+            }
+        """,
+  """
+1
+2
+""")
 R.T("exec.lua:1186 loop num 2", """
             loop x in (10,12) {
                 print(x)
@@ -953,24 +953,24 @@ R.T("exec.lua:1186 loop num 2", """
 11
 12
 """)
-;; R.T("exec.lua:1195 loop num 3", """
-;;             loop x in 0 {
-;;                 print(x)
-;;             }
-;;             print:ok
-;;         """,
-;;   """
-;; ok
-;; """)
-;; R.T("exec.lua:1205 loop num 4", """
-;;             loop x in -1 {
-;;                 print(x)
-;;             }
-;;             print:ok
-;;         """,
-;;   """
-;; ok
-;; """)
+R.T("exec.lua:1195 loop num 3", """
+            loop x in 0 {
+                print(x)
+            }
+            print:ok
+        """,
+  """
+ok
+""")
+R.T("exec.lua:1205 loop num 4", """
+            loop x in -1 {
+                print(x)
+            }
+            print:ok
+        """,
+  """
+ok
+""")
 R.T("exec.lua:1215 loop num 5", """
             loop x in (10,10) {
                 print(x)
@@ -992,26 +992,26 @@ R.T("exec.lua:1226 loop 4", """
 1
 2
 """)
-;; R.T("exec.lua:1237 loop 5", """
-;;         loop k,v in [1,2,3] {
-;;             print(k,v)
-;;         }
-;;     """,
-;;   """
-;; 1	1
-;; 2	2
-;; 3	3
-;; """)
-;; R.T("exec.lua:1246 loop 6", """
-;;         loop i,v in [1,2,3] {
-;;             print(i,v)
-;;         }
-;;     """,
-;;   """
-;; 1	1
-;; 2	2
-;; 3	3
-;; """)
+R.T("exec.lua:1237 loop 5", """
+        loop k,v in [1,2,3] {
+            print(k,v)
+        }
+    """,
+  """
+1	1
+2	2
+3	3
+""")
+R.T("exec.lua:1246 loop 6", """
+        loop i,v in [1,2,3] {
+            print(i,v)
+        }
+    """,
+  """
+1	1
+2	2
+3	3
+""")
 ;; R.T("exec.lua:1255 loop 7", """
 ;;         loop k,v in [x=1,y=2] {
 ;;             print(k,v)
@@ -1361,37 +1361,37 @@ R.T("exec.lua:1636 coro 1", """
 1	nil	2
 true	true	true
 """)
-;; R.T("exec.lua:1654 emit 1: err", """
-;;         emit_in(10,10)
-;;     """,
-;;   R.E("", "invalid emit : invalid target"))
-;; R.T("exec.lua:1666 task 1", """
-;;         val T = task (a) {
-;;             print(a)
-;;             val b = await(:X)
-;;             print(b)
-;;         }
-;;         pin t = xtask(T)
-;;         spawn t(10)
-;;         emit(:X)
-;;     """,
-;;   """
-;; 10
-;; X
-;; """)
-;; R.T("exec.lua:1680 task 2", """
-;;         val T = task (a) {
-;;             print(a)
-;;             val b = await(true)
-;;             print(b)
-;;         }
-;;         spawn T(10)
-;;         emit(:ok)
-;;     """,
-;;   """
-;; 10
-;; ok
-;; """)
+R.T("exec.lua:1654 emit 1: err", """
+        emit_in(10,10)
+    """,
+  R.E("", "invalid emit : invalid target"))
+R.T("exec.lua:1666 task 1", """
+        val T = task (a) {
+            print(a)
+            val b = await(:X)
+            print(b)
+        }
+        pin t = xtask(T)
+        spawn t(10)
+        emit(:X)
+    """,
+  """
+10
+X
+""")
+R.T("exec.lua:1680 task 2", """
+        val T = task (a) {
+            print(a)
+            val b = await(true)
+            print(b)
+        }
+        spawn T(10)
+        emit(:ok)
+    """,
+  """
+10
+ok
+""")
 R.T("exec.lua:1693 coro 2: multi", """
         val F = func (a,b) {
             val c,d = coroutine.yield(a+1,b*2)
@@ -1457,199 +1457,199 @@ R.T("exec.lua:1744 coro 5", """
     """,
   R.E("", "variable 'a' got a non-closable value"))
 ;; TODO(tst2atm): unrecognized expectation for 'emit 1' (line 1764)
-;; R.T("exec.lua:1770 emit 2", """
-;;         val tk = task (v) {
-;;             val e1 = await(true)
-;;             print(:1, e1)
-;;             val e2 = await(true)
-;;             print(:2, e2)
-;;         }
-;;         spawn tk ()
-;;         emit(:1)
-;;         emit(:2)
-;;         emit(:3)
-;;
-;;     """,
-;;   """
-;; 1	1
-;; 2	2
-;; """)
-;; R.T("exec.lua:1787 emit 1", """
-;;         emit @(false) (:1)
-;;     """,
-;;   R.E("", "invalid emit : invalid target"))
+R.T("exec.lua:1770 emit 2", """
+        val tk = task (v) {
+            val e1 = await(true)
+            print(:1, e1)
+            val e2 = await(true)
+            print(:2, e2)
+        }
+        spawn tk ()
+        emit(:1)
+        emit(:2)
+        emit(:3)
+
+    """,
+  """
+1	1
+2	2
+""")
+R.T("exec.lua:1787 emit 1", """
+        emit @(false) (:1)
+    """,
+  R.E("", "invalid emit : invalid target"))
 ;; TODO(tst2atm): unrecognized expectation for 'task-throw-catch 1' (line 1799)
-;; R.T("exec.lua:1810 pub 1", """
-;;         spawn (task () {
-;;             set pub = 10
-;;             print(pub)
-;;         }) ()
-;;     """,
-;;   """
-;; 10
-;; """)
-;; R.T("exec.lua:1820 pub 2", """
-;;         pin t = spawn (task () {
-;;             set pub = 10
-;;         }) ()
-;;         print(t.pub)
-;;     """,
-;;   """
-;; 10
-;; """)
-;; R.T("exec.lua:1830 abort 1: no pin", """
-;;         print(:1)
-;;         do {
-;;             print(:2)
-;;             spawn (task () {
-;;                 defer {
-;;                     print(:defer)
-;;                 }
-;;                 await(true)
-;;             } )()
-;;             print(:3)
-;;         }
-;;         print(:4)
-;;     """,
-;;   """
-;; 1
-;; 2
-;; 3
-;; defer
-;; 4
-;; """)
-;; R.T("exec.lua:1848 abort 1: pin", """
-;;         print(:1)
-;;         do {
-;;             print(:2)
-;;             pin x = spawn (task () {
-;;                 defer {
-;;                     print(:defer)
-;;                 }
-;;                 await(true)
-;;             } )()
-;;             print(:3)
-;;         }
-;;         print(:4)
-;;     """,
-;;   """
-;; 1
-;; 2
-;; 3
-;; defer
-;; 4
-;; """)
-;; R.T("exec.lua:1866 abort 2", """
-;;         print(:1)
-;;         do {
-;;             print(:2)
-;;             spawn {
-;;                 defer {
-;;                     print(:defer)
-;;                 }
-;;                 await(true)
-;;             }
-;;             print(:3)
-;;         }
-;;         print(:4)
-;;     """,
-;;   """
-;; 1
-;; 2
-;; 3
-;; defer
-;; 4
-;; """)
-;; R.T("exec.lua:1884 abort 3", """
-;;         print(:1)
-;;         do {
-;;             print(:2)
-;;             spawn {
-;;                 defer {
-;;                     print(:defer)
-;;                 }
-;;                 await(true)
-;;             }
-;;             print(:3)
-;;         }
-;;         print(:4)
-;;     """,
-;;   """
-;; 1
-;; 2
-;; 3
-;; defer
-;; 4
-;; """)
-;; R.T("exec.lua:1902 task - catch 1", """
-;;         catch :e {
-;;             spawn {
-;;                 throw(:e)
-;;                 print(:no)
-;;             }
-;;             print(:no)
-;;         }
-;;         print(:ok)
-;;     """,
-;;   """
-;; ok
-;; """)
-;; R.T("exec.lua:1916 task - catch 2", """
-;;         spawn {
-;;             catch :e {
-;;                 spawn {
-;;                     print(:1)
-;;                     await(true)
-;;                     print(:e)
-;;                     throw(:e)
-;;                     print(:no1)
-;;                 }
-;;                 print(:2)
-;;                 await(true)
-;;                 print(:no2)
-;;             }
-;;             print(:4)
-;;         }
-;;         print(:3)
-;;         emit(:ok)
-;;         print(:5)
-;;     """,
-;;   """
-;; 1
-;; 2
-;; 3
-;; e
-;; 4
-;; 5
-;; """)
-;; R.T("exec.lua:1940 task - throw", """
-;;         catch :z {
-;;             spawn {
-;;                 throw(:x)
-;;             }
-;;         }
-;;         print(10)
-;;     """,
-;;   R.E("", "x"))
-;; R.T("exec.lua:1957 task abort loop", """
-;;         spawn {
-;;             loop {
-;;                 ;;pin t = spawn {
-;;                     await(:X)
-;;                     print(:in)
-;;                 ;;}
-;;                 ;;await(t)
-;;             }
-;;         }
-;;         emit :X
-;;         print :out
-;;     """,
-;;   """
-;; in
-;; out
-;; """)
-;; R.T("exec.lua:1974 abort 1: err", "abort(1) ; nil",
-;;   R.E("", "invalid abort : expected task"))
+R.T("exec.lua:1810 pub 1", """
+        spawn (task () {
+            set pub = 10
+            print(pub)
+        }) ()
+    """,
+  """
+10
+""")
+R.T("exec.lua:1820 pub 2", """
+        pin t = spawn (task () {
+            set pub = 10
+        }) ()
+        print(t.pub)
+    """,
+  """
+10
+""")
+R.T("exec.lua:1830 abort 1: no pin", """
+        print(:1)
+        do {
+            print(:2)
+            spawn (task () {
+                defer {
+                    print(:defer)
+                }
+                await(true)
+            } )()
+            print(:3)
+        }
+        print(:4)
+    """,
+  """
+1
+2
+3
+defer
+4
+""")
+R.T("exec.lua:1848 abort 1: pin", """
+        print(:1)
+        do {
+            print(:2)
+            pin x = spawn (task () {
+                defer {
+                    print(:defer)
+                }
+                await(true)
+            } )()
+            print(:3)
+        }
+        print(:4)
+    """,
+  """
+1
+2
+3
+defer
+4
+""")
+R.T("exec.lua:1866 abort 2", """
+        print(:1)
+        do {
+            print(:2)
+            spawn {
+                defer {
+                    print(:defer)
+                }
+                await(true)
+            }
+            print(:3)
+        }
+        print(:4)
+    """,
+  """
+1
+2
+3
+defer
+4
+""")
+R.T("exec.lua:1884 abort 3", """
+        print(:1)
+        do {
+            print(:2)
+            spawn {
+                defer {
+                    print(:defer)
+                }
+                await(true)
+            }
+            print(:3)
+        }
+        print(:4)
+    """,
+  """
+1
+2
+3
+defer
+4
+""")
+R.T("exec.lua:1902 task - catch 1", """
+        catch :e {
+            spawn {
+                throw(:e)
+                print(:no)
+            }
+            print(:no)
+        }
+        print(:ok)
+    """,
+  """
+ok
+""")
+R.T("exec.lua:1916 task - catch 2", """
+        spawn {
+            catch :e {
+                spawn {
+                    print(:1)
+                    await(true)
+                    print(:e)
+                    throw(:e)
+                    print(:no1)
+                }
+                print(:2)
+                await(true)
+                print(:no2)
+            }
+            print(:4)
+        }
+        print(:3)
+        emit(:ok)
+        print(:5)
+    """,
+  """
+1
+2
+3
+e
+4
+5
+""")
+R.T("exec.lua:1940 task - throw", """
+        catch :z {
+            spawn {
+                throw(:x)
+            }
+        }
+        print(10)
+    """,
+  R.E("", "x"))
+R.T("exec.lua:1957 task abort loop", """
+        spawn {
+            loop {
+                ;;pin t = spawn {
+                    await(:X)
+                    print(:in)
+                ;;}
+                ;;await(t)
+            }
+        }
+        emit :X
+        print :out
+    """,
+  """
+in
+out
+""")
+R.T("exec.lua:1974 abort 1: err", "abort(1) ; nil",
+  R.E("", "invalid abort : expected task"))
 
 ;; ---- TASKS
 
@@ -1807,82 +1807,82 @@ R.T("exec.lua:2133 tasks 12: fake", """
 20
 20
 """)
-R.T("exec.lua:2149 tasks 13: abort", """
-        spawn {
-            watching :X {
-                defer {
-                    print:defer
-                }
-                await(false)
-            }
-            print:abort
-        }
-        print:antes
-        emit :X
-        print:depois
-    """,
-  """
-antes
-defer
-abort
-depois
-""")
-R.T("exec.lua:2167 tasks 13: abort", """
-        val T = task (i) {
-            loop on :X {
-                print(:X, i)
-            }
-        }
-        spawn {
-            var i = 1
-            loop {
-                watching :Y {
-                    pin ts = tasks()
-                    do {
-                        spawn @ts T(i)
-                        spawn @ts T(i+1)
-                    }
-                    emit(:X)
-                    await(false)
-                }
-                set i = i + 8
-            }
-        }
-        print '==='
-        emit :Y
-        print '---'
-        emit :X
-        print :ok
-    """,
-  """
-X	1
-X	2
-===
-X	9
-X	10
----
-X	9
-X	10
-ok
-""")
-R.T("exec.lua:2198 tasks 14: loop", """
-        spawn {
-            loop {
-                await(:X)
-                print :1
-                watching(:X) {
-                    await(:Y)
-                }
-                print :2
-            }
-        }
-        emit(:X)
-        emit(:X)
-    """,
-  """
-1
-2
-""")
+;; R.T("exec.lua:2149 tasks 13: abort", """
+;;         spawn {
+;;             watching :X {
+;;                 defer {
+;;                     print:defer
+;;                 }
+;;                 await(false)
+;;             }
+;;             print:abort
+;;         }
+;;         print:antes
+;;         emit :X
+;;         print:depois
+;;     """,
+;;   """
+;; antes
+;; defer
+;; abort
+;; depois
+;; """)
+;; R.T("exec.lua:2167 tasks 13: abort", """
+;;         val T = task (i) {
+;;             loop on :X {
+;;                 print(:X, i)
+;;             }
+;;         }
+;;         spawn {
+;;             var i = 1
+;;             loop {
+;;                 watching :Y {
+;;                     pin ts = tasks()
+;;                     do {
+;;                         spawn @ts T(i)
+;;                         spawn @ts T(i+1)
+;;                     }
+;;                     emit(:X)
+;;                     await(false)
+;;                 }
+;;                 set i = i + 8
+;;             }
+;;         }
+;;         print '==='
+;;         emit :Y
+;;         print '---'
+;;         emit :X
+;;         print :ok
+;;     """,
+;;   """
+;; X	1
+;; X	2
+;; ===
+;; X	9
+;; X	10
+;; ---
+;; X	9
+;; X	10
+;; ok
+;; """)
+;; R.T("exec.lua:2198 tasks 14: loop", """
+;;         spawn {
+;;             loop {
+;;                 await(:X)
+;;                 print :1
+;;                 watching(:X) {
+;;                     await(:Y)
+;;                 }
+;;                 print :2
+;;             }
+;;         }
+;;         emit(:X)
+;;         emit(:X)
+;;     """,
+;;   """
+;; 1
+;; 2
+;; """)
 
 ;; ---- AWAIT / TASK
 
@@ -2402,12 +2402,12 @@ R.T("exec.lua:2790 func 4", """
 ;; exec.lua:2807 error("hello")""", """
 ;;  error("hello") """,
 ;;   R.E("", "hello"))
-;; R.T("exec.lua:2817 error 1", """
-;;         spawn {
-;;             print(t.x)
-;;         }
-;;     """,
-;;   R.E("", "attempt to index a nil value (global 't')"))
+R.T("exec.lua:2817 error 1", """
+        spawn {
+            print(t.x)
+        }
+    """,
+  R.E("", "attempt to index a nil value (global 't')"))
 ;; TODO(tst2atm): unrecognized expectation for 'error 2' (line 2831)
 
 ;; ---- REQUIRE

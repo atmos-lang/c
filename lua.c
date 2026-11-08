@@ -82,8 +82,10 @@ static void lstop (lua_State *L, lua_Debug *ar) {
 */
 static void laction (int i) {
   int flag = LUA_MASKCALL | LUA_MASKRET | LUA_MASKLINE | LUA_MASKCOUNT;
+  lua_State *running = atmos_running();  /* thread of the running task */
   setsignal(i, SIG_DFL); /* if another SIGINT happens, terminate process */
-  lua_sethook(globalL, lstop, flag, 1);
+  /* a script runs as a task, in its own thread: hook that thread */
+  lua_sethook(running != NULL ? running : globalL, lstop, flag, 1);
 }
 
 
@@ -200,8 +202,21 @@ static void createargtable (lua_State *L, char **argv, int argc, int script) {
 }
 
 
+/*
+** Run a chunk as the body of an Atmos task: 'atmos.loop(chunk, ...)'.
+*/
+static int doatmos (lua_State *L, int narg, int nres) {
+  int base = lua_gettop(L) - narg;  /* chunk index */
+  lua_getglobal(L, "atmos");
+  lua_getfield(L, -1, "loop");
+  lua_remove(L, -2);
+  lua_insert(L, base);  /* 'loop' below the chunk and its arguments */
+  return docall(L, narg + 1, nres);
+}
+
+
 static int dochunk (lua_State *L, int status) {
-  if (status == LUA_OK) status = docall(L, 0, 0);
+  if (status == LUA_OK) status = doatmos(L, 0, 0);
   return report(L, status);
 }
 
@@ -269,7 +284,7 @@ static int handle_script (lua_State *L, char **argv) {
   status = luaL_loadfilex(L, fname, "bt");
   if (status == LUA_OK) {
     int n = pushargs(L);  /* push arguments to script */
-    status = docall(L, n, LUA_MULTRET);
+    status = doatmos(L, n, LUA_MULTRET);
   }
   return report(L, status);
 }

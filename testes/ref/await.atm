@@ -143,33 +143,33 @@ R.begin("await.lua")
 ;; 1
 ;; 2
 ;; """)
-;; R.T("await.lua:156 task_promote solo 1", """
-;;         task T (v) {
-;;             v * 2
-;;         }
-;;         spawn {
-;;             val x = await T(10)
-;;             print(x)
-;;         }
-;;     """,
-;;   """
-;; 20
-;; """)
-;; R.T("await.lua:172 task_promote nil_arg 1", """
-;;         task T (a, b, c) {
-;;             print(a)
-;;             print(b)
-;;             print(c)
-;;         }
-;;         spawn {
-;;             await T(nil, 10, 20)
-;;         }
-;;     """,
-;;   """
-;; nil
-;; 10
-;; 20
-;; """)
+R.T("await.lua:156 task_promote solo 1", """
+        task T (v) {
+            v * 2
+        }
+        spawn {
+            val x = await T(10)
+            print(x)
+        }
+    """,
+  """
+20
+""")
+R.T("await.lua:172 task_promote nil_arg 1", """
+        task T (a, b, c) {
+            print(a)
+            print(b)
+            print(c)
+        }
+        spawn {
+            await T(nil, 10, 20)
+        }
+    """,
+  """
+nil
+10
+20
+""")
 ;; R.T("await.lua:187 task_promote watching_event 1", """
 ;;         task T () {
 ;;             await(:done)
@@ -218,19 +218,19 @@ R.begin("await.lua")
 ;; tick
 ;; tick
 ;; """)
-;; R.T("await.lua:240 task_promote paren_value 1", """
-;;         func g () {
-;;             :X
-;;         }
-;;         spawn {
-;;             await((g()))
-;;             print(:ok)
-;;         }
-;;         emit(:X)
-;;     """,
-;;   """
-;; ok
-;; """)
+R.T("await.lua:240 task_promote paren_value 1", """
+        func g () {
+            :X
+        }
+        spawn {
+            await((g()))
+            print(:ok)
+        }
+        emit(:X)
+    """,
+  """
+ok
+""")
 ;; R.T("await.lua:255 task_promote nontask_err 1", """
 ;;         func g () { }
 ;;         spawn {

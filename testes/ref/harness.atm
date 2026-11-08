@@ -1,5 +1,5 @@
-;; T(name, src, exp) loads 'src' (an Atmos chunk), runs it in the
-;; current task with 'print' captured, and compares the output with
+;; T(name, src, exp) loads 'src' (an Atmos chunk), runs it as the body
+;; of 'atmos.loop' with 'print' captured, and compares the output with
 ;; 'exp': a string (exact), TX (trimmed), P/TP (Lua pattern), F
 ;; (substring), E(pre, msg)/EP(pre, pattern) (an error must be raised
 ;; with that message after printing 'pre').
@@ -12,12 +12,24 @@ set R = []  ;; namespace of the harness (no other globals)
 var total = 0
 var fails = 0
 var current = nil
+var globals = nil  ;; the globals that exist before the cases run
+
+;; the cases run with the global environment (as the reference's
+;; 'atm_test'): new globals (a case's 'task T' is 'set T = ...') are
+;; removed after each case, not to leak into other test files
+val func cleanup () {
+  loop k in pairs(_G) {
+    if !globals@(k) { set _G@(k) = nil }
+  }
+}
 
 func R.begin (name) {
   set X = atmos.X  ;; other test files clobber the global 'X'
   set current = name
   set total = 0
   set fails = 0
+  set globals = []
+  loop k in pairs(_G) { set globals@(k) = true }
   print("testing " ++ name)
 }
 
@@ -61,20 +73,23 @@ func R.T (name, src, exp) {
   var err = nil
   val f, m = load(src, name)
   if f {
-    val ok, e = pcall(f)
+    val ok, e = pcall(atmos.loop, f)  ;; a fresh root task, as the reference
     if !ok { set err = e }
   } else {
     set err = m
   }
   set print = realprint
+  cleanup()
   var ok = false
   var want = exp
+  ;; as the reference harness, an error is appended to the output
+  val full = if err { out ++ "==> ERROR:\n==> " ++ strip(err) } else { out }
   ifs {
-    type(exp) == "string" => { set ok = (out == exp) && (err == nil) }
-    exp ?? :TX => { set ok = (trim(out) == exp@1) && (err == nil) }
-    exp ?? :P => { set ok = (string.find(out, exp@1) != nil) && (err == nil) }
-    exp ?? :TP => { set ok = (string.find(trim(out), exp@1) != nil) && (err == nil) }
-    exp ?? :F => { set ok = (string.find(out, exp@1, 1, true) != nil) && (err == nil) }
+    type(exp) == "string" => { set ok = (full == exp) }
+    exp ?? :TX => { set ok = (trim(full) == exp@1) }
+    exp ?? :P => { set ok = (string.find(full, exp@1) != nil) }
+    exp ?? :TP => { set ok = (string.find(trim(full), exp@1) != nil) }
+    exp ?? :F => { set ok = (string.find(full, exp@1, 1, true) != nil) }
     exp ?? :E => {
       set ok = (err != nil) && (trim(out) == exp@1) && (strip(err) == exp@2)
       set want = exp@1 ++ " ==> " ++ exp@2

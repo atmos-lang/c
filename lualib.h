@@ -54,9 +54,14 @@ LUAMOD_API int (luaopen_table) (lua_State *L);
 #define LUA_UTF8LIBK	(LUA_TABLIBK << 1)
 LUAMOD_API int (luaopen_utf8) (lua_State *L);
 
+/* Atmos operators (lbaselib.c), shared with the Atmos library */
+LUALIB_API int (luaB_tagmatch) (lua_State *L, int e, int x);  /* e ?? x */
+LUALIB_API int (luaB_gte) (lua_State *L, int a, int b, int depth);  /* a =>= b */
+
 #define LUA_ATMLIBNAME	"atmos"
 #define LUA_ATMLIBK	(LUA_UTF8LIBK << 1)
 LUAMOD_API int (luaopen_atmos) (lua_State *L);
+LUALIB_API lua_State *(atmos_running) (void);  /* thread of the running task */
 
 
 /* open selected libraries */
