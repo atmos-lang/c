@@ -77,6 +77,15 @@ Semantics assumed for the Atmos implementation (the tests rely on them):
   case with `h`); `\+`, `\#`, `\===` are operator lambdas
 - error messages, variable-kind names (global/local/upvalue/field/method/
   constant) and syntax-error formats are Lua's
+- `loop k, v in e`: a numeric tuple `(a, b[, s])` counts; otherwise the
+  values of `e` go to `loop.iter`: 2+ values are a Lua iterator, one
+  value iterates a number (1..n), nil (1..), a table (array part then
+  other fields, key and value), a function (generator until nil),
+  `__pairs`/`__call` (manual, "Loop")
+- lambda branches of `if`/`ifs`/`match` are called with the condition
+  value (`else` with `true`; a lambda case of `match` passes its result);
+  `test { }` runs when `atmos.test` is true; `X.print`, `X.tostring`
+  (tables as `[1, 2, k=v]`, `:Tag [..]`), `X.copy`
 - `coroutine.error(co, e1, ..., en)` resumes a suspended coroutine
   raising the values at its pending yield (a not-started coroutine dies
   without running); C API `lua_resumeerror`

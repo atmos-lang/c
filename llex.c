@@ -648,6 +648,7 @@ static l_noret invalidop (LexState *ls) {
 static int llex (LexState *ls, SemInfo *seminfo) {
   luaZ_resetbuffer(ls->buff);
   for (;;) {
+    ls->tokensep = ls->sep;  /* (a multi-line token spans separators) */
     switch (ls->current) {
       case '\n': case '\r': {  /* line breaks */
         inclinenumber(ls);
@@ -816,7 +817,7 @@ void luaX_next (LexState *ls) {
   }
   else {
     ls->t.token = llex(ls, &ls->t.seminfo);  /* read next token */
-    ls->t.sep = ls->sep;
+    ls->t.sep = ls->tokensep;
   }
 }
 
@@ -824,6 +825,6 @@ void luaX_next (LexState *ls) {
 int luaX_lookahead (LexState *ls) {
   lua_assert(ls->lookahead.token == TK_EOS);
   ls->lookahead.token = llex(ls, &ls->lookahead.seminfo);
-  ls->lookahead.sep = ls->sep;
+  ls->lookahead.sep = ls->tokensep;
   return ls->lookahead.token;
 }

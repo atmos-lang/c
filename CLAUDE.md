@@ -43,5 +43,11 @@ VM, libraries and bytecode format stay Lua's.
   value; function bodies return their last expression (one value, unless
   it is a parenthesized tuple).
 - `loop i in (a, b[, s])` is a numeric loop; any other `in` expression
-  uses the Lua iterator protocol.
+  goes through `loop.iter` (latmlib.c): two or more values are a Lua
+  iterator triple; one value iterates a number (1..n), nil (1..), a
+  table (array part, then other fields, as key/value), a function
+  (generator until nil), `__pairs`/`__call`.
+- Lambda branches (`if c => \{}`, `ifs`, `match`) are called with the
+  condition value (the case result for a lambda case of `match`);
+  `test { }` runs only when `atmos.test` is true.
 - Error messages keep Lua's formats.

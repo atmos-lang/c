@@ -98,3 +98,14 @@ removed afterwards and the value is left just above the temporaries.
 They are visible to `debug.getlocal` while the statement runs, like
 Lua's `(for state)`, and count toward the 200-locals limit.
 Tests: `testes/exprs.atm`.
+
+## Multi-value block results (open)
+
+The reference gives `val a, b = do :X { (10, 20) }` and `escape(:X, 10,
+20)` both values (exec.lua "do 2"/"do 3"). Here a block value is one
+register, so these keep the first value only. Supporting it needs
+results with a run-time count (values at the top of the stack as a
+call leaves them), since different paths of a block can produce
+different counts. Also, `do { 10 ; 20 }` is a syntax error in the
+reference (a bare literal is not a statement there); here it is an
+expression statement. Both cases stay disabled in `testes/ref/exec.atm`.

@@ -280,10 +280,10 @@ do {
     \{ it == 100 } => print(:ok2)
   }
   assert(out@4 == "ok2")
-  match 100 {
+  match 100 {  ;; a lambda branch of a lambda case receives the case result
     \{ (it == 100) && 10 } => \(...){ print(...) }
   }
-  assert(out@5 == "100")
+  assert(out@5 == "10")
   match 100 {
     :number => \{ print(it) }
   }

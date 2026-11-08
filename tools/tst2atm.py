@@ -135,8 +135,16 @@ def comment(block):
     return '\n'.join(';; ' + l if l else ';;' for l in block.split('\n'))
 
 
+def strip_block_comments(text):
+    """Blank out Lua block comments --[=*[ ... ]=*], keeping newlines."""
+    def blank(m):
+        return re.sub(r'[^\n]', ' ', m.group(0))
+    return re.sub(r'--\[(=*)\[.*?\]\1\]', blank, text, flags=re.S)
+
+
 def convert(text, first, last, commented=False, enabled=None, base='',
             listonly=False):
+    text = strip_block_comments(text)
     lines = text.split('\n')
     sub = '\n'.join(lines[first - 1:last])
     out = []

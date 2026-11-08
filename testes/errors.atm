@@ -387,8 +387,8 @@ val func lineerror (s, l, w) {
 }
 
 lineerror("val a\n loop i in (1, 'a') { \n print(i) \n }", 2, "limit")
-lineerror("\n val a \n loop k, v in 3 \n { \n print(k) \n }", 3, "to call")
-lineerror("\n\n loop k, v in \n 3 \n { \n print(k) \n }", 4, "to call")
+lineerror("\n val a \n loop k, v in true \n { \n print(k) \n }", 3, "iterate")
+lineerror("\n\n loop k, v in \n true \n { \n print(k) \n }", 4, "iterate")
 lineerror("func a.x.y () {\nset a = a + 1\n}", 1, "index")
 
 lineerror("set a = \na\n+\n[]", 3, "arithmetic")

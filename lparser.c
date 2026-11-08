@@ -1076,23 +1076,6 @@ static void block (LexState *ls, int resreg) {
 
 
 /*
-** Parse a branch of a conditional ('{' block '}' or '=>' expression),
-** storing its value in register 'resreg'.
-*/
-static void branch (LexState *ls, int resreg) {
-  if (ls->t.token == '{')
-    block(ls, resreg);
-  else {
-    expdesc v;
-    checknext(ls, TK_ARROW);
-    expr(ls, &v);
-    store_value(ls, resreg, &v);
-    ls->blockline = ls->lastline;
-  }
-}
-
-
-/*
 ** {======================================================================
 ** Rules for Constructors
 ** =======================================================================
@@ -1630,6 +1613,8 @@ static int ifsstat (LexState *ls, expdesc *v);
 static int dostat (LexState *ls, expdesc *v);
 static int loopstat (LexState *ls, expdesc *v);
 static int matchstat (LexState *ls, expdesc *v);
+static int teststat (LexState *ls, expdesc *v);
+static void callhead (LexState *ls, expdesc *f, int head);
 
 
 /*
@@ -1772,6 +1757,7 @@ static void primaryexp (LexState *ls, expdesc *v) {
     case TK_DO: compoundexp(ls, v, dostat); return;
     case TK_LOOP: compoundexp(ls, v, loopstat); return;
     case TK_MATCH: compoundexp(ls, v, matchstat); return;
+    case TK_TEST: compoundexp(ls, v, teststat); return;
     default: {
       luaX_syntaxerror(ls, "unexpected symbol");
     }
@@ -2451,25 +2437,85 @@ static void escapestat (LexState *ls, int line) {
 
 
 /*
-** if -> IF cond ('{' block '}' | '=>' expr) [ELSE ('{' block '}' | '=>' expr)]
+** Condition of an 'if'/'ifs' case. When the branch is a lambda
+** ('=> \\...'), it is called with the condition value, which is kept
+** in register '*valreg' (-1 otherwise). Returns the false jump.
+*/
+static int condvalue (LexState *ls, int *valreg) {
+  FuncState *fs = ls->fs;
+  expdesc v;
+  expr(ls, &v);  /* read condition */
+  if (v.k == VNIL) v.k = VFALSE;  /* 'falses' are all equal here */
+  if (ls->t.token == TK_ARROW && luaX_lookahead(ls) == '\\') {
+    expdesc c;
+    *valreg = luaK_exp2anyreg(fs, &v);  /* keep the value */
+    c = v;
+    luaK_goiftrue(fs, &c);  /* jump if false (may free the register) */
+    if (fs->freereg == *valreg)
+      luaK_reserveregs(fs, 1);  /* keep it reserved for the call */
+    return c.f;
+  }
+  else {
+    *valreg = -1;
+    luaK_goiftrue(fs, &v);
+    return v.f;
+  }
+}
+
+
+/*
+** '=>' branch of an 'if'/'ifs': a block, an expression, or a lambda,
+** which is called with the condition value ('valreg', or 'true').
+*/
+static void arrowbranch (LexState *ls, int reg, int valreg) {
+  FuncState *fs = ls->fs;
+  checknext(ls, TK_ARROW);
+  if (ls->t.token == '{') {
+    fs->freereg = cast_byte(luaY_nvarstack(fs));  /* drop the value */
+    block(ls, reg);
+  }
+  else {
+    expdesc e;
+    int line = ls->linenumber;
+    if (testnext(ls, '\\')) {  /* lambda: called with the value */
+      lambda(ls, &e, line);
+      callhead(ls, &e, valreg);
+    }
+    else {
+      fs->freereg = cast_byte(luaY_nvarstack(fs));
+      expr(ls, &e);
+    }
+    store_value(ls, reg, &e);
+    ls->blockline = ls->lastline;
+    fs->freereg = cast_byte(luaY_nvarstack(fs));
+  }
+}
+
+
+/*
+** if -> IF cond ('{' block '}' | '=>' branch) [ELSE ('{' block '}' | '=>' branch)]
 */
 static int ifstat (LexState *ls, expdesc *v) {
   FuncState *fs = ls->fs;
   int reg = luaY_nvarstack(fs);  /* register for the value */
-  int condfalse, escape;
+  int condfalse, escape, valreg;
   luaX_next(ls);  /* skip 'if' */
-  condfalse = cond(ls);
-  branch(ls, reg);  /* 'then' part */
+  condfalse = condvalue(ls, &valreg);
+  if (ls->t.token == '{')  /* 'then' part */
+    block(ls, reg);
+  else
+    arrowbranch(ls, reg, valreg);
   escape = luaK_jump(fs);
   luaK_fixline(fs, ls->blockline);  /* jump "belongs" to the branch */
   luaK_patchtohere(fs, condfalse);
-  if (testnext(ls, TK_ELSE))
-    branch(ls, reg);  /* 'else' part */
-  else if (testnext(ls, TK_ARROW)) {  /* if c => a => b */
-    expdesc e;
-    expr(ls, &e);
-    store_value(ls, reg, &e);
+  if (testnext(ls, TK_ELSE)) {  /* 'else' part */
+    if (ls->t.token == '{')
+      block(ls, reg);
+    else
+      arrowbranch(ls, reg, -1);
   }
+  else if (ls->t.token == TK_ARROW)  /* if c => a => b */
+    arrowbranch(ls, reg, -1);
   else {
     expdesc e;
     init_exp(&e, VVOID, 0);
@@ -2494,27 +2540,14 @@ static int ifsstat (LexState *ls, expdesc *v) {
   checknext(ls, '{');
   while (ls->t.token != '}') {
     if (testnext(ls, TK_ELSE)) {
-      checknext(ls, TK_ARROW);
-      if (ls->t.token == '{')
-        block(ls, reg);
-      else {
-        expdesc e;
-        expr(ls, &e);
-        store_value(ls, reg, &e);
-      }
+      arrowbranch(ls, reg, -1);
       haselse = 1;
       break;
     }
     else {
-      int condfalse = cond(ls);
-      checknext(ls, TK_ARROW);
-      if (ls->t.token == '{')
-        block(ls, reg);
-      else {
-        expdesc e;
-        expr(ls, &e);
-        store_value(ls, reg, &e);
-      }
+      int valreg;
+      int condfalse = condvalue(ls, &valreg);
+      arrowbranch(ls, reg, valreg);
       luaK_concat(fs, &escapelist, luaK_jump(fs));
       luaK_fixline(fs, ls->blockline);  /* jump "belongs" to the branch */
       luaK_patchtohere(fs, condfalse);
@@ -2536,21 +2569,36 @@ static int ifsstat (LexState *ls, expdesc *v) {
 ** Branch of a 'match': '{' block '}', an expression, or a lambda
 ** called with the head (in register 'head').
 */
+/* code the call 'f(head)' ('f(true)' when 'head' is -1) */
 static void callhead (LexState *ls, expdesc *f, int head) {
   FuncState *fs = ls->fs;
   int base;
   luaK_exp2nextreg(fs, f);
   base = f->u.info;
   luaK_reserveregs(fs, 1);
-  movereg(fs, base + 1, head);
+  if (head >= 0)
+    movereg(fs, base + 1, head);
+  else {
+    expdesc t;
+    init_exp(&t, VTRUE, 0);
+    storereg(fs, base + 1, &t);
+  }
   init_exp(f, VCALL, luaK_codeABC(fs, OP_CALL, base, 2, 2));
   fs->freereg = cast_byte(base + 1);
 }
 
 
+/*
+** Branch of a 'match': a block, an expression, or a lambda called with
+** 'head' (the head of the match, or the result of a lambda case, which
+** may be a temporary register above the locals).
+*/
 static void matchbranch (LexState *ls, int reg, int head) {
-  if (ls->t.token == '{')
+  FuncState *fs = ls->fs;
+  if (ls->t.token == '{') {
+    fs->freereg = cast_byte(luaY_nvarstack(fs));  /* drop temporaries */
     block(ls, reg);
+  }
   else {
     expdesc e;
     int line = ls->linenumber;
@@ -2558,10 +2606,13 @@ static void matchbranch (LexState *ls, int reg, int head) {
       lambda(ls, &e, line);
       callhead(ls, &e, head);
     }
-    else
+    else {
+      fs->freereg = cast_byte(luaY_nvarstack(fs));
       expr(ls, &e);
+    }
     store_value(ls, reg, &e);
     ls->blockline = ls->lastline;
+    fs->freereg = cast_byte(luaY_nvarstack(fs));
   }
 }
 
@@ -2599,22 +2650,29 @@ static int matchstat (LexState *ls, expdesc *v) {
     else {
       expdesc c;
       int condfalse;
+      int valreg = reg;  /* value given to a lambda branch */
       int cline = ls->linenumber;
-      if (testnext(ls, '\\')) {  /* lambda case */
+      if (testnext(ls, '\\')) {  /* lambda case: its result is the value */
+        expdesc cc;
         lambda(ls, &c, cline);
         callhead(ls, &c, reg);
+        valreg = luaK_exp2anyreg(fs, &c);
+        cc = c;
+        luaK_goiftrue(fs, &cc);  /* (may free the register) */
+        if (fs->freereg == valreg)
+          luaK_reserveregs(fs, 1);  /* keep it for the branch */
+        condfalse = cc.f;
       }
       else {  /* 'head ?? case' */
         expdesc hc;
         expr(ls, &c);
         init_exp(&hc, VNONRELOC, reg);
         opcall(ls, &hc, &c, getatmop(TK_IS), cline);
-        c = hc;
+        luaK_goiftrue(fs, &hc);
+        condfalse = hc.f;
       }
-      luaK_goiftrue(fs, &c);
-      condfalse = c.f;
       checknext(ls, TK_ARROW);
-      matchbranch(ls, reg, reg);
+      matchbranch(ls, reg, valreg);
       luaK_concat(fs, &escapelist, luaK_jump(fs));
       luaK_fixline(fs, ls->blockline);  /* jump "belongs" to the branch */
       luaK_patchtohere(fs, condfalse);
@@ -2628,6 +2686,35 @@ static int matchstat (LexState *ls, expdesc *v) {
   check_match(ls, '}', '{', line);
   luaK_patchtohere(fs, escapelist);
   leaveblock(fs);
+  value_result(ls, reg, v);
+  return 1;
+}
+
+
+/*
+** test -> TEST '{' block '}': the block runs only when 'atmos.test' is
+** true (nil otherwise).
+*/
+static int teststat (LexState *ls, expdesc *v) {
+  FuncState *fs = ls->fs;
+  int reg = luaY_nvarstack(fs);  /* register for the value */
+  expdesc c, key, e;
+  int condfalse, escape;
+  luaX_next(ls);  /* skip 'test' */
+  buildvar(ls, luaX_newstring(ls, "atmos", 5), &c);
+  luaK_exp2anyregup(fs, &c);
+  codestring(&key, luaX_newstring(ls, "test", 4));
+  luaK_indexed(fs, &c, &key);
+  luaK_goiftrue(fs, &c);
+  condfalse = c.f;
+  check(ls, '{');
+  block(ls, reg);
+  escape = luaK_jump(fs);
+  luaK_fixline(fs, ls->blockline);
+  luaK_patchtohere(fs, condfalse);
+  init_exp(&e, VVOID, 0);
+  store_value(ls, reg, &e);  /* not testing: nil */
+  luaK_patchtohere(fs, escape);
   value_result(ls, reg, v);
   return 1;
 }
@@ -2790,12 +2877,47 @@ static int loopstat (LexState *ls, expdesc *v) {
     }
     else {
       expdesc e;
-      int n;
+      int n = 0;
+      int numeric = 0;
       checknext(ls, TK_IN);
       line = ls->linenumber;
-      n = exprlist(ls, &e);
-      if (nnames == 1 && (n == 2 || n == 3)) {
-        /* numeric loop */
+      if (nnames == 1 && ls->t.token == '(') {  /* maybe a numeric range */
+        n = parenlist(ls, &e);
+        if (n == 2 || n == 3)
+          numeric = 1;
+        else {  /* one value or a tuple of 'n' values: iterate them */
+          expdesc f;
+          if (n == 1) {  /* a single parenthesized value: whole expression */
+            suffixloop(ls, &e, 0);
+            singlepipes(ls, &e);
+            binloop(ls, &e);
+            doublepipes(ls, &e, 1);
+          }
+          luaK_exp2nextreg(fs, &e);  /* values at 'base'.. */
+          buildvar(ls, luaX_newstring(ls, "loop.iter", 9), &f);
+          luaK_exp2nextreg(fs, &f);  /* iterator function above them */
+          rotatecall(fs, base, n, 1);  /* function first */
+          init_exp(&e, VCALL, luaK_codeABC(fs, OP_CALL, base, n + 1, 0));
+        }
+      }
+      else {  /* iterate the values of the expression: iter(e...) */
+        expdesc f;
+        int nparams;
+        buildvar(ls, luaX_newstring(ls, "loop.iter", 9), &f);
+        luaK_exp2nextreg(fs, &f);  /* iterator function at 'base' */
+        n = exprlist(ls, &e);
+        if (hasmultret(e.k)) {
+          luaK_setmultret(fs, &e);
+          nparams = LUA_MULTRET;
+        }
+        else {
+          luaK_exp2nextreg(fs, &e);
+          nparams = fs->freereg - (base + 1);
+        }
+        init_exp(&e, VCALL, luaK_codeABC(fs, OP_CALL, base, nparams + 1, 0));
+      }
+      luaK_fixline(fs, line);
+      if (numeric) {
         luaK_exp2nextreg(fs, &e);
         if (n == 2) {  /* default step = 1 */
           luaK_int(fs, fs->freereg, 1);
@@ -2803,8 +2925,9 @@ static int loopstat (LexState *ls, expdesc *v) {
         }
         fornum(ls, names[0], base, line);
       }
-      else {  /* generic loop */
-        adjust_assign(ls, 4, n, &e);
+      else {  /* generic loop over the four values of the iterator call */
+        fs->freereg = cast_byte(base + 1);
+        adjust_assign(ls, 4, 1, &e);
         forlist(ls, names, nnames, base, line);
       }
     }
@@ -3029,7 +3152,7 @@ static int statement (LexState *ls, expdesc *v) {
     case TK_AWAIT:
     case TK_EMIT: case TK_SPAWN: case TK_TOGGLE: case TK_PAR:
     case TK_WATCHING: case TK_THREAD: case TK_TASK: case TK_TASKS:
-    case TK_TEST: case TK_PUB: {
+    case TK_PUB: {
       luaX_syntaxerror(ls, "statement not implemented");
       break;
     }

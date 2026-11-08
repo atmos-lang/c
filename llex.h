@@ -71,6 +71,7 @@ typedef struct LexState {
   int linenumber;  /* input line counter */
   int lastline;  /* line of last token 'consumed' */
   int sep;  /* separator counter: incremented by newlines and ';' */
+  int tokensep;  /* 'sep' at the start of the token being read */
   int lastsep;  /* 'sep' of last token 'consumed' */
   int blockline;  /* line of the last statement of the last block */
   Token t;  /* current token */

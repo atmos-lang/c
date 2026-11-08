@@ -555,12 +555,6 @@ R.T("exec.lua:689 ppp 5", """
 [1, 2]
 [1, 2, 3]
 """)
-R.T("exec.lua:706 expr 2", """
-        X.print(tovector(1) ++ tovector(2))
-    """,
-  """
-#{0, 0, 1}
-""")
 ;; TODO(tst2atm): unrecognized case 'print(10, nil, false, 2+2)'
 R.T("exec.lua:733 func 1", """
         val f = func (x, y) {
