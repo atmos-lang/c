@@ -1012,15 +1012,15 @@ R.T("exec.lua:1246 loop 6", """
 2	2
 3	3
 """)
-;; R.T("exec.lua:1255 loop 7", """
-;;         loop k,v in [x=1,y=2] {
-;;             print(k,v)
-;;         }
-;;     """,
-;;   """
-;; x	1
-;; y	2
-;; """)
+R.T("exec.lua:1255 loop 7", """
+        loop k,v in [x=1,y=2] {
+            print(k,v)
+        }
+    """,
+  """
+x	1
+y	2
+""")
 R.T("exec.lua:1264 iter 1: func", """
         var i = 3
         func f () {
@@ -2023,14 +2023,14 @@ R.T("exec.lua:2363 await :any ts late", """
 
 ;; ---- AWAIT / CLOCK
 
-;; R.T("exec.lua:2384 await 1", """
-;;         spawn {
-;;             await <:X until
-;;                 (x+10)>
-;;         }
-;;         emit :X [10]
-;;     """,
-;;   R.E("", "attempt to perform arithmetic on a nil value (global 'x')"))
+R.T("exec.lua:2384 await 1", """
+        spawn {
+            await <:X until
+                (x+10)>
+        }
+        emit :X [10]
+    """,
+  R.E("", "attempt to perform arithmetic on a nil value (global 'x')"))
 R.T("exec.lua:2401 await 2: clock", """
         spawn {
             await(10s100ms)
@@ -2083,11 +2083,11 @@ ok
 
 ;; R.T("exec.lua:2449 toggle 1", "toggle (1)(true) ; nil",
 ;;   R.E("", "invalid toggle : expected task"))
-;; R.T("exec.lua:2459 toggle 2", """
-;;         pin f = xtask(task () {})
-;;         toggle f() ; nil
-;;     """,
-;;   R.E("", "invalid toggle : expected bool argument"))
+R.T("exec.lua:2459 toggle 2", """
+        pin f = xtask(task () {})
+        toggle f() ; nil
+    """,
+  R.E("", "invalid toggle : expected bool argument"))
 R.T("exec.lua:2472 toggle 3", """
         val T = task () {
             print :1
