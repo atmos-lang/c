@@ -1,0 +1,2 @@
+val Z = require "z"
+print(Z.f(10))

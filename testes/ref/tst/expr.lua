@@ -1,0 +1,1714 @@
+local X = require "atmos.x"
+require "atmos.lang.exec"
+require "atmos.lang.parser"
+require "atmos.lang.tosource"
+
+-- PRIM
+
+do
+    local src = " a "
+    print("Testing...", src)
+    init()
+    lexer_init("anon", src)
+    lexer_next()
+    local e = parser()
+    assert(check('<eof>'))
+    assert(X.tostring(e) == "{tag=acc, tk={lin=1, sep=1, str=a, tag=id}}")
+
+    local src = "1.5"
+    print("Testing...", src)
+    init()
+    lexer_init("anon", src)
+    lexer_next()
+    local e = parser()
+    assert(check('<eof>'))
+    assert(X.tostring(e) == "{tag=num, tk={lin=1, sep=1, str=1.5, tag=num}}")
+
+    local src = "["
+    print("Testing...", src)
+    init()
+    lexer_init("anon", src)
+    lexer_next()
+    local ok, msg = pcall(parser)
+    assertx(msg, "anon : line 1 : near '<eof>' : expected expression")
+
+    local src = ""
+    print("Testing...", "eof")
+    init()
+    lexer_init("anon", src)
+    lexer_next()
+    local ok, msg = pcall(parser)
+    assert(not ok and msg=="anon : line 1 : near '<eof>' : expected expression")
+
+    local src = [[
+
+    ]]
+    print("Testing...", "blanks")
+    init()
+    lexer_init("anon", src)
+    lexer_next()
+    local ok, msg = pcall(parser)
+    assert(not ok and msg=="anon : line 2 : near '<eof>' : expected expression")
+
+    local src = " ( a ) "
+    print("Testing...", src)
+    init()
+    lexer_init("anon", src)
+    lexer_next()
+    local e = parser()
+    assert(check('<eof>'))
+    assertx(X.tostring(e), "{e={tag=acc, tk={lin=1, sep=1, str=a, tag=id}}, tag=parens, tk={lin=1, sep=1, str=(, tag=sym}}")
+
+    local src = " ( a "
+    print("Testing...", src)
+    init()
+    lexer_init("anon", src)
+    lexer_next()
+    local ok, msg = pcall(parser)
+    assert(not ok and msg=="anon : line 1 : near '<eof>' : expected ')'")
+
+    local src = "nil"
+    print("Testing...", src)
+    init()
+    lexer_init("anon", src)
+    lexer_next()
+    local e = parser()
+    assert(check('<eof>'))
+    assert(X.tostring(e) == "{tag=nil, tk={lin=1, sep=1, str=nil, tag=key}}")
+
+    local src = "false true"
+    print("Testing...", src)
+    init()
+    lexer_init("anon", src)
+    lexer_next()
+    local e1 = parser()
+    assert(X.tostring(e1) == "{tag=bool, tk={lin=1, sep=1, str=false, tag=key}}")
+    local e2 = parser()
+    assert(check('<eof>'))
+    assert(X.tostring(e2) == "{tag=bool, tk={lin=1, sep=1, str=true, tag=key}}")
+end
+
+print '--- STRING / NATIVE ---'
+
+do
+    local src = ":x\n:1._"
+    print("Testing...", src)
+    init()
+    lexer_init("anon", src)
+    lexer_next()
+    local e1 = parser()
+    --assertx(X.tostring(e1), "{es={{tag=tag, tk={lin=2, sep=1, str=:1._, tag=tag}}}, f={tag=tag, tk={lin=1, sep=1, str=:x, tag=tag}}, tag=call}")
+    assertx(X.tostring(e1), "{tag=tag, tk={lin=1, sep=1, str=:x, tag=tag}}")
+    local e2 = parser()
+    assert(check('<eof>'))
+    assertx(X.tostring(e2), "{tag=tag, tk={lin=2, sep=2, str=:1._, tag=tag}}")
+
+    local src = "'xxx'\n'''1\n2\n'''\n' s '"
+    print("Testing...", "string 1")
+    init()
+    lexer_init("anon", src)
+    lexer_next()
+    local e1 = parser()
+    assertx(X.tostring(e1), "{tag=str, tk={chr=', lin=1, multi=false, sep=1, str=xxx, tag=str}}")
+    local e2 = parser()
+    assertx(X.tostring(e2), "{tag=str, tk={chr=', lin=2, multi=true, sep=2, str=1\n2\n, tag=str}}")
+    local e3 = parser()
+    assertx(X.tostring(e3), "{tag=str, tk={chr=', lin=5, multi=false, sep=5, str= s , tag=str}}")
+
+    local src = "```f()```"
+    print("Testing...", "native 1")
+    init()
+    lexer_init("anon", src)
+    lexer_next()
+    local e = parser()
+    assertx(X.tostring(e), "{tag=nat, tk={lin=1, sep=1, str=f(), tag=nat}}")
+
+    local src = "`f`()"
+    print("Testing...", "native 2")
+    init()
+    lexer_init("anon", src)
+    lexer_next()
+    local e = parser()
+    assertx(tosource(e), "`f`()")
+
+    local src = "f`v`"
+    print("Testing...", "native 3")
+    init()
+    lexer_init("anon", src)
+    lexer_next()
+    local e = parser()
+    assertx(tosource(e), "f(`v`)")
+end
+
+-- TABLE / INDEX
+do
+    local src = "[a]"
+    print("Testing...", src)
+    init()
+    lexer_init("anon", src)
+    lexer_next()
+    local e = parser()
+    assert(check('<eof>'))
+    assertx(X.tostring(e), "{es={{k={tag=num, tk={str=1, tag=num}}, v={tag=acc, tk={lin=1, sep=1, str=a, tag=id}}}}, tag=table}")
+
+    local src = "[:x=10]"
+    print("Testing...", src)
+    init()
+    lexer_init("anon", src)
+    lexer_next()
+    local ok, msg = pcall(parser)
+    assertx(msg, "anon : line 1 : near '=' : expected ']'")
+
+    local src = "[ v1, k2=v2, @(:k3)=v3, v4 ]"
+    print("Testing...", src)
+    init()
+    lexer_init("anon", src)
+    lexer_next()
+    local e = parser()
+    assert(check('<eof>'))
+    assertx(tosource(e), '[@(1)=v1, @(:k2)=v2, @(:k3)=v3, @(2)=v4]')
+
+    local src = "[ ]"
+    print("Testing...", src)
+    init()
+    lexer_init("anon", src)
+    lexer_next()
+    local e = parser()
+    assert(check('<eof>'))
+    assertx(tosource(e), '[]')
+
+    local src = "[ [], k2=[1,2,3], @([1])=v3 ]"
+    print("Testing...", src)
+    init()
+    lexer_init("anon", src)
+    lexer_next()
+    local e = parser()
+    assert(check('<eof>'))
+    assertx(tosource(e), '[@(1)=[], @(:k2)=[@(1)=1, @(2)=2, @(3)=3], @([@(1)=1])=v3]')
+
+    local src = "[1,]"
+    print("Testing...", src)
+    init()
+    lexer_init("anon", src)
+    lexer_next()
+    local e = parser()
+    assert(check('<eof>'))
+    assert(tosource(e) == '[@(1)=1]')
+
+    local src = "[f()]"
+    print("Testing...", src)
+    init()
+    lexer_init("anon", src)
+    lexer_next()
+    local e = parser()
+    assert(check('<eof>'))
+    assertx(tosource(e), '[@(1)=f()]')
+
+    -- bare computed keys @5 / @x (mirror index t@5 / t@x); == parens form
+    for _, p in ipairs{ {"[@5=v]","[@(5)=v]"}, {"[@x=v]","[@(x)=v]"} } do
+        print("Testing...", p[1])
+        init()
+        lexer_init("anon", p[1])
+        lexer_next()
+        local a = parser()
+        assert(check('<eof>'))
+        init()
+        lexer_init("anon", p[2])
+        lexer_next()
+        local b = parser()
+        assert(check('<eof>'))
+        assert(tosource(a) == tosource(b))
+    end
+
+    -- bare computed key accepts NUM, ID, or tag (string needs parens)
+    local src = "[@:x=v]"
+    print("Testing...", src)
+    init()
+    lexer_init("anon", src)
+    lexer_next()
+    local e = parser()
+    assert(check('<eof>'))
+    assertx(tosource(e), "[@(:x)=v]")
+
+    local src = "[["
+    print("Testing...", src)
+    init()
+    lexer_init("anon", src)
+    lexer_next()
+    local ok, msg = pcall(parser)
+    assertx(msg, "anon : line 1 : near '<eof>' : expected expression")
+    --assertx(msg, "anon : line 1 : near '{' : expected expression")
+
+    local src = "[(["
+    print("Testing...", src)
+    init()
+    lexer_init("anon", src)
+    lexer_next()
+    local ok, msg = pcall(parser)
+    assertx(msg, "anon : line 1 : near '<eof>' : expected expression")
+
+    local src = "[("
+    print("Testing...", src)
+    init()
+    lexer_init("anon", src)
+    lexer_next()
+    local ok, msg = pcall(parser)
+    assert(not ok and msg=="anon : line 1 : near '<eof>' : expected expression")
+
+    local src = "[(1,2]"
+    print("Testing...", src)
+    init()
+    lexer_init("anon", src)
+    lexer_next()
+    local ok, msg = pcall(parser)
+    assertx(msg, "anon : line 1 : near ']' : expected ')'")
+
+    local src = "x@1"
+    print("Testing...", src)
+    init()
+    lexer_init("anon", src)
+    lexer_next()
+    local e = parser()
+    assert(check('<eof>'))
+    assert(X.tostring(e) == "{idx={tag=num, tk={lin=1, sep=1, str=1, tag=num}}, t={tag=acc, tk={lin=1, sep=1, str=x, tag=id}}, tag=index}")
+
+    -- `@` chains across a newline like `.`/`::` (parser_2_suf exemption)
+    local src = "t\n@1"
+    print("Testing...", src)
+    init()
+    lexer_init("anon", src)
+    lexer_next()
+    local e = parser()
+    assert(check('<eof>'))
+    assert(tosource(e) == 't@(1)')
+
+    local src = "x.a"
+    print("Testing...", src)
+    init()
+    lexer_init("anon", src)
+    lexer_next()
+    local e = parser()
+    assert(check('<eof>'))
+    assert(tosource(e) == 'x@(:a)')
+
+    local src = "t@(1"
+    print("Testing...", src)
+    init()
+    lexer_init("anon", src)
+    lexer_next()
+    local ok, msg = pcall(parser)
+    assert(not ok and msg=="anon : line 1 : near '<eof>' : expected ')'")
+
+--[=[
+    -- tip markers `@#` / `@+` require a variable receiver
+    for _, src in ipairs{ "t.x@#", "f()@#", "t.x@+", "f()@+" } do
+        print("Testing...", src)
+        init()
+        lexer_init("anon", src)
+        lexer_next()
+        local ok, msg = pcall(parser)
+        assert(not ok and msg=="anon : line 1 : near '@' : invalid tip index : expected variable prefix")
+    end
+]=]
+
+    -- bare index must be a name or number (keyword rejected)
+    local src = "t@true"
+    print("Testing...", src)
+    init()
+    lexer_init("anon", src)
+    lexer_next()
+    local ok, msg = pcall(parser)
+    assert(not ok and msg=="anon : line 1 : near 'true' : expected name, number, or '('")
+
+    -- tip markers: t@# (last) == t@(#t) ; t@+ (next) == t@(#t+1);
+    -- any prefix is accepted, expanding twice (t.x@# == t.x@(#t.x))
+    for _, p in ipairs{ {"t@#","t@(#t)"}, {"t@+","t@(#t+1)"}, {"t.x@#","t.x@(#t.x)"}, {"t.x@+","t.x@(#t.x+1)"}, {"f()@#","f()@(#f())"}, {"f()@+","f()@(#f()+1)"} } do
+        print("Testing...", p[1])
+        init()
+        lexer_init("anon", p[1])
+        lexer_next()
+        local a = parser()
+        assert(check('<eof>'))
+        init()
+        lexer_init("anon", p[2])
+        lexer_next()
+        local b = parser()
+        assert(check('<eof>'))
+        assert(tosource(a) == tosource(b))
+    end
+
+    local src = "x . ."
+    print("Testing...", src)
+    init()
+    lexer_init("anon", src)
+    lexer_next()
+    local ok, msg = pcall(parser)
+    assert(not ok and msg=="anon : line 1 : near '.' : expected <id>")
+
+    local src = "x . 2"
+    print("Testing...", src)
+    init()
+    lexer_init("anon", src)
+    lexer_next()
+    local ok, msg = pcall(parser)
+    assert(not ok and msg=="anon : line 1 : near '2' : expected <id>")
+
+    local src = "x@(1)().a"
+    print("Testing...", src)
+    init()
+    lexer_init("anon", src)
+    lexer_next()
+    local e = parser()
+    assert(check('<eof>'))
+    assert(tosource(e) == 'x@(1)()@(:a)')
+
+    local src = "#t"
+    print("Testing...", src)
+    init()
+    lexer_init("anon", src)
+    lexer_next()
+    local e = parser()
+    assert(check('<eof>'))
+    assert(X.tostring(e) == "{e={tag=acc, tk={lin=1, sep=1, str=t, tag=id}}, op={lin=1, sep=1, str=#, tag=op}, tag=uno}")
+
+    local src = "1@(1)"
+    print("Testing...", src)
+    init()
+    lexer_init("anon", src)
+    lexer_next()
+    local e = parser()
+    assert(not check('<eof>'))
+    assert(tosource(e) == "1")
+    --local ok, msg = pcall(parser)
+    --assert(not ok and msg=="anon : line 1 : near '[' : index error : expected prefix expression")
+
+    local src = "nil.1"
+    print("Testing...", src)
+    init()
+    lexer_init("anon", src)
+    lexer_next()
+    local e = parser()
+    assert(not check('<eof>'))
+    assertx(tosource(e), "nil")
+    --local ok, msg = pcall(parser)
+    --assert(not ok and msg=="anon : line 1 : near '.' : field error : expected prefix expression")
+
+    local src = "-x@0"
+    print("Testing...", src)
+    init()
+    lexer_init("anon", src)
+    lexer_next()
+    local e = parser()
+    assert(check('<eof>'))
+    assert(tosource(e) == '(-x@(0))')
+
+    local src = ":X []"
+    print("Testing...", src)
+    init()
+    lexer_init("anon", src)
+    lexer_next()
+    local e = parser()
+    assert(check('<eof>'))
+    assertx(tosource(e), 'atm_tag_do(:X, [])')
+
+    local src = ":X [] ?? 10"
+    print("Testing...", src)
+    init()
+    lexer_init("anon", src)
+    lexer_next()
+    local e = parser()
+    assert(check('<eof>'))
+    assertx(tosource(e), '(atm_tag_do(:X, []) ?? 10)')
+
+    local src = ":X (x)"
+    print("Testing...", src)
+    init()
+    lexer_init("anon", src)
+    lexer_next()
+    local e = parser()
+    assert(check('<eof>'))
+    assertx(tosource(e), 'atm_tag_do(:X, (x))')
+end
+
+-- UNO
+
+do
+    local src = "#v"
+    print("Testing...", src)
+    init()
+    lexer_init("anon", src)
+    lexer_next()
+    local e = parser()
+    assert(check('<eof>'))
+    assert(X.tostring(e) == "{e={tag=acc, tk={lin=1, sep=1, str=v, tag=id}}, op={lin=1, sep=1, str=#, tag=op}, tag=uno}")
+
+    local src = "! - x"
+    print("Testing...", src)
+    init()
+    lexer_init("anon", src)
+    lexer_next()
+    local e = parser()
+    assert(check('<eof>'))
+    assert(tosource(e) == "(!(-x))")
+end
+
+-- BIN
+
+do
+    local src = "a + 10"
+    print("Testing...", src)
+    init()
+    lexer_init("anon", src)
+    lexer_next()
+    local e = parser()
+    assert(check('<eof>'))
+    assert(X.tostring(e) == "{e1={tag=acc, tk={lin=1, sep=1, str=a, tag=id}}, e2={tag=num, tk={lin=1, sep=1, str=10, tag=num}}, op={lin=1, sep=1, str=+, tag=op}, tag=bin}")
+
+    local src = "a \n + 10"
+    print("Testing...", src)
+    init()
+    lexer_init("anon", src)
+    lexer_next()
+    local e = parser()
+    assertx(tosource(e), "(a + 10)")
+    --local ok, msg = pcall(parser)
+    --assertx(msg, "anon : line 2 : near '+' : expected expression")
+
+    local src = "2 + 3 - 1"
+    print("Testing...", src)
+    init()
+    lexer_init("anon", src)
+    lexer_next()
+    local ok, msg = pcall(parser)
+    assert(not ok and msg=="anon : line 1 : near '-' : operation error : use parentheses to disambiguate")
+
+    local src = "2 * (a - 1)"
+    print("Testing...", src)
+    init()
+    lexer_init("anon", src)
+    lexer_next()
+    local e = parser()
+    assert(check('<eof>'))
+    assertx(tosource(e), "(2 * (a - 1))")
+
+    local src = "2 / (a // 1)"
+    print("Testing...", src)
+    init()
+    lexer_init("anon", src)
+    lexer_next()
+    local e = parser()
+    assert(check('<eof>'))
+    assertx(tosource(e), "(2 / (a // 1))")
+
+    local src = "2 == -1"
+    print("Testing...", src)
+    init()
+    lexer_init("anon", src)
+    lexer_next()
+    local e = parser()
+    assert(check('<eof>'))
+    assert(tosource(e) == "(2 == (-1))")
+
+    local src = "x || y"
+    print("Testing...", src)
+    init()
+    lexer_init("anon", src)
+    lexer_next()
+    local e = parser()
+    assert(check('<eof>'))
+    assert(tosource(e) == "(x || y)")
+
+    local src = "- -1"
+    print("Testing...", src)
+    init()
+    lexer_init("anon", src)
+    lexer_next()
+    local e = parser()
+    assert(check('<eof>'))
+    assert(tosource(e) == "(-(-1))")
+
+    local src = "x++y++z"
+    print("Testing...", src)
+    init()
+    lexer_init("anon", src)
+    lexer_next()
+    local e = parser()
+    assert(check('<eof>'))
+    assertx(tosource(e), "((x ++ y) ++ z)")
+
+    local src = "(10+)"
+    print("Testing...", src)
+    init()
+    lexer_init("anon", src)
+    lexer_next()
+    local ok, msg = pcall(parser)
+    assert(not ok and msg=="anon : line 1 : near ')' : expected expression")
+
+    local src = "(x===y) && (x=!=y)"
+    print("Testing...", src)
+    init()
+    lexer_init("anon", src)
+    lexer_next()
+    local e = parser()
+    assert(check('<eof>'))
+    assertx(tosource(e), "((x === y) && (x =!= y))")
+
+    local src = "2 ** 3"
+    print("Testing...", src)
+    init()
+    lexer_init("anon", src)
+    lexer_next()
+    local e = parser()
+    assert(check('<eof>'))
+    assertx(tosource(e), "(2 ** 3)")
+
+    local src = "2 ** 3 + 1"
+    print("Testing...", src)
+    init()
+    lexer_init("anon", src)
+    lexer_next()
+    local ok, msg = pcall(parser)
+    assert(not ok and msg ==
+        "anon : line 1 : near '+' : " ..
+        "operation error : " ..
+        "use parentheses to disambiguate")
+
+    local src = "2 ** 3 ** 2"
+    print("Testing...", src)
+    init()
+    lexer_init("anon", src)
+    lexer_next()
+    local e = parser()
+    assert(check('<eof>'))
+    assertx(tosource(e), "((2 ** 3) ** 2)")
+end
+
+print '--- IF / IFS ---'
+
+do
+    local src = "if x => 10 => 20"
+    print("Testing...", src)
+    init()
+    lexer_init("anon", src)
+    lexer_next()
+    local e = parser()
+    assert(check('<eof>'))
+    --assertx(tosource(e), "(x and 10) or 20")
+    assertx(trim(tosource(e)), trim [[
+        ifs {
+            x => {
+                10
+            }
+            else => {
+                20
+            }
+        }
+    ]])
+
+    local src = "ifs { x => 10 ; y => nil ; else => 20 }"
+    print("Testing...", src)
+    init()
+    lexer_init("anon", src)
+    lexer_next()
+    local e = parser()
+    assert(check('<eof>'))
+    --assertx(tosource(e), "(x and 10) or ((y and nil) or ((true and 20) or (nil)))")
+    assertx(trim(tosource(e)), trim [[
+        ifs {
+            x => {
+                10
+            }
+            y => {
+                nil
+            }
+            else => {
+                20
+            }
+        }
+    ]])
+end
+
+print '--- IS / IN ---'
+
+do
+    local src = "a ?? b"
+    print("Testing...", src)
+    init()
+    lexer_init("anon", src)
+    lexer_next()
+    local e = parser()
+    assert(check('<eof>'))
+    assertx(tosource(e), "(a ?? b)")
+
+    local src = "a ?> b"
+    print("Testing...", src)
+    init()
+    lexer_init("anon", src)
+    lexer_next()
+    local e = parser()
+    assert(check('<eof>'))
+    assertx(tosource(e), "(a ?> b)")
+
+    local src = "(a !? b) || (a ?> b) || (a !> b)"
+    print("Testing...", src)
+    init()
+    lexer_init("anon", src)
+    lexer_next()
+    local e = parser()
+    assert(check('<eof>'))
+    assertx(tosource(e), "(((a !? b) || (a ?> b)) || (a !> b))")
+end
+
+-- CALL / FUNC / RETURN / THROW
+
+do
+    local src = "f(x,y)"
+    print("Testing...", src)
+    init()
+    lexer_init("anon", src)
+    lexer_next()
+    local e = parser()
+    assert(check('<eof>'))
+    assert(X.tostring(e) == "{es={{tag=acc, tk={lin=1, sep=1, str=x, tag=id}}, {tag=acc, tk={lin=1, sep=1, str=y, tag=id}}}, f={tag=acc, tk={lin=1, sep=1, str=f, tag=id}}, tag=call}")
+    assert(tosource(e) == "f(x, y)")
+
+    local src = "f(["
+    print("Testing...", src)
+    init()
+    lexer_init("anon", src)
+    lexer_next()
+    local ok, msg = pcall(parser)
+    assertx(msg, "anon : line 1 : near '<eof>' : expected expression")
+
+    local src = "f(10"
+    print("Testing...", src)
+    init()
+    lexer_init("anon", src)
+    lexer_next()
+    local ok, msg = pcall(parser)
+    assert(not ok and msg=="anon : line 1 : near '<eof>' : expected ')'")
+
+    local src = [[
+        (func (x,y) {
+            (x + y)
+        })(1,2)
+    ]]
+    print("Testing...", "func 1")
+    init()
+    lexer_init("anon", src)
+    lexer_next()
+    local e = parser()
+    assert(check('<eof>'))
+    assertx(tosource(e), trim [[
+        (func (x, y) {
+            (x + y)
+        })(1, 2)
+    ]])
+
+    local src = [[
+        f()()
+    ]]
+    print("Testing...", "func 1")
+    init()
+    lexer_init("anon", src)
+    lexer_next()
+    local e = parser()
+    assert(check('<eof>'))
+    assert(X.tostring(e) == "{es={}, f={es={}, f={tag=acc, tk={lin=1, sep=1, str=f, tag=id}}, tag=call}, tag=call}")
+
+    local src = "f;()"
+    print("Testing...", src)
+    init()
+    lexer_init("anon", src)
+    lexer_next()
+    local e = parser()
+    assert(check('('))
+    assertx(X.tostring(e), "{tag=acc, tk={lin=1, sep=1, str=f, tag=id}}")
+
+    local src = "func (1) {}"
+    print("Testing...", src)
+    init()
+    lexer_init("anon", src)
+    lexer_next()
+    local ok, msg = pcall(parser)
+    assert(not ok and msg=="anon : line 1 : near '1' : expected <id>")
+
+    local src = "throw(:X)"
+    print("Testing...", src)
+    init()
+    lexer_init("anon", src)
+    lexer_next()
+    local e = parser()
+    assertx(X.tostring(e), "{es={{tag=tag, tk={lin=1, sep=1, str=:X, tag=tag}}}, f={tag=acc, tk={lin=1, sep=1, str=throw, tag=id}}, tag=call}")
+
+    local src = ":X -> throw"
+    print("Testing...", src)
+    init()
+    lexer_init("anon", src)
+    lexer_next()
+    local e = parser()
+    assertx(X.tostring(e), "{es={{tag=tag, tk={lin=1, sep=1, str=:X, tag=tag}}}, f={tag=acc, tk={lin=1, sep=1, str=throw, tag=id}}, tag=call}")
+
+    local src = ":X -> escape"
+    print("Testing...", src)
+    init()
+    lexer_init("anon", src)
+    lexer_next()
+    local e = parser()
+    assertx(X.tostring(e), "{es={{tag=tag, tk={lin=1, sep=1, str=:X, tag=tag}}}, f={tag=acc, tk={lin=1, sep=1, str=escape, tag=id}}, tag=call}")
+
+    local src = "func (it) {}"
+    print("Testing...", src)
+    init()
+    lexer_init("anon", src)
+    lexer_next()
+    local e = parser()
+    assertx(trim(tosource(e)), trim [[
+        func (it) {
+        }
+    ]])
+    --local ok, msg = pcall(parser_stmt)
+    --assert(not ok and msg=="anon : line 1 : near 'it' : expected <id>")
+
+    local src = "f '10' [20]"
+    print("Testing...", src)
+    init()
+    lexer_init("anon", src)
+    lexer_next()
+    local e = parser()
+    assertx(tosource(e), 'f("10")([@(1)=20])')
+    --check_err('[')
+    --assertx(tosource(e), 'f("10")')
+    --local _,msg = pcall(parser)
+    --assertx(msg, "anon : line 1 : near '{' : expected '<eof>'\n")
+
+    local src = "o::f"
+    print("Testing...", src)
+    init()
+    lexer_init("anon", src)
+    lexer_next()
+    --local e = parser()
+    --assert(check('<eof>'))
+    local _,msg = pcall(parser)
+    assertx(msg, "anon : line 1 : near '<eof>' : expected '('")
+    --assertx(tosource(e), 'o::f')
+    --warn(false, "met as expr")
+
+    local src = "(o+o)::f(10)"
+    print("Testing...", src)
+    init()
+    lexer_init("anon", src)
+    lexer_next()
+    local e = parser()
+    assertx(tosource(e), '(o + o)::f(10)')
+
+    local src = "o::f::g(10)"
+    print("Testing...", src)
+    init()
+    lexer_init("anon", src)
+    lexer_next()
+    --local e = parser()
+    --assertx(tosource(e), 'o::f::g(10)')
+    local _,msg = pcall(parser)
+    assertx(msg, "anon : line 1 : near '::' : expected '('")
+end
+
+print '--- FUNC / ... / dots ---'
+
+do
+    local src = "func (...) {}"
+    print("Testing...", src)
+    init()
+    lexer_init("anon", src)
+    lexer_next()
+    local e = parser()
+    assertx(trim(tosource(e)), trim [[
+        func (...) {
+        }
+    ]])
+
+    local src = "func (..., a) {}"
+    print("Testing...", src)
+    init()
+    lexer_init("anon", src)
+    lexer_next()
+    local ok, msg = pcall(parser)
+    assertx(msg, "anon : line 1 : near ',' : expected ')'")
+
+    local src = "func (a, ...) {}"
+    print("Testing...", src)
+    init()
+    lexer_init("anon", src)
+    lexer_next()
+    local e = parser()
+    assertx(trim(tosource(e)), trim [[
+        func (a, ...) {
+        }
+    ]])
+
+    local src = "..."
+    print("Testing...", src)
+    init()
+    lexer_init("anon", src)
+    lexer_next()
+    local e = parser()
+    assertx(tosource(e), "...")
+end
+
+print '--- LAMBDA ---'
+
+do
+    local src = "\\{it}"
+    print("Testing...", src)
+    init()
+    lexer_init("anon", src)
+    lexer_next()
+    local e = parser()
+    assertx(trim(tosource(e)), trim [[
+        func (it) {
+            it
+        }
+    ]])
+
+    local src = "\\x{}"
+    print("Testing...", src)
+    init()
+    lexer_init("anon", src)
+    lexer_next()
+    local e = parser()
+    assertx(trim(tosource(e)), trim [[
+        func (x) {
+        }
+    ]])
+
+    local src = "\\(){}"
+    print("Testing...", src)
+    init()
+    lexer_init("anon", src)
+    lexer_next()
+    local e = parser()
+    assertx(trim(tosource(e)), trim [[
+        func () {
+        }
+    ]])
+
+    local src = "\\(x,...){(x,...)}"
+    print("Testing...", src)
+    init()
+    lexer_init("anon", src)
+    lexer_next()
+    local e = parser()
+    assertx(trim(tosource(e)), trim [[
+        func (x, ...) {
+            (x, ...)
+        }
+    ]])
+
+    -- operator as function: binary
+    local src = "\\+"
+    print("Testing...", src)
+    init()
+    lexer_init("anon", src)
+    lexer_next()
+    local e = parser()
+    assertx(trim(tosource(e)), trim [[
+        func (a, b) {
+            (a + b)
+        }
+    ]])
+
+    local src = "\\==="
+    print("Testing...", src)
+    init()
+    lexer_init("anon", src)
+    lexer_next()
+    local e = parser()
+    assertx(trim(tosource(e)), trim [[
+        func (a, b) {
+            (a === b)
+        }
+    ]])
+
+    local src = "\\++"
+    print("Testing...", src)
+    init()
+    lexer_init("anon", src)
+    lexer_next()
+    local e = parser()
+    assertx(trim(tosource(e)), trim [[
+        func (a, b) {
+            (a ++ b)
+        }
+    ]])
+
+    -- operator as function: unary
+    local src = "\\#"
+    print("Testing...", src)
+    init()
+    lexer_init("anon", src)
+    lexer_next()
+    local e = parser()
+    assertx(trim(tosource(e)), trim [[
+        func (a) {
+            (#a)
+        }
+    ]])
+
+    local src = "\\!"
+    print("Testing...", src)
+    init()
+    lexer_init("anon", src)
+    lexer_next()
+    local e = parser()
+    assertx(trim(tosource(e)), trim [[
+        func (a) {
+            (!a)
+        }
+    ]])
+
+    -- invalid operator lambda
+    local src = "\\->"
+    print("Testing...", src)
+    init()
+    lexer_init("anon", src)
+    lexer_next()
+    local ok, msg = pcall(parser)
+    assertx(msg, "anon : line 1 : near '->' : lambda error : invalid operator")
+end
+
+print '--- CALL / METHOD / PIPE ---'
+
+do
+    local src = "10->f()"
+    print("Testing...", src)
+    init()
+    lexer_init("anon", src)
+    lexer_next()
+    local e = parser()
+    assert(check('<eof>'))
+    assertx(tosource(e), "f(10)")
+
+    local src = "10->f(20)"
+    print("Testing...", src)
+    init()
+    lexer_init("anon", src)
+    lexer_next()
+    local e = parser()
+    assert(check('<eof>'))
+    assertx(tosource(e), "f(10, 20)")
+
+    local src = "f() <- 10"
+    print("Testing...", src)
+    init()
+    lexer_init("anon", src)
+    lexer_next()
+    local e = parser()
+    assert(check('<eof>'))
+    assertx(tosource(e), "f(10)")
+
+    local src = "f<-10"
+    print("Testing...", src)
+    init()
+    lexer_init("anon", src)
+    lexer_next()
+    local e = parser()
+    assert(check('<eof>'))
+    assertx(tosource(e), "f(10)")
+
+    local src = "f(10)<-(20)"
+    print("Testing...", src)
+    init()
+    lexer_init("anon", src)
+    lexer_next()
+    local e = parser()
+    assert(check('<eof>'))
+    assertx(tosource(e), "f(10, (20))")
+
+    local src = "(10->f)<-20"
+    print("Testing...", src)
+    init()
+    lexer_init("anon", src)
+    lexer_next()
+    local e = parser()
+    assert(check('<eof>'))
+    assertx(tosource(e), "(f(10, 20))")
+
+    local src = "(func() {}) <- 20"
+    print("Testing...", src)
+    init()
+    lexer_init("anon", src)
+    lexer_next()
+    local e = parser()
+    assert(check('<eof>'))
+    assertx(trim(tosource(e)), trim [[
+        (func () {
+        })(20)
+    ]])
+
+    local src = "10->10"
+    print("Testing...", src)
+    init()
+    lexer_init("anon", src)
+    lexer_next()
+    local e = parser()
+    assert(check('<eof>'))
+    assertx(tosource(e), "10(10)")
+end
+
+print '--- WHERE / PIPE ---'
+
+do
+    local src = "x+y where { x=10 ; y=20 }"
+    print("Testing...", src)
+    init()
+    lexer_init("anon", src)
+    lexer_next()
+    local e = parser()
+    assert(check('<eof>'))
+    assertx(trim(tosource(e)), trim [[
+        func () {
+            val x = 10
+            val y = 20
+            (x + y)
+        }()
+    ]])
+
+    local src = "10-->f()"
+    print("Testing...", src)
+    init()
+    lexer_init("anon", src)
+    lexer_next()
+    local e = parser()
+    assert(check('<eof>'))
+    assertx(tosource(e), "f(10)")
+
+    local src = "10-->f-->g"
+    print("Testing...", src)
+    init()
+    lexer_init("anon", src)
+    lexer_next()
+    local e = parser()
+    assert(check('<eof>'))
+    assertx(tosource(e), "g(f(10))")
+
+    local src = "f<--10"
+    print("Testing...", src)
+    init()
+    lexer_init("anon", src)
+    lexer_next()
+    local e = parser()
+    assert(check('<eof>'))
+    assertx(tosource(e), "f(10)")
+
+    local src = "10-->(f<--20)"
+    print("Testing...", src)
+    init()
+    lexer_init("anon", src)
+    lexer_next()
+    local e = parser()
+    assert(check('<eof>'))
+    assertx(tosource(e), "(f(10, 20))")
+
+    local src = "10+1 --> f where { }"
+    print("Testing...", src)
+    init()
+    lexer_init("anon", src)
+    lexer_next()
+    --local ok, msg = pcall(parser)
+    --assertx(msg, "anon : line 1 : near 'where' : operation error : use parentheses to disambiguate")
+    local e = parser()
+    assert(check('<eof>'))
+    assertx(trim(tosource(e)), trim [[
+        func () {
+            f((10 + 1))
+        }()
+    ]])
+
+    local src = "10+1 <-- f where { }"
+    print("Testing...", src)
+    init()
+    lexer_init("anon", src)
+    lexer_next()
+    --local ok, msg = pcall(parser)
+    --assertx(msg, "anon : line 1 : near 'where' : operation error : use parentheses to disambiguate")
+    local e = parser()
+    assert(check('<eof>'))
+    assertx(trim(tosource(e)), trim [[
+        func () {
+            (10 + 1)(f)
+        }()
+    ]])
+
+
+    local src = "(10+1 <-- f) where { }"
+    print("Testing...", src)
+    init()
+    lexer_init("anon", src)
+    lexer_next()
+    local e = parser()
+    assert(check('<eof>'))
+    assertx(trim(tosource(e)), trim [[
+        func () {
+            (10 + 1)(f)
+        }()
+    ]])
+
+    local src = "10+1 where { }"
+    print("Testing...", src)
+    init()
+    lexer_init("anon", src)
+    lexer_next()
+    local e = parser()
+    assert(check('<eof>'))
+    assertx(trim(tosource(e)), trim [[
+        func () {
+            (10 + 1)
+        }()
+    ]])
+
+    local src = "f<--10->g"
+    print("Testing...", src)
+    init()
+    lexer_init("anon", src)
+    lexer_next()
+    local e = parser()
+    assert(check('<eof>'))
+    assertx(tosource(e), "f(g(10))")
+
+    local src = "f <-- 10+10"
+    print("Testing...", src)
+    init()
+    lexer_init("anon", src)
+    lexer_next()
+    local e = parser()
+    assert(check('<eof>'))
+    assertx(tosource(e), "f((10 + 10))")
+
+    local src = "spawn T(v) where {v=10}"
+    print("Testing...", src)
+    init()
+    lexer_init("anon", src)
+    lexer_next()
+    local e = parser()
+    assert(check('<eof>'))
+    assertx(trim(tosource(e)), trim [[
+        pin _ = func () {
+            val v = 10
+            spawn(T, v)
+        }()
+    ]])
+
+    local src = "spawn {}"
+    print("Testing...", src)
+    init()
+    lexer_init("anon", src)
+    lexer_next()
+    local e = parser()
+    assert(check('<eof>'))
+    assertx(trim(tosource(e)), trim [[
+        pin _ = do_spawn({
+        })
+    ]])
+
+    local src = "(a,b) where {a,b=(10,10)}"
+    print("Testing...", src)
+    init()
+    lexer_init("anon", src)
+    lexer_next()
+    local e = parser()
+    assert(check('<eof>'))
+    assertx(trim(tosource(e)), trim [[
+        func () {
+            val a, b = (10, 10)
+            (a, b)
+        }()
+    ]])
+end
+
+-- EXEC / CORO / TASK / TASKS / YIELD / SPAWN / RESUME / PUB
+
+do
+    local src = "coro(f)"
+    print("Testing...", src)
+    init()
+    lexer_init("anon", src)
+    lexer_next()
+    local e = parser()
+    assert(check('<eof>'))
+    assertx(X.tostring(e), "{es={{tag=acc, tk={lin=1, sep=1, str=f, tag=id}}}, f={tag=acc, tk={lin=1, sep=1, str=coro, tag=id}}, tag=call}")
+
+    local src = "xtask(T)"
+    print("Testing...", src)
+    init()
+    lexer_init("anon", src)
+    lexer_next()
+    local e = parser()
+    assert(check('<eof>'))
+    assertx(tosource(e), "xtask(T)")
+
+    local src = "task(T)"
+    print("Testing...", src)
+    init()
+    lexer_init("anon", src)
+    lexer_next()
+    local _,msg = pcall(parser)
+    assertx(msg, "anon : line 1 : near '<eof>' : expected '{'")
+
+    -- bare `task` = running instance ("me") -> desugars to xtask()
+    local src = "task"
+    print("Testing...", src)
+    init()
+    lexer_init("anon", src)
+    lexer_next()
+    local e = parser()
+    assert(check('<eof>'))
+    assertx(tosource(e), "xtask()")
+
+    -- separator lock: `(` on next line does not bind as proto header
+    local src = "task\n(T)"
+    print("Testing...", src)
+    init()
+    lexer_init("anon", src)
+    lexer_next()
+    local e = parser()
+    assertx(tosource(e), "xtask()")
+
+    -- separator lock: `;` behaves like `\n`
+    local src = "task;(T)"
+    print("Testing...", src)
+    init()
+    lexer_init("anon", src)
+    lexer_next()
+    local e = parser()
+    assertx(tosource(e), "xtask()")
+
+    -- separator lock: id on next line does not bind as proto name
+    local src = "task\nT()"
+    print("Testing...", src)
+    init()
+    lexer_init("anon", src)
+    lexer_next()
+    local e = parser()
+    assertx(tosource(e), "xtask()")
+
+    -- named proto unchanged: same-line id after `task`
+    local src = "task T (a) { a }"
+    print("Testing...", src)
+    init()
+    lexer_init("anon", src)
+    lexer_next()
+    local e = parser()
+    assert(check('<eof>'))
+    assertx(tosource(e), "set T = task (a) {\na\n}")
+
+    local src = "task (a) { a }"
+    print("Testing...", src)
+    init()
+    lexer_init("anon", src)
+    lexer_next()
+    local e = parser()
+    assert(check('<eof>'))
+    assertx(tosource(e), "task (a) {\na\n}")
+
+    local src = "tasks(10)"
+    print("Testing...", src)
+    init()
+    lexer_init("anon", src)
+    lexer_next()
+    local ok, msg = pcall(parser)
+    assertx(msg, "anon : line 1 : near 'tasks' : expected expression")
+
+    local src = "yield(x,10)"
+    print("Testing...", src)
+    init()
+    lexer_init("anon", src)
+    lexer_next()
+    local e = parser()
+    assert(check('<eof>'))
+    assert(tosource(e) == "yield(x, 10)")
+
+    local src = "emit()"
+    print("Testing...", src)
+    init()
+    lexer_init("anon", src)
+    lexer_next()
+    local ok, msg = pcall(parser)
+    assertx(msg, "anon : line 1 : near 'emit' : expected single argument")
+
+    local src = "emit(:X,10)"
+    print("Testing...", src)
+    init()
+    lexer_init("anon", src)
+    lexer_next()
+    local ok, msg = pcall(parser)
+    assertx(msg, "anon : line 1 : near 'emit' : expected single argument")
+
+    local src = "emit @xs (:X)"
+    print("Testing...", src)
+    init()
+    lexer_init("anon", src)
+    lexer_next()
+    local e = parser()
+    assert(check('<eof>'))
+    assertx(tosource(e), "emit_in(xs, :X)")
+
+    local src = "emit @:global (T())"
+    print("Testing...", src)
+    init()
+    lexer_init("anon", src)
+    lexer_next()
+    local e = parser()
+    assert(check('<eof>'))
+    assertx(tosource(e), "emit_in(:global, T())")
+
+    local src = "emit :X []"
+    print("Testing...", src)
+    init()
+    lexer_init("anon", src)
+    lexer_next()
+    local e = parser()
+    --assert(check('['))
+    assertx(tosource(e), "emit(atm_tag_do(:X, []))")
+
+    local src = "emit :X(10)"
+    print("Testing...", src)
+    init()
+    lexer_init("anon", src)
+    lexer_next()
+    local e = parser()
+    --assert(check('('))
+    assertx(tosource(e), "emit(atm_tag_do(:X, (10)))")
+
+    local src = "spawn T(1,2,3)"
+    print("Testing...", src)
+    init()
+    lexer_init("anon", src)
+    lexer_next()
+    local e = parser()
+    assert(check('<eof>'))
+    assertx(tosource(e), "pin _ = spawn(T, 1, 2, 3)")
+    --local ok, msg = pcall(parser)
+    --assertx(msg, "anon : line 1 : near 'spawn' : expected expression")
+
+    local src = "pub"
+    print("Testing...", src)
+    init()
+    lexer_init("anon", src)
+    lexer_next()
+    local e = parser()
+    assert(check('<eof>'))
+    assertx(tosource(e), 'pub')
+end
+
+print '--- CLOCK ---'
+
+do
+    local src = "2h30min"
+    print("Testing...", src)
+    init()
+    lexer_init("anon", src)
+    lexer_next()
+    local e = parser()
+    assert(check('<eof>'))
+    assertx(tosource(e), "2h30min")
+
+    local src = "100ms"
+    print("Testing...", src)
+    init()
+    lexer_init("anon", src)
+    lexer_next()
+    local e = parser()
+    assert(check('<eof>'))
+    assertx(tosource(e), "100ms")
+end
+
+print '--- AWAIT ---'
+
+do
+    local src = "await(:X, x+10)"
+    print("Testing...", src)
+    init()
+    lexer_init("anon", src)
+    lexer_next()
+    local ok, msg = pcall(parser)
+    assertx(msg, "anon : line 1 : near ',' : expected ')'")
+
+    -- bare await takes a single primary; a trailing value op binds
+    -- outside: `(await 20min) + 1s`
+    local src = "await 20min + 1s"
+    print("Testing...", src)
+    init()
+    lexer_init("anon", src)
+    lexer_next()
+    local e = parser()
+    assert(check('<eof>'))
+    assertx(tosource(e), "(await(20min) + 1s)")
+
+    local src = "await (20min + (x*1s) + 100ms)"
+    print("Testing...", src)
+    init()
+    lexer_init("anon", src)
+    lexer_next()
+    local e = parser()
+    assert(check('<eof>'))
+    assertx(tosource(e), "await(((20min + (x * 1s)) + 100ms))")
+
+    local src = "await(10s,x)"
+    print("Testing...", src)
+    init()
+    lexer_init("anon", src)
+    lexer_next()
+    local ok, msg = pcall(parser)
+    assertx(msg, "anon : line 1 : near ',' : expected ')'")
+
+    local src = "await <:X until (e1 && e2)>"
+    print("Testing...", src)
+    init()
+    lexer_init("anon", src)
+    lexer_next()
+    local e = parser()
+    assert(check('<eof>'))
+    assertx(tosource(e), "await([@(:tag)=\"until\", @(1)=:X, @(2)=func (it) {\n(e1 && e2)\n}, @(:n)=2])")
+
+    local src = "await :X until (e)"
+    print("Testing...", src)
+    init()
+    lexer_init("anon", src)
+    lexer_next()
+    local e = parser()
+    assert(check('<eof>'))
+    assertx(tosource(e), "await([@(:tag)=\"until\", @(1)=:X, @(2)=func (it) {\ne\n}, @(:n)=2])")
+
+    local src = "await <:X while (e)>"
+    print("Testing...", src)
+    init()
+    lexer_init("anon", src)
+    lexer_next()
+    local e = parser()
+    assert(check('<eof>'))
+    assertx(tosource(e), "await([@(:tag)=\"while\", @(1)=:X, @(2)=func (it) {\ne\n}, @(:n)=2])")
+
+    -- no-base synchronous predicate: the function lands at awt[1]
+    local src = "await until (e)"
+    print("Testing...", src)
+    init()
+    lexer_init("anon", src)
+    lexer_next()
+    local e = parser()
+    assert(check('<eof>'))
+    assertx(tosource(e), "await([@(:tag)=\"until\", @(1)=func (it) {\ne\n}, @(:n)=1])")
+
+    local src = "await <while (e)>"
+    print("Testing...", src)
+    init()
+    lexer_init("anon", src)
+    lexer_next()
+    local e = parser()
+    assert(check('<eof>'))
+    assertx(tosource(e), "await([@(:tag)=\"while\", @(1)=func (it) {\ne\n}, @(:n)=1])")
+
+    local src = "await :any ts"
+    print("Testing...", src)
+    init()
+    lexer_init("anon", src)
+    lexer_next()
+    local e = parser()
+    assert(check('<eof>'))
+    assertx(tosource(e), "await([@(:tag)=\"tasks\", @(:mode)=\"any\", @(:tasks)=ts])")
+
+    local src = "await :all ts"
+    print("Testing...", src)
+    init()
+    lexer_init("anon", src)
+    lexer_next()
+    local e = parser()
+    assert(check('<eof>'))
+    assertx(tosource(e), "await([@(:tag)=\"tasks\", @(:mode)=\"all\", @(:tasks)=ts])")
+
+    local src = "await T()"
+    print("Testing...", src)
+    init()
+    lexer_init("anon", src)
+    lexer_next()
+    local e = parser()
+    assert(check('<eof>'))
+    assertx(tosource(e), "await([@(:tag)=\"spawn\", @(1)=T, @(:n)=1])")
+
+    local src = "await T(1,x)"
+    print("Testing...", src)
+    init()
+    lexer_init("anon", src)
+    lexer_next()
+    local e = parser()
+    assert(check('<eof>'))
+    assertx(tosource(e), "await([@(:tag)=\"spawn\", @(1)=T, @(2)=1, @(3)=x, @(:n)=3])")
+
+    -- precedence: `until` groups under `||` only with a nested <>
+    local src = "await <:X || <:Y until (c)>>"
+    print("Testing...", src)
+    init()
+    lexer_init("anon", src)
+    lexer_next()
+    local e = parser()
+    assert(check('<eof>'))
+    assertx(tosource(e), "await([@(:tag)=\"or\", @(1)=:X, @(2)=[@(:tag)=\"until\", @(1)=:Y, @(2)=func (it) {\nc\n}, @(:n)=2], @(:n)=2])")
+
+    -- base-less `until (c)` composes as a `||` operand (task race);
+    -- an operand task needs the explicit `spawn` prefix
+    local src = "await <T() || until (c)>"
+    print("Testing...", src)
+    init()
+    lexer_init("anon", src)
+    lexer_next()
+    local e = parser()
+    assert(check('<eof>'))
+    assertx(tosource(e), "await([@(:tag)=\"or\", @(1)=[@(:tag)=\"spawn\", @(1)=T, @(:n)=1], @(2)=[@(:tag)=\"until\", @(1)=func (it) {\nc\n}, @(:n)=1], @(:n)=2])")
+
+    -- in pattern mode a bare operand call SPAWNS; use (f()) for value
+    local src = "await <T() || :X>"
+    print("Testing...", src)
+    init()
+    lexer_init("anon", src)
+    lexer_next()
+    local e = parser()
+    assert(check('<eof>'))
+    assertx(tosource(e), "await([@(:tag)=\"or\", @(1)=[@(:tag)=\"spawn\", @(1)=T, @(:n)=1], @(2)=:X, @(:n)=2])")
+
+    -- (f()) as a leaf inside <> stays a value
+    local src = "await <(f()) || :X>"
+    print("Testing...", src)
+    init()
+    lexer_init("anon", src)
+    lexer_next()
+    local e = parser()
+    assert(check('<eof>'))
+    assertx(tosource(e), "await([@(:tag)=\"or\", @(1)=(f()), @(2)=:X, @(:n)=2])")
+
+    -- mixing `||` and `until` at the same level requires a nested <>
+    local src = "await <:X || :Y until (c)>"
+    print("Testing...", src)
+    init()
+    lexer_init("anon", src)
+    lexer_next()
+    local ok, msg = pcall(parser)
+    assertx(msg, "anon : line 1 : near 'until' : operation error : use parentheses to disambiguate")
+
+    -- bare await rejects combinators (require the <PAT> form)
+    local src = "await :X || :Y"
+    print("Testing...", src)
+    init()
+    lexer_init("anon", src)
+    lexer_next()
+    local ok, msg = pcall(parser)
+    assertx(msg, "anon : line 1 : near '<eof>' : invalid await : unexpected expression")
+end
+
+print '--- TOGGLE ---'
+
+do
+    local src = "toggle t(true)"
+    print("Testing...", src)
+    init()
+    lexer_init("anon", src)
+    lexer_next()
+    local e = parser()
+    assert(check('<eof>'))
+    assertx(tosource(e), "toggle(t, true)")
+
+    local src = "toggle x"
+    print("Testing...", src)
+    init()
+    lexer_init("anon", src)
+    lexer_next()
+    local ok, msg = pcall(parser)
+    assertx(msg, "anon : line 1 : near 'toggle' : expected call syntax")
+
+    local src = "toggle"
+    print("Testing...", src)
+    init()
+    lexer_init("anon", src)
+    lexer_next()
+    local ok, msg = pcall(parser)
+    assertx(msg, "anon : line 1 : near '<eof>' : expected expression")
+
+    local src = "toggle x(1,2)"
+    print("Testing...", src)
+    init()
+    lexer_init("anon", src)
+    lexer_next()
+    local e = parser()
+    assert(check('<eof>'))
+    assertx(tosource(e), "toggle(x, 1, 2)")
+
+    local src = "toggle f()"
+    print("Testing...", src)
+    init()
+    lexer_init("anon", src)
+    lexer_next()
+    local e = parser()
+    assert(check('<eof>'))
+    assertx(tosource(e), "toggle(f)")
+
+    -- FILTER (with)
+    local src = "toggle t(false) with :Draw"
+    print("Testing...", src)
+    init()
+    lexer_init("anon", src)
+    lexer_next()
+    local e = parser()
+    assert(check('<eof>'))
+    assertx(tosource(e), "toggle(t, false, :Draw)")
+
+    local src = "toggle t(false) with :a, :b"
+    print("Testing...", src)
+    init()
+    lexer_init("anon", src)
+    lexer_next()
+    local e = parser()
+    assert(check('<eof>'))
+    assertx(tosource(e), "toggle(t, false, :a, :b)")
+
+    local src = "toggle on :X with :Draw { }"
+    print("Testing...", src)
+    init()
+    lexer_init("anon", src)
+    lexer_next()
+    local e = parser()
+    assert(check('<eof>'))
+    assertx(trim(tosource(e)), trim [[
+        toggle(:X, :Draw, {
+        })
+    ]])
+end
+
+print '--- ABORT ---'
+
+do
+    local src = "abort(t)"
+    print("Testing...", src)
+    init()
+    lexer_init("anon", src)
+    lexer_next()
+    local e = parser()
+    assert(check('<eof>'))
+    assertx(tosource(e), "abort(t)")
+
+    local src = "abort x"
+    print("Testing...", src)
+    init()
+    lexer_init("anon", src)
+    lexer_next()
+    local e = parser()
+    assert(not check('<eof>'))
+    local e = parser()
+    assert(check('<eof>'))
+
+    local src = "abort"
+    print("Testing...", src)
+    init()
+    lexer_init("anon", src)
+    lexer_next()
+    local e = parser()
+    assert(check('<eof>'))
+    assertx(tosource(e), "abort")
+end
