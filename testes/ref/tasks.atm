@@ -3348,30 +3348,30 @@ X	10
 ;;   """
 ;; ok
 ;; """)
-;; R.T("tasks.lua:3657 every-clock", """
-;;         spawn {
-;;             par {
-;;                 loop on :X {
-;;                     print("x")
-;;                 }
-;;             } with {
-;;                 loop on 10ms {
-;;                     print("ms")
-;;                 }
-;;             }
-;;         }
-;;         emit @:global 10ms
-;;         emit(:X)
-;;         emit @:global 5ms
-;;         emit(:X)
-;;         emit @:global 5ms
-;;     """,
-;;   """
-;; ms
-;; x
-;; x
-;; ms
-;; """)
+R.T("tasks.lua:3657 every-clock", """
+        spawn {
+            par {
+                loop on :X {
+                    print("x")
+                }
+            } with {
+                loop on 10ms {
+                    print("ms")
+                }
+            }
+        }
+        emit @:global 10ms
+        emit(:X)
+        emit @:global 5ms
+        emit(:X)
+        emit @:global 5ms
+    """,
+  """
+ms
+x
+x
+ms
+""")
 R.T("tasks.lua:3679 every table", """
         spawn {
             loop it on :X {

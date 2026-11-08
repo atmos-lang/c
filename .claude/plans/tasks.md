@@ -322,3 +322,61 @@ format).
   `ret`s. `watching(P, f)` is `par_any(awaitbranch(P), f)`.
 - Not done: `__atmos` user patterns (no test yet); `escape` across a
   task boundary (needs the throw scheme or option B).
+
+## Stage 2b: toggles and clock (design)
+
+From the reference (`run.lua`: `M.toggle`, `emit` gating, `M.emit`
+numeric pieces, `M.await` clocks; `prim.lua` toggle forms):
+
+- **Clock literals.** The lexer already produces `TK_CLK` (`1s`,
+  `10ms`, `1h30min`, `1min2s3ms`: integer microseconds, a float when a
+  component has a fraction); the parser gets the token as a numeral, so
+  `1s ?? :number` is true and `await(10ms)` awaits a number.
+- **Timers.** `await(n)` with a number is a countdown: at the start, if
+  `n <= 0` it returns at once with `late - n`; otherwise it reports the
+  timer (`CLK.min = min(CLK.min, n)`) and waits. A numeric event `d`
+  decrements the countdown (the pattern slot keeps the remainder); when
+  it reaches zero or less the await returns `late - remainder`, where
+  `late` is how much of the current tick remained after this piece.
+  Non-numeric events are ignored. `await(:clock)` wakes on any numeric
+  event and returns `d, late`.
+- **Ticks.** `emit(n)` with a number must target the root (`emit @:global
+  10ms`; otherwise "invalid emit : expected global"). It is split in
+  pieces, each ending at the nearest reported timer: `d = min(CLK.min,
+  n)`, `n -= d`, `CLK.min = huge` (timers re-report when they wake),
+  `CLK.late = n`, broadcast `d`; repeat until `n <= 0` (`emit(0)` is one
+  piece). `CLK.late` is saved and restored around the loop (nested
+  ticks). `atmos.next()` is `CLK.min` or nil; `atmos.stop()` closes the
+  root pool, sweeps and resets the clock.
+- **Toggle off.** `toggle t(false) [with P {, P}]`: `t` a task or pool
+  with status OK (else "invalid toggle : expected awaiting task");
+  status becomes TOGGLED. An emit reaching a toggled node first drives
+  its gate (if any) and then skips the node's subtree unless the gate
+  stamped `pass = time` for this emit. The gate is a hidden transparent
+  task off the tree (not in any `dns`, `up` = the node's owner) whose
+  body loops `await(P); pass = TIME`; several filters are awaited as
+  `or`. The gate is stored in the node's `gate` link (already closed by
+  `closextask`; `closepool` closes it too).
+- **Toggle on.** `toggle t(true)`: status must be TOGGLED ("invalid
+  toggle : expected toggled off task"; an extra argument is "invalid
+  toggle : unexpected argument"); status OK, the gate is closed, then a
+  targeted `emit` of `0` to `t` (bypassing the global check) wakes
+  `await(true)`s and makes frozen timers re-report.
+- **Block form.** `toggle on :T [with P {, P}] { body }` →
+  `toggle(:T, P..., \{ body })`: the body runs as a transparent task
+  `t`; a hidden controller task loops `await(:T [false]); toggle(t,
+  false, P...); await(:T [true]); toggle(t, true)`; the value is the
+  body's `ret` (the composition is a `par_any` of body and controller,
+  so leaving it aborts both). `return` inside the body is rejected as in
+  `par`.
+- **Statement form.** `toggle t(false)`: `toggle` followed by a
+  suffixed expression that must end in a call (else "expected call
+  syntax"): `toggle f(args) [with P, ...]` → `toggle(f, args..., P...)`.
+- Structs: `status` and `pass` in both `XTask` and `Pool`.
+
+Tests enabled (failing): exec CLOCK `await 2/3/4`, TOGGLE `toggle 3`..`9`,
+`toggle filter`, `toggle filter block` (`toggle 1/2` are error-trace
+formats); tasks `every-clock`; await `op_clock_or`; x `is 3`;
+timers.lua all 9; toggle.lua EXEC (`toggle filter combinator`, `toggle
+pool target`; the PARSE section checks the reference's AST and is not
+convertible).

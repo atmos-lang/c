@@ -177,21 +177,21 @@ true
 true
 false
 """)
-;; R.T("x.lua:166 is 3", """
-;;         print([] ?? :table)
-;;         print(1s ?? :number)
-;;         print(task () {} ?? :task)
-;;         print(xtask(task () {}) ?? :xtask)
-;;         pin xs = tasks()
-;;         print(xs ?? :tasks)
-;;     """,
-;;   """
-;; true
-;; true
-;; true
-;; true
-;; true
-;; """)
+R.T("x.lua:166 is 3", """
+        print([] ?? :table)
+        print(1s ?? :number)
+        print(task () {} ?? :task)
+        print(xtask(task () {}) ?? :xtask)
+        pin xs = tasks()
+        print(xs ?? :tasks)
+    """,
+  """
+true
+true
+true
+true
+true
+""")
 ;; R.T("x.lua:178 is 3b: xtask non-proto fails", """
 ;;         xtask(\{})
 ;;         print :ok

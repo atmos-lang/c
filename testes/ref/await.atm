@@ -95,16 +95,16 @@ tick
 tick
 tick
 """)
-;; R.T("await.lua:90 op_clock_or 1", """
-;;         spawn {
-;;             await <:X || 5ms>
-;;             print(:ok)
-;;         }
-;;         emit @:global 5ms
-;;     """,
-;;   """
-;; ok
-;; """)
+R.T("await.lua:90 op_clock_or 1", """
+        spawn {
+            await <:X || 5ms>
+            print(:ok)
+        }
+        emit @:global 5ms
+    """,
+  """
+ok
+""")
 R.T("await.lua:101 op_payload_or 1", """
         spawn {
             val a = 10

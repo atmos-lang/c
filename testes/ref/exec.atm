@@ -2031,53 +2031,53 @@ R.T("exec.lua:2363 await :any ts late", """
 ;;         emit :X [10]
 ;;     """,
 ;;   R.E("", "attempt to perform arithmetic on a nil value (global 'x')"))
-;; R.T("exec.lua:2401 await 2: clock", """
-;;         spawn {
-;;             await(10s100ms)
-;;             print(:y)
-;;         }
-;;         emit @:global 10s
-;;         print(:x)
-;;         emit @:global 100ms
-;;     """,
-;;   """
-;; x
-;; y
-;; """)
-;; R.T("exec.lua:2414 await 3: clock", """
-;;         spawn {
-;;             await(10s100ms)
-;;             print(:y)
-;;         }
-;;         emit @:global 10s
-;;         print(:x)
-;;         emit @:global 100ms
-;;     """,
-;;   """
-;; x
-;; y
-;; """)
-;; R.T("exec.lua:2427 await 4: clock", """
-;;         spawn {
-;;             await(1min2s3ms)
-;;             print(:ok)
-;;         }
-;;         emit @:global 1min
-;;         print(:1)
-;;         emit @:global 2s
-;;         print(:2)
-;;         emit @:global 1ms
-;;         print(:3)
-;;         emit @:global 2ms
-;;         print(:4)
-;;     """,
-;;   """
-;; 1
-;; 2
-;; 3
-;; ok
-;; 4
-;; """)
+R.T("exec.lua:2401 await 2: clock", """
+        spawn {
+            await(10s100ms)
+            print(:y)
+        }
+        emit @:global 10s
+        print(:x)
+        emit @:global 100ms
+    """,
+  """
+x
+y
+""")
+R.T("exec.lua:2414 await 3: clock", """
+        spawn {
+            await(10s100ms)
+            print(:y)
+        }
+        emit @:global 10s
+        print(:x)
+        emit @:global 100ms
+    """,
+  """
+x
+y
+""")
+R.T("exec.lua:2427 await 4: clock", """
+        spawn {
+            await(1min2s3ms)
+            print(:ok)
+        }
+        emit @:global 1min
+        print(:1)
+        emit @:global 2s
+        print(:2)
+        emit @:global 1ms
+        print(:3)
+        emit @:global 2ms
+        print(:4)
+    """,
+  """
+1
+2
+3
+ok
+4
+""")
 
 ;; ---- TOGGLE
 
@@ -2088,190 +2088,190 @@ R.T("exec.lua:2363 await :any ts late", """
 ;;         toggle f() ; nil
 ;;     """,
 ;;   R.E("", "invalid toggle : expected bool argument"))
-;; R.T("exec.lua:2472 toggle 3", """
-;;         val T = task () {
-;;             print :1
-;;             await(true)
-;;             print :2
-;;         }
-;;         pin t = xtask(T)
-;;
-;;         print :A
-;;         toggle t (false)
-;;         emit :X
-;;
-;;         print :B
-;;         spawn t()
-;;         emit :X
-;;
-;;         print :C
-;;         toggle t (true)
-;;         emit :X
-;;     """,
-;;   """
-;; A
-;; B
-;; 1
-;; C
-;; 2
-;; """)
-;; R.T("exec.lua:2496 toggle 4", """
-;;         val T = task () {
-;;             await(true)
-;;             print(10)
-;;         }
-;;         pin t = spawn T()
-;;         toggle t (false)
-;;         print(1)
-;;         emit(:X)
-;;         emit(:X)
-;;         ;; toggle on: emit(0, t) awakes await(true)
-;;         toggle t (true)
-;;         print(2)
-;;         emit(:X)
-;;     """,
-;;   """
-;; 1
-;; 10
-;; 2
-;; """)
-;; R.T("exec.lua:2515 toggle 5", """
-;;         var T
-;;         set T = task () {
-;;             defer {
-;;                 print(10)
-;;             }
-;;             await(true)
-;;             print(999)
-;;         }
-;;         pin t = spawn T()
-;;         toggle t (false)
-;;         print(1)
-;;         emit (:nil)
-;;         print(2)
-;;     """,
-;;   """
-;; 1
-;; 2
-;; 10
-;; """)
-;; R.T("exec.lua:2534 toggle 6", """
-;;         val T = task () {
-;;             nil
-;;         }
-;;         pin t = spawn T()
-;;         toggle t (false)
-;;         print 'ok'
-;;     """,
-;;   """
-;; ok
-;; """)
-;; R.T("exec.lua:2548 toggle 7", """
-;;         val T = task () {
-;;             spawn (task () {
-;;                 await(:nil)
-;;                 print(3)
-;;             }) ()
-;;             await(:nil)
-;;             print(4)
-;;         }
-;;         print(1)
-;;         pin t = spawn T()
-;;         toggle t (false)
-;;         emit (:nil)
-;;         print(2)
-;;         toggle t (true)
-;;         emit (:nil)
-;;     """,
-;;   """
-;; 1
-;; 2
-;; 3
-;; 4
-;; """)
-;; R.T("exec.lua:2569 toggle 8", """
-;;         task T (v) {
-;;             set pub = v
-;;             toggle on :Show {
-;;                 print(pub)
-;;                 loop it on :Draw {
-;;                     print(it.v)
-;;                 }
-;;             }
-;;         }
-;;         spawn T(0)
-;;         emit :Draw [v=1]
-;;         emit :Show [false]
-;;         emit :Show [false]
-;;         emit :Draw [v=99]
-;;         emit :Show [true]
-;;         emit :Show [true]
-;;         emit :Draw [v=2]
-;;     """,
-;;   """
-;; 0
-;; 1
-;; 2
-;; """)
-;; R.T("exec.lua:2592 toggle 9", """
-;;         spawn {
-;;             val x = toggle on :Show {
-;;                 10
-;;             }
-;;             print(x)
-;;         }
-;;         print(:ok)
-;;     """,
-;;   """
-;; 10
-;; ok
-;; """)
-;; R.T("exec.lua:2606 toggle filter", """
-;;         val T = task () {
-;;             spawn (task () {
-;;                 loop on :Draw { print(:draw) }
-;;             }) ()
-;;             loop on :Tick { print(:tick) }
-;;         }
-;;         pin t = spawn T()
-;;         emit(:Draw)                 ;; on  -> draw
-;;         emit(:Tick)                 ;; on  -> tick
-;;         toggle t (false) with :Draw ;; off, but :Draw passes
-;;         emit(:Draw)                 ;; passes filter -> draw
-;;         emit(:Tick)                 ;; gated -> frozen
-;;         toggle t (true)
-;;         emit(:Tick)                 ;; on  -> tick
-;;     """,
-;;   """
-;; draw
-;; tick
-;; draw
-;; tick
-;; """)
-;; R.T("exec.lua:2627 toggle filter block", """
-;;         spawn {
-;;             toggle on :Show with :Draw {
-;;                 par {
-;;                     loop on :Draw { print(:draw) }
-;;                 } with {
-;;                     loop on :Tick { print(:tick) }
-;;                 }
-;;             }
-;;         }
-;;         emit(:Draw)             ;; on  -> draw
-;;         emit(:Tick)             ;; on  -> tick
-;;         emit :Show [false]     ;; toggle off, filter :Draw
-;;         emit(:Draw)             ;; passes filter -> draw
-;;         emit(:Tick)             ;; gated -> frozen
-;;         emit :Show [true]      ;; toggle on
-;;         emit(:Tick)             ;; on  -> tick
-;;     """,
-;;   """
-;; draw
-;; tick
-;; draw
-;; tick
-;; """)
+R.T("exec.lua:2472 toggle 3", """
+        val T = task () {
+            print :1
+            await(true)
+            print :2
+        }
+        pin t = xtask(T)
+
+        print :A
+        toggle t (false)
+        emit :X
+
+        print :B
+        spawn t()
+        emit :X
+
+        print :C
+        toggle t (true)
+        emit :X
+    """,
+  """
+A
+B
+1
+C
+2
+""")
+R.T("exec.lua:2496 toggle 4", """
+        val T = task () {
+            await(true)
+            print(10)
+        }
+        pin t = spawn T()
+        toggle t (false)
+        print(1)
+        emit(:X)
+        emit(:X)
+        ;; toggle on: emit(0, t) awakes await(true)
+        toggle t (true)
+        print(2)
+        emit(:X)
+    """,
+  """
+1
+10
+2
+""")
+R.T("exec.lua:2515 toggle 5", """
+        var T
+        set T = task () {
+            defer {
+                print(10)
+            }
+            await(true)
+            print(999)
+        }
+        pin t = spawn T()
+        toggle t (false)
+        print(1)
+        emit (:nil)
+        print(2)
+    """,
+  """
+1
+2
+10
+""")
+R.T("exec.lua:2534 toggle 6", """
+        val T = task () {
+            nil
+        }
+        pin t = spawn T()
+        toggle t (false)
+        print 'ok'
+    """,
+  """
+ok
+""")
+R.T("exec.lua:2548 toggle 7", """
+        val T = task () {
+            spawn (task () {
+                await(:nil)
+                print(3)
+            }) ()
+            await(:nil)
+            print(4)
+        }
+        print(1)
+        pin t = spawn T()
+        toggle t (false)
+        emit (:nil)
+        print(2)
+        toggle t (true)
+        emit (:nil)
+    """,
+  """
+1
+2
+3
+4
+""")
+R.T("exec.lua:2569 toggle 8", """
+        task T (v) {
+            set pub = v
+            toggle on :Show {
+                print(pub)
+                loop it on :Draw {
+                    print(it.v)
+                }
+            }
+        }
+        spawn T(0)
+        emit :Draw [v=1]
+        emit :Show [false]
+        emit :Show [false]
+        emit :Draw [v=99]
+        emit :Show [true]
+        emit :Show [true]
+        emit :Draw [v=2]
+    """,
+  """
+0
+1
+2
+""")
+R.T("exec.lua:2592 toggle 9", """
+        spawn {
+            val x = toggle on :Show {
+                10
+            }
+            print(x)
+        }
+        print(:ok)
+    """,
+  """
+10
+ok
+""")
+R.T("exec.lua:2606 toggle filter", """
+        val T = task () {
+            spawn (task () {
+                loop on :Draw { print(:draw) }
+            }) ()
+            loop on :Tick { print(:tick) }
+        }
+        pin t = spawn T()
+        emit(:Draw)                 ;; on  -> draw
+        emit(:Tick)                 ;; on  -> tick
+        toggle t (false) with :Draw ;; off, but :Draw passes
+        emit(:Draw)                 ;; passes filter -> draw
+        emit(:Tick)                 ;; gated -> frozen
+        toggle t (true)
+        emit(:Tick)                 ;; on  -> tick
+    """,
+  """
+draw
+tick
+draw
+tick
+""")
+R.T("exec.lua:2627 toggle filter block", """
+        spawn {
+            toggle on :Show with :Draw {
+                par {
+                    loop on :Draw { print(:draw) }
+                } with {
+                    loop on :Tick { print(:tick) }
+                }
+            }
+        }
+        emit(:Draw)             ;; on  -> draw
+        emit(:Tick)             ;; on  -> tick
+        emit :Show [false]     ;; toggle off, filter :Draw
+        emit(:Draw)             ;; passes filter -> draw
+        emit(:Tick)             ;; gated -> frozen
+        emit :Show [true]      ;; toggle on
+        emit(:Tick)             ;; on  -> tick
+    """,
+  """
+draw
+tick
+draw
+tick
+""")
 
 ;; ---- CALL / METHOD / PIPE
 

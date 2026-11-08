@@ -17,55 +17,55 @@ R.begin("toggle.lua")
 
 ;; ---- TOGGLE FILTER : EXEC
 
-;; R.T("toggle.lua:94 toggle filter combinator", """
-;;         val T = task () {
-;;             spawn (task () { loop on :Draw  { print(:draw)  } }) ()
-;;             spawn (task () { loop on :Click { print(:click) } }) ()
-;;             loop on :Tick { print(:tick) }
-;;         }
-;;         pin t = spawn T()
-;;         emit(:Tick)                            ;; on  -> tick
-;;         toggle t (false) with <:Draw || :Click>  ;; off, both pass
-;;         emit(:Draw)                            ;; passes -> draw
-;;         emit(:Click)                           ;; passes -> click
-;;         emit(:Tick)                            ;; gated
-;;         toggle t (true)
-;;         emit(:Tick)                            ;; on  -> tick
-;;     """,
-;;   """
-;; tick
-;; draw
-;; click
-;; tick
-;; """)
-;; R.T("toggle.lua:114 toggle pool target", """
-;;         val T = task (v) {
-;;             loop {
-;;                 await(true)
-;;                 print(v)
-;;             }
-;;         }
-;;         pin ts = tasks()
-;;         spawn @ts T(1)
-;;         spawn @ts T(2)
-;;         emit(:X)
-;;         toggle ts(false)
-;;         print("---")
-;;         emit(:X)
-;;         emit(:X)
-;;         print("---")
-;;         toggle ts(true)                         ;; emit(0, ts): awakes all
-;;         emit(:X)
-;;     """,
-;;   """
-;; 1
-;; 2
-;; ---
-;; ---
-;; 1
-;; 2
-;; 1
-;; 2
-;; """)
+R.T("toggle.lua:94 toggle filter combinator", """
+        val T = task () {
+            spawn (task () { loop on :Draw  { print(:draw)  } }) ()
+            spawn (task () { loop on :Click { print(:click) } }) ()
+            loop on :Tick { print(:tick) }
+        }
+        pin t = spawn T()
+        emit(:Tick)                            ;; on  -> tick
+        toggle t (false) with <:Draw || :Click>  ;; off, both pass
+        emit(:Draw)                            ;; passes -> draw
+        emit(:Click)                           ;; passes -> click
+        emit(:Tick)                            ;; gated
+        toggle t (true)
+        emit(:Tick)                            ;; on  -> tick
+    """,
+  """
+tick
+draw
+click
+tick
+""")
+R.T("toggle.lua:114 toggle pool target", """
+        val T = task (v) {
+            loop {
+                await(true)
+                print(v)
+            }
+        }
+        pin ts = tasks()
+        spawn @ts T(1)
+        spawn @ts T(2)
+        emit(:X)
+        toggle ts(false)
+        print("---")
+        emit(:X)
+        emit(:X)
+        print("---")
+        toggle ts(true)                         ;; emit(0, ts): awakes all
+        emit(:X)
+    """,
+  """
+1
+2
+---
+---
+1
+2
+1
+2
+""")
 
 R.finish()
