@@ -81,6 +81,8 @@ static int parenlist (LexState *ls, expdesc *v);
 static void tuple2value (LexState *ls, expdesc *v, int n);
 static void spawnexp (LexState *ls, expdesc *v, int promote);
 static void ownspawn (LexState *ls, expdesc *v);
+static void pattexp (LexState *ls, expdesc *e);
+static void pattbin (LexState *ls, expdesc *e);
 static int explist (LexState *ls, expdesc *v);
 static void checktoclose (FuncState *fs, int level);
 static void suffixedexp (LexState *ls, expdesc *v);
@@ -1489,6 +1491,13 @@ static void lambda (LexState *ls, expdesc *e, int line) {
 ** ('catch' bodies cannot 'return': that would return from the closure
 ** instead of from the enclosing function.)
 */
+/* kinds of blocks compiled as closures ('FuncState.iscatch') */
+#define CB_CATCH	1
+#define CB_PAR		2
+#define CB_WATCHING	3
+
+static const char *const cbnames[] = {"", "catch", "par", "watching"};
+
 static void closurebody (LexState *ls, expdesc *e, int line, int iscatch) {
   FuncState new_fs;
   BlockCnt bl;
@@ -1521,7 +1530,7 @@ static void catchexp (LexState *ls, expdesc *v, int line) {
   expr(ls, &cnd);  /* condition, evaluated before the body */
   luaK_exp2nextreg(fs, &cnd);
   check(ls, '{');
-  closurebody(ls, &f, line, 1);
+  closurebody(ls, &f, line, CB_CATCH);
   luaK_exp2nextreg(fs, &f);
   init_exp(v, VCALL, luaK_codeABC(fs, OP_CALL, base, 3, 2));
   luaK_fixline(fs, line);
@@ -1774,6 +1783,169 @@ static void emitexp (LexState *ls, expdesc *v) {
 **        | AWAIT prefixexp '(' [explist] ')'             (spawn and await)
 **        | AWAIT primary                                 (value)
 */
+/*
+** Await patterns (after 'await', 'watching', 'loop .. on'; see
+** .claude/plans/tasks.md, stage 2a). Three tiers: bare ('await P':
+** one leaf, optionally 'until (c)' / 'while (c)'), value ('await(E)')
+** and pattern ('await <PAT>': '!p', 'p && p', 'p || p', 'p until (c)',
+** 'p while (c)', nested '<P>'). Leaves: tags and other primaries,
+** '(E)' values, ':any ts' / ':all ts', bare 'until (c)' / 'while (c)',
+** and a call 'T(args)', which spawns the task and awaits it. The
+** combinators are calls of the constructors '_ENV["await.or"]' etc.
+** of latmlib.c, which 'await' interprets.
+*/
+
+/* 'name(e, ...)': 'e' is already evaluated; starts the call, 'e' as
+   the first argument; returns the base */
+static int callwith (LexState *ls, expdesc *e, const char *name) {
+  FuncState *fs = ls->fs;
+  int base;
+  luaK_exp2nextreg(fs, e);
+  base = callbegin(ls, name);  /* above it */
+  rotatecall(fs, base - 1, 1, 1);  /* function first */
+  return base - 1;
+}
+
+
+/* leaf of a pattern */
+static void pattprim (LexState *ls, expdesc *e) {
+  FuncState *fs = ls->fs;
+  int line = ls->linenumber;
+  switch (ls->t.token) {
+    case '(': {  /* value */
+      int n = parenlist(ls, e);
+      if (n > 1) tuple2value(ls, e, n);
+      return;
+    }
+    case '<': {  /* nested pattern */
+      luaX_next(ls);
+      pattbin(ls, e);
+      checknext(ls, '>');
+      return;
+    }
+    case TK_UNTIL: case TK_WHILE: {  /* bare predicate */
+      const char *k = (ls->t.token == TK_UNTIL) ? "await.until" : "await.while";
+      int base;
+      luaX_next(ls);
+      base = callbegin(ls, k);
+      predlambda(ls, e);
+      luaK_exp2nextreg(fs, e);
+      callend(ls, e, base, 0, line);
+      return;
+    }
+    case TK_TAG: {
+      const char *tag = getstr(ls->t.seminfo.ts);
+      if (strcmp(tag, "any") == 0 || strcmp(tag, "all") == 0) {  /* pool */
+        const char *k = (tag[0] == 'a' && tag[1] == 'n') ? "await.any"
+                                                          : "await.all";
+        int base;
+        luaX_next(ls);
+        base = callbegin(ls, k);
+        suffixedexp(ls, e);
+        luaK_exp2nextreg(fs, e);
+        callend(ls, e, base, 0, line);
+        return;
+      }
+    }  /* FALLTHROUGH */
+    default: {  /* primary; a call spawns the task and awaits it */
+      int isname = (ls->t.token == TK_NAME);
+      primaryexp(ls, e);
+      if (suffixloop(ls, e, 1) && ls->t.token == '(') {
+        int base, open = 0;
+        base = callwith(ls, e, "await.spawn");
+        luaX_next(ls);  /* skip '(' */
+        if (ls->t.token != ')') {
+          expdesc args;
+          explist(ls, &args);
+          open = callarg(ls, &args);
+        }
+        check_match(ls, ')', '(', line);
+        callend(ls, e, base, open, line);
+      }
+      else if (isname)  /* a variable: must be a '(value)' (as the reference) */
+        luaX_syntaxerror(ls, "invalid await : unexpected expression");
+    }
+  }
+}
+
+
+/* '!p' or a leaf */
+static void pattunary (LexState *ls, expdesc *e) {
+  if (ls->t.token == TK_NOT) {
+    int line = ls->linenumber;
+    int base;
+    luaX_next(ls);
+    base = callbegin(ls, "await.not");
+    pattprim(ls, e);
+    luaK_exp2nextreg(ls->fs, e);
+    callend(ls, e, base, 0, line);
+  }
+  else
+    pattprim(ls, e);
+}
+
+
+static int pattop (int token) {
+  return (token == TK_OR || token == TK_AND ||
+          token == TK_UNTIL || token == TK_WHILE);
+}
+
+
+/* 'p until (c)' / 'p while (c)': 'p' already parsed */
+static void pattpred (LexState *ls, expdesc *e) {
+  const char *k = (ls->t.token == TK_UNTIL) ? "await.until" : "await.while";
+  int line = ls->linenumber;
+  int base;
+  expdesc pred;
+  luaX_next(ls);
+  base = callwith(ls, e, k);
+  predlambda(ls, &pred);
+  luaK_exp2nextreg(ls->fs, &pred);
+  callend(ls, e, base, 0, line);
+}
+
+
+/* combinators: one operator per level ('a || b || c'; mixing needs
+   parentheses, as for binary operators) */
+static void pattbin (LexState *ls, expdesc *e) {
+  int line = ls->linenumber;
+  int op;
+  pattunary(ls, e);
+  op = ls->t.token;
+  if (op == TK_UNTIL || op == TK_WHILE)
+    pattpred(ls, e);
+  else if (op == TK_OR || op == TK_AND) {
+    int base = callwith(ls, e, (op == TK_OR) ? "await.or" : "await.and");
+    do {
+      expdesc sub;
+      luaX_next(ls);  /* skip the operator */
+      pattunary(ls, &sub);
+      luaK_exp2nextreg(ls->fs, &sub);
+    } while (ls->t.token == op);
+    callend(ls, e, base, 0, line);
+  }
+  if (pattop(ls->t.token))
+    luaX_syntaxerror(ls,
+      "operation error : use parentheses to disambiguate");
+}
+
+
+/* a pattern in the three tiers */
+static void pattexp (LexState *ls, expdesc *e) {
+  if (ls->t.token == '<') {  /* '<PAT>' */
+    luaX_next(ls);
+    pattbin(ls, e);
+    checknext(ls, '>');
+  }
+  else {  /* bare or value: a leaf, optionally with a predicate */
+    pattprim(ls, e);
+    if (ls->t.token == TK_UNTIL || ls->t.token == TK_WHILE)
+      pattpred(ls, e);
+  }
+}
+
+
+/* await P -> await(P) */
 static void awaitexp (LexState *ls, expdesc *v) {
   FuncState *fs = ls->fs;
   int line = ls->linenumber;
@@ -1782,52 +1954,54 @@ static void awaitexp (LexState *ls, expdesc *v) {
   luaX_next(ls);  /* skip 'await' */
   base = callbegin(ls, "await");
   if (!testnext(ls, TK_LPIPE1)) testnext(ls, TK_LPIPE2);  /* await <- p */
-  if (ls->t.token == '<')
-    luaX_syntaxerror(ls, "await patterns not implemented");
-  if (ls->t.token == '(') {  /* value */
-    int n = parenlist(ls, &e);
-    if (n > 1) tuple2value(ls, &e, n);
-  }
-  else if (ls->t.token == TK_TAG &&
-           (strcmp(getstr(ls->t.seminfo.ts), "any") == 0 ||
-            strcmp(getstr(ls->t.seminfo.ts), "all") == 0)) {  /* pool */
-    const char *k = (getstr(ls->t.seminfo.ts)[1] == 'n') ? "await.any"
-                                                          : "await.all";
-    int base2;
-    luaX_next(ls);
-    base2 = callbegin(ls, k);
-    suffixedexp(ls, &e);
-    luaK_exp2nextreg(fs, &e);
-    callend(ls, &e, base2, 0, line);
-  }
-  else if (ls->t.token == TK_UNTIL || ls->t.token == TK_WHILE) {
-    const char *k = (ls->t.token == TK_UNTIL) ? "await.until" : "await.while";
-    int base2;
-    luaX_next(ls);
-    base2 = callbegin(ls, k);
-    predlambda(ls, &e);
-    luaK_exp2nextreg(fs, &e);
-    callend(ls, &e, base2, 0, line);
-  }
-  else {  /* primary; a call spawns the task and awaits it */
-    primaryexp(ls, &e);
-    if (suffixloop(ls, &e, 1) && ls->t.token == '(') {
-      int base2, open = 0;
-      luaK_exp2nextreg(fs, &e);  /* prototype */
-      base2 = callbegin(ls, "spawn");  /* above it */
-      rotatecall(fs, base2 - 1, 1, 1);  /* 'spawn' first */
-      base2--;
-      luaX_next(ls);  /* skip '(' */
-      if (ls->t.token != ')') {
-        expdesc args;
-        explist(ls, &args);
-        open = callarg(ls, &args);
-      }
-      check_match(ls, ')', '(', line);
-      callend(ls, &e, base2, open, line);
-    }
-  }
+  pattexp(ls, &e);
   luaK_exp2nextreg(fs, &e);
+  callend(ls, v, base, 0, line);
+}
+
+
+/*
+** par [:any | :all] { } with { } ... -> par(\{ }, \{ }, ...)
+** (par_any / par_all). Each block is a closure spawned as a
+** transparent task.
+*/
+static void parexp (LexState *ls, expdesc *v) {
+  FuncState *fs = ls->fs;
+  int line = ls->linenumber;
+  const char *name = "par";
+  int base;
+  luaX_next(ls);  /* skip 'par' */
+  if (ls->t.token == TK_TAG) {
+    const char *tag = getstr(ls->t.seminfo.ts);
+    if (strcmp(tag, "any") == 0) name = "par_any";
+    else if (strcmp(tag, "all") == 0) name = "par_all";
+    else luaX_syntaxerror(ls, "invalid par : invalid tag");
+    luaX_next(ls);
+  }
+  base = callbegin(ls, name);
+  do {
+    expdesc f;
+    check(ls, '{');
+    closurebody(ls, &f, line, CB_PAR);
+    luaK_exp2nextreg(fs, &f);
+  } while (testnext(ls, TK_WITH));
+  callend(ls, v, base, 0, line);
+}
+
+
+/* watching P { } -> watching(P, \{ }) */
+static void watchingexp (LexState *ls, expdesc *v) {
+  FuncState *fs = ls->fs;
+  int line = ls->linenumber;
+  expdesc e, f;
+  int base;
+  luaX_next(ls);  /* skip 'watching' */
+  base = callbegin(ls, "watching");
+  pattexp(ls, &e);
+  luaK_exp2nextreg(fs, &e);
+  check(ls, '{');
+  closurebody(ls, &f, line, CB_WATCHING);
+  luaK_exp2nextreg(fs, &f);
   callend(ls, v, base, 0, line);
 }
 
@@ -2121,6 +2295,8 @@ static void primaryexp (LexState *ls, expdesc *v) {
     case TK_SPAWN: spawnexp(ls, v, 0); return;
     case TK_EMIT: emitexp(ls, v); return;
     case TK_AWAIT: awaitexp(ls, v); return;
+    case TK_PAR: parexp(ls, v); return;
+    case TK_WATCHING: watchingexp(ls, v); return;
     case TK_PUB: pubexp(ls, v); return;
     case TK_NIL: {
       init_exp(v, VNIL, 0);
@@ -3267,12 +3443,42 @@ static int loopstat (LexState *ls, expdesc *v) {
     TString *names[MAXLOOPVARS];
     int nnames = 0;
     int base = fs->freereg;
-    do {
+    while (ls->t.token != TK_ON) {
       if (nnames >= MAXLOOPVARS)
         luaX_syntaxerror(ls, "too many loop variables");
       names[nnames++] = str_checkname(ls);
-    } while (testnext(ls, ','));
-    if (ls->t.token == '{') {  /* numeric infinite loop */
+      if (!testnext(ls, ',')) break;
+    }
+    if (ls->t.token == TK_ON) {  /* 'loop [ids] on P { }': await each turn */
+      int loopinit;
+      int callbase;
+      expdesc e;
+      BlockCnt bl2;
+      luaX_next(ls);  /* skip 'on' */
+      loopinit = luaK_getlabel(fs);
+      enterblock(fs, &bl2, 0);  /* one scope per turn (fresh variables) */
+      line = ls->linenumber;
+      callbase = callbegin(ls, "await");
+      pattexp(ls, &e);
+      luaK_exp2nextreg(fs, &e);
+      callend(ls, &e, callbase, 0, line);
+      if (nnames == 0) {
+        discard(ls, &e);
+        fs->freereg = cast_byte(callbase);
+      }
+      else {
+        int i;
+        for (i = 0; i < nnames; i++)
+          new_localvar(ls, names[i]);
+        adjust_assign(ls, nnames, 1, &e);
+        adjustlocalvars(ls, nnames);
+      }
+      block(ls, -1);
+      leaveblock(fs);
+      luaK_jumpto(fs, loopinit);
+      luaK_fixline(fs, ls->blockline);
+    }
+    else if (ls->t.token == '{') {  /* numeric infinite loop */
       if (nnames != 1)
         luaX_syntaxerror(ls, "'in' expected");
       luaK_int(fs, fs->freereg, 1); luaK_reserveregs(fs, 1);
@@ -3491,7 +3697,8 @@ static void retstat (LexState *ls) {
   int line = ls->linenumber;
   int paren;
   if (fs->iscatch)
-    luaK_semerror(ls, "cannot use 'return' inside 'catch'");
+    luaK_semerror(ls, luaO_pushfstring(ls->L,
+      "cannot use 'return' inside '%s'", cbnames[fs->iscatch]));
   luaX_next(ls);  /* skip 'return' */
   paren = kwopen(ls);
   if (paren && ls->t.token == ')')
@@ -3588,7 +3795,7 @@ static int statement (LexState *ls, expdesc *v) {
       n = exprlist(ls, v);  /* expression statement */
       break;
     }
-    case TK_TOGGLE: case TK_PAR: case TK_WATCHING: case TK_THREAD: {
+    case TK_TOGGLE: case TK_THREAD: {
       luaX_syntaxerror(ls, "statement not implemented");
       break;
     }

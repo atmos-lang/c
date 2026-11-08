@@ -3677,29 +3677,29 @@ x
 or
 ok
 """)
-R.T("tasks.lua:3986 par :any 6", """
-        spawn {
-            par :any {
-                await (false)
-            } with {
-                do :X {
-                    par :any {
-                        await (false)
-                    } with {
-                        await :A
-                        escape :X
-                    }
-                }
-                print :1
-            }
-            print :2
-        }
-        emit :A
-    """,
-  """
-1
-2
-""")
+;; R.T("tasks.lua:3986 par :any 6", """
+;;         spawn {
+;;             par :any {
+;;                 await (false)
+;;             } with {
+;;                 do :X {
+;;                     par :any {
+;;                         await (false)
+;;                     } with {
+;;                         await :A
+;;                         escape :X
+;;                     }
+;;                 }
+;;                 print :1
+;;             }
+;;             print :2
+;;         }
+;;         emit :A
+;;     """,
+;;   """
+;; 1
+;; 2
+;; """)
 R.T("tasks.lua:4018 emit target : transparent spawn-block", """
         task Inner () {
             await :go

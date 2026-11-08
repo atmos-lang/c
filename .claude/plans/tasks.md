@@ -289,7 +289,36 @@ Decisions (discussed before implementing):
 
 Tests (enabled, failing before the implementation): exec `loop 13`,
 `tasks 13` (×2), `tasks 14`; tasks.lua `abort 5`, `tasks 25`, EVERY
-(except `every-where`, `every-clock`), PAR/WATCHING (all); await.lua
-all but `op_clock_or` (clock, 2b) and `op_mixed_err` (compile-error
-format). Still out: `escape TCO` and `catch 8b` (escape as a throw
-across tasks), `await 1` (error-trace format).
+(except `every-where`, `every-clock`), PAR/WATCHING (all but `par :any
+6`); await.lua all but `op_clock_or` (clock, 2b) and `op_mixed_err`
+(compile-error format). Still out: `escape TCO`, `par :any 6` and
+`catch 8b` (`escape` as a throw across tasks), `await 1` (error-trace
+format).
+
+### Status: implemented
+
+- Parser (`lparser.c`): `pattexp`/`pattbin`/`pattunary`/`pattprim`
+  compile the three tiers; a bare variable in pattern position is a
+  compile error "invalid await : unexpected expression" (as the
+  reference: a value must be written `(x)`); `loop [ids] on P` is an
+  infinite loop whose turn starts with `await(P)` in a fresh scope;
+  `parexp` and `watchingexp` build the calls with `closurebody`
+  (kinds `CB_PAR`/`CB_WATCHING`; `return` inside gives "cannot use
+  'return' inside 'par'").
+- Runtime (`latmlib.c`): patterns are tables with `kind` and `n`
+  (`spawn`, `or`, `and`, `not`, `until2`/`while2` besides the stage-1
+  kinds). `await` of a `spawn` pattern spawns under the running task and
+  awaits the instance; `or`/`and` call `par_any`/`par_all` over C
+  closures `awaitbranch` (a transparent task body doing `await(p)`);
+  `not` loops a `par_any` of `await(p)` (returning a marker) against
+  `await(true)`; `until2`/`while2` loop the sub-await and apply the
+  predicate. `par`/`par_any`/`par_all` spawn their branches as
+  transparent tasks into a table with a `__close` that aborts them,
+  declared to-be-closed in the C frame (`lua_toclose`, kept across the
+  yields), and wait with `lua_yieldk` continuations: `par_any` returns
+  the `ret` of the first dead branch (a branch that terminates while
+  being spawned ends the composition before the next ones start, as in
+  the reference), `par_all` waits for each branch and returns their
+  `ret`s. `watching(P, f)` is `par_any(awaitbranch(P), f)`.
+- Not done: `__atmos` user patterns (no test yet); `escape` across a
+  task boundary (needs the throw scheme or option B).

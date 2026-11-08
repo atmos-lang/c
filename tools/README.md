@@ -111,6 +111,13 @@ Semantics assumed for the Atmos implementation (the tests rely on them):
   `coroutine.yield()` there suspends the program, and `os.exit(code,
   true)` closes all tasks (their `defer`s and pins run); `atmos.gc()`
   removes dead tasks from pools
+- `par { } with { }` (`par :any`, `par :all`) and `watching P { }` run
+  their blocks as transparent tasks (closures: no `break`/`return`/
+  `escape` across them); `loop [ids] on P { }` is a loop whose turn
+  starts with `await(P)` (inline: `break` works); `await <PAT>` with
+  `||`, `&&`, `!`, `until (c)`, `while (c)`, nested `<P>`, `T(args)`
+  (spawns), `(E)` values; a bare variable in pattern position is a
+  compile error (write `await(x)`)
 
 ## tst2atm.py
 

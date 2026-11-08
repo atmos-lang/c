@@ -820,8 +820,10 @@ static void emitto (lua_State *L, int tgtidx, int eidx) {
 ** task, or the root), with 'nargs' arguments on the top of the stack.
 ** Pushes the instance (or nil when the pool is full) and returns 1.
 */
-static int spawnaux (lua_State *L, int upidx, int tra, int tidx, int nargs) {
-  XTask *t;
+static int spawnaux (lua_State *L, int upidx, int tra, int tidx, int nargs);
+
+static void spawncore (lua_State *L, int upidx, int tra, int tidx, int nargs) {
+  XTask *t = NULL;
   int status, nres;
   tidx = lua_absindex(L, tidx);
   if (upidx != 0) upidx = lua_absindex(L, upidx);
@@ -845,7 +847,7 @@ static int spawnaux (lua_State *L, int upidx, int tra, int tidx, int nargs) {
     lua_pushvalue(L, tidx);
   }
   else
-    return luaL_error(L, "invalid spawn : expected task prototype");
+    luaL_error(L, "invalid spawn : expected task prototype");
   /* stack: ..., args..., xtask */
   if (upidx != 0)
     lua_pushvalue(L, upidx);
@@ -873,7 +875,7 @@ static int spawnaux (lua_State *L, int upidx, int tra, int tidx, int nargs) {
       if (live >= p->max) {  /* full */
         lua_pop(L, 2 + nargs);
         lua_pushnil(L);
-        return 1;
+        return;
       }
     }
   }
@@ -885,6 +887,10 @@ static int spawnaux (lua_State *L, int upidx, int tra, int tidx, int nargs) {
   lua_xmove(L, t->th, nargs);
   status = resumetask(t->th, L, nargs, &nres);
   taskresult(L, -1, status, nres);
+}
+
+static int spawnaux (lua_State *L, int upidx, int tra, int tidx, int nargs) {
+  spawncore(L, upidx, tra, tidx, nargs);
   yieldifaborted(L, 1);
 }
 
@@ -1092,18 +1098,47 @@ static int atm_emit_in (lua_State *L) {  /* emit_in(to, e) */
 ** -------------------------------------------------------------------
 */
 
-/* await patterns built by the compiler: tables with metatable ATM_PATT,
-   field 'kind' ("any", "all", "until", "while") and [1] */
+/*
+** await patterns built by the compiler: tables with metatable ATM_PATT,
+** field 'kind' and the arguments in [1..n] (field 'n'):
+** "any"/"all" (pool), "until"/"while" (predicate), "until2"/"while2"
+** (pattern, predicate), "spawn" (prototype, args...), "or"/"and"
+** (patterns), "not" (pattern).
+*/
 static int newpatt (lua_State *L, const char *kind) {
-  lua_settop(L, 1);
-  lua_newtable(L);
+  int n = lua_gettop(L);
+  int i;
+  lua_createtable(L, n, 2);
   lua_pushstring(L, kind);
   lua_setfield(L, -2, "kind");
-  lua_pushvalue(L, 1);
-  lua_rawseti(L, -2, 1);
+  lua_pushinteger(L, n);
+  lua_setfield(L, -2, "n");
+  for (i = 1; i <= n; i++) {
+    lua_pushvalue(L, i);
+    lua_rawseti(L, -2, i);
+  }
   lua_getfield(L, LUA_REGISTRYINDEX, ATM_PATT);
   lua_setmetatable(L, -2);
   return 1;
+}
+
+static int atm_await_spawn (lua_State *L) {  /* T(args) in a pattern */
+  luaL_checkany(L, 1);
+  return newpatt(L, "spawn");
+}
+
+static int atm_await_or (lua_State *L) {
+  return newpatt(L, "or");
+}
+
+static int atm_await_and (lua_State *L) {
+  return newpatt(L, "and");
+}
+
+static int atm_await_not (lua_State *L) {
+  luaL_checkany(L, 1);
+  lua_settop(L, 1);
+  return newpatt(L, "not");
 }
 
 static int atm_await_any (lua_State *L) {
@@ -1116,12 +1151,22 @@ static int atm_await_all (lua_State *L) {
   return newpatt(L, "all");
 }
 
-static int atm_await_until (lua_State *L) {
+static int atm_await_until (lua_State *L) {  /* (pred) | (p, pred) */
+  if (lua_gettop(L) >= 2) {
+    luaL_checktype(L, 2, LUA_TFUNCTION);
+    lua_settop(L, 2);
+    return newpatt(L, "until2");
+  }
   luaL_checktype(L, 1, LUA_TFUNCTION);
   return newpatt(L, "until");
 }
 
 static int atm_await_while (lua_State *L) {
+  if (lua_gettop(L) >= 2) {
+    luaL_checktype(L, 2, LUA_TFUNCTION);
+    lua_settop(L, 2);
+    return newpatt(L, "while2");
+  }
   luaL_checktype(L, 1, LUA_TFUNCTION);
   return newpatt(L, "while");
 }
@@ -1242,9 +1287,118 @@ static int await_k (lua_State *L, int status, lua_KContext ctx) {
 }
 
 
+static int atm_await (lua_State *L);
+
+/*
+** Compound patterns, derived as in the reference: 'or' is 'par_any' of
+** the sub-awaits, 'and' is 'par_all'; 'not p' re-awaits while the
+** event matches 'p' (a race between 'p' and any event); 'p until (c)'
+** re-awaits 'p' while the predicate fails, 'p while (c)' while it
+** holds; 'T(args)' spawns the task and awaits its termination.
+*/
+
+/* body of a transparent task: 'await(upvalue 1)' */
+static int awaitbranch (lua_State *L) {
+  lua_settop(L, 0);
+  lua_pushvalue(L, lua_upvalueindex(1));
+  return atm_await(L);
+}
+
+static char NOTMARK;  /* result of the 'p' branch of 'not p' */
+
+static int notmark_k (lua_State *L, int status, lua_KContext ctx) {
+  (void)status; (void)ctx;
+  lua_pushlightuserdata(L, &NOTMARK);
+  return 1;
+}
+
+static int notbranch (lua_State *L) {  /* 'await(p)' then the mark */
+  lua_settop(L, 0);
+  lua_pushcfunction(L, atm_await);
+  lua_pushvalue(L, lua_upvalueindex(1));
+  lua_callk(L, 1, 0, 0, notmark_k);
+  return notmark_k(L, LUA_OK, 0);
+}
+
+static int atm_par_any (lua_State *L);
+static int atm_par_all (lua_State *L);
+
+static int results_k (lua_State *L, int status, lua_KContext ctx) {
+  (void)status;
+  return lua_gettop(L) - (int)ctx;  /* results above 'ctx' */
+}
+
+/* await(p) for p = or(...) / and(...): par_any / par_all of branches */
+static int awaitcomb (lua_State *L, int isor) {
+  lua_Integer n, i;
+  int base = lua_gettop(L);
+  lua_getfield(L, 1, "n");
+  n = lua_tointeger(L, -1);
+  lua_pop(L, 1);
+  lua_pushcfunction(L, isor ? atm_par_any : atm_par_all);
+  for (i = 1; i <= n; i++) {
+    lua_rawgeti(L, 1, i);
+    lua_pushcclosure(L, awaitbranch, 1);
+  }
+  lua_callk(L, (int)n, LUA_MULTRET, base, results_k);
+  return results_k(L, LUA_OK, base);
+}
+
+static int not_k (lua_State *L, int status, lua_KContext ctx);
+
+static int notloop (lua_State *L) {  /* stack: p (and me) */
+  lua_settop(L, 2);
+  lua_pushcfunction(L, atm_par_any);
+  lua_rawgeti(L, 1, 1);
+  lua_pushcclosure(L, notbranch, 1);  /* 'p' happened: reject */
+  lua_pushboolean(L, 1);
+  lua_pushcclosure(L, awaitbranch, 1);  /* any other event: accept */
+  lua_callk(L, 2, 1, 0, not_k);
+  return not_k(L, LUA_OK, 0);
+}
+
+static int not_k (lua_State *L, int status, lua_KContext ctx) {
+  (void)status; (void)ctx;
+  if (lua_touserdata(L, -1) == &NOTMARK)
+    return notloop(L);
+  return 1;
+}
+
+static int pred_k (lua_State *L, int status, lua_KContext ctx);
+
+static int predloop (lua_State *L) {  /* stack: p (and me) */
+  lua_settop(L, 2);
+  lua_pushcfunction(L, atm_await);
+  lua_rawgeti(L, 1, 1);
+  lua_callk(L, 1, LUA_MULTRET, 0, pred_k);
+  return pred_k(L, LUA_OK, 0);
+}
+
+static int pred_k (lua_State *L, int status, lua_KContext ctx) {
+  int nres = lua_gettop(L) - 2;  /* results of the sub-await */
+  int res;
+  (void)status; (void)ctx;
+  lua_rawgeti(L, 1, 2);  /* predicate */
+  if (nres >= 1) lua_pushvalue(L, 3); else lua_pushnil(L);
+  lua_call(L, 1, 1);
+  res = lua_toboolean(L, -1);
+  if (pattkind(L, 1)[0] == 'u') {  /* until */
+    if (!res) return predloop(L);
+    if (lua_type(L, -1) != LUA_TBOOLEAN) return 1;  /* the predicate's value */
+    lua_pop(L, 1);
+    return nres;  /* the event */
+  }
+  else {  /* while */
+    if (res) return predloop(L);
+    lua_pop(L, 1);
+    return nres;
+  }
+}
+
 static int atm_await (lua_State *L) {  /* await(p) */
   XTask *t;
   int n;
+  const char *kind;
   luaL_checkany(L, 1);
   if (lua_gettop(L) != 1) luaL_error(L, "invalid await : invalid event pattern");
   if (ispool(L, 1)) luaL_error(L, "invalid await : unexpected tasks pool");
@@ -1252,6 +1406,25 @@ static int atm_await (lua_State *L) {  /* await(p) */
     luaL_error(L, "invalid await : unexpected function");
   pushme(L, 1);
   if (!isxtask(L, 2)) luaL_error(L, "invalid await : expected enclosing task");
+  kind = pattkind(L, 1);
+  if (kind != NULL) {
+    if (strcmp(kind, "spawn") == 0) {  /* spawn the task, await it */
+      lua_Integer nargs, i;
+      lua_getfield(L, 1, "n");
+      nargs = lua_tointeger(L, -1) - 1;
+      lua_pop(L, 1);
+      for (i = 1; i <= nargs + 1; i++)
+        lua_rawgeti(L, 1, i);
+      spawncore(L, 0, 0, 3, (int)nargs);
+      lua_replace(L, 1);
+      if (isaborted(L)) return lua_yieldk(L, 0, 0, neverresumed);
+    }
+    else if (strcmp(kind, "or") == 0) return awaitcomb(L, 1);
+    else if (strcmp(kind, "and") == 0) return awaitcomb(L, 0);
+    else if (strcmp(kind, "not") == 0) return notloop(L);
+    else if (strcmp(kind, "until2") == 0 || strcmp(kind, "while2") == 0)
+      return predloop(L);
+  }
   t = xtaskof(L, 2);
   t->time = TIME;  /* reacts only to broadcasts after this point */
   n = awaitmatch(L, 0);
@@ -1259,6 +1432,166 @@ static int atm_await (lua_State *L) {  /* await(p) */
   lua_settop(L, 2);
   return lua_yieldk(L, 0, 0, await_k);
 }
+
+/* }------------------------------------------------------------------ */
+
+
+/*
+** {------------------------------------------------------------------
+** par / par_any / par_all / watching: compositions of transparent
+** tasks (closures), owned by a to-be-closed set of the C frame, so
+** that leaving the composition (normally, by an error or by an abort)
+** aborts the branches still alive (see tasks.md, stage 2a).
+** -------------------------------------------------------------------
+*/
+
+#define PARSET	"atmos.parset"
+
+static int parset_close (lua_State *L) {
+  lua_Integer n = (lua_Integer)lua_rawlen(L, 1);
+  lua_Integer i;
+  for (i = n; i >= 1; i--) {
+    lua_rawgeti(L, 1, i);
+    closeany(L, -1);
+    lua_pop(L, 1);
+  }
+  return 0;
+}
+
+/* checks the enclosing task and the branches (functions at 1..n);
+   pushes the to-be-closed set; returns n */
+static int parbegin (lua_State *L, const char *name) {
+  int n = lua_gettop(L);
+  int i;
+  pushme(L, 1);
+  if (!isxtask(L, -1))
+    luaL_error(L, "invalid %s : expected enclosing task", name);
+  lua_pop(L, 1);
+  for (i = 1; i <= n; i++) {
+    if (lua_type(L, i) != LUA_TFUNCTION)
+      luaL_error(L, "invalid %s : expected task prototype", name);
+  }
+  lua_createtable(L, n, 0);
+  luaL_setmetatable(L, PARSET);
+  lua_toclose(L, -1);
+  return n;
+}
+
+/* spawns branch 'i' (function at index 'i') into the set at 'setidx' */
+static void parspawn (lua_State *L, int setidx, int i) {
+  lua_pushvalue(L, i);
+  spawncore(L, 0, 1, lua_gettop(L), 0);
+  lua_rawseti(L, setidx, i);
+}
+
+static int branchdead (lua_State *L, int setidx, int i) {
+  int dead;
+  lua_rawgeti(L, setidx, i);
+  dead = (costatus(L, -1) == CO_DEAD);
+  lua_pop(L, 1);
+  return dead;
+}
+
+static void stamp (lua_State *L) {  /* 'me' reacts to later broadcasts */
+  pushme(L, 1);
+  (xtaskof(L, -1))->time = TIME;
+  lua_pop(L, 1);
+}
+
+/* par: the branches run until the enclosing block ends */
+static int par_k (lua_State *L, int status, lua_KContext ctx) {
+  (void)status;
+  lua_settop(L, (int)ctx);
+  stamp(L);
+  return lua_yieldk(L, 0, ctx, par_k);
+}
+
+static int atm_par (lua_State *L) {
+  int n = parbegin(L, "par");
+  int setidx = n + 1;
+  int i;
+  for (i = 1; i <= n; i++) {
+    parspawn(L, setidx, i);
+    if (isaborted(L)) return lua_yieldk(L, 0, 0, neverresumed);
+  }
+  return par_k(L, LUA_OK, setidx);
+}
+
+/* par_any: the value of the first branch to terminate */
+static int parany_k (lua_State *L, int status, lua_KContext ctx) {
+  int setidx = (int)ctx;
+  lua_Integer n = (lua_Integer)lua_rawlen(L, setidx);
+  lua_Integer i;
+  (void)status;
+  lua_settop(L, setidx);
+  for (i = 1; i <= n; i++) {
+    if (branchdead(L, setidx, (int)i)) {
+      lua_rawgeti(L, setidx, i);
+      lua_getfield(L, -1, "ret");
+      return 1;
+    }
+  }
+  stamp(L);
+  return lua_yieldk(L, 0, ctx, parany_k);
+}
+
+static int atm_par_any (lua_State *L) {
+  int n = parbegin(L, "par_any");
+  int setidx = n + 1;
+  int i;
+  for (i = 1; i <= n; i++) {
+    parspawn(L, setidx, i);
+    if (isaborted(L)) return lua_yieldk(L, 0, 0, neverresumed);
+    if (branchdead(L, setidx, i)) break;  /* done: the others are not run */
+  }
+  return parany_k(L, LUA_OK, setidx);
+}
+
+/* par_all: the values of all branches, when all have terminated */
+static int parall_k (lua_State *L, int status, lua_KContext ctx) {
+  int setidx = (int)ctx;
+  lua_Integer n = (lua_Integer)lua_rawlen(L, setidx);
+  lua_Integer i;
+  (void)status;
+  lua_settop(L, setidx);
+  for (i = 1; i <= n; i++) {
+    if (!branchdead(L, setidx, (int)i)) {
+      stamp(L);
+      return lua_yieldk(L, 0, ctx, parall_k);
+    }
+  }
+  luaL_checkstack(L, (int)n, "par_all results");
+  for (i = 1; i <= n; i++) {
+    lua_rawgeti(L, setidx, i);
+    lua_getfield(L, -1, "ret");
+    lua_remove(L, -2);
+  }
+  return (int)n;
+}
+
+static int atm_par_all (lua_State *L) {
+  int n = parbegin(L, "par_all");
+  int setidx = n + 1;
+  int i;
+  for (i = 1; i <= n; i++) {
+    parspawn(L, setidx, i);
+    if (isaborted(L)) return lua_yieldk(L, 0, 0, neverresumed);
+  }
+  return parall_k(L, LUA_OK, setidx);
+}
+
+/* watching(P, f): par_any of 'await(P)' and 'f' */
+static int atm_watching (lua_State *L) {
+  luaL_checkany(L, 1);
+  if (lua_gettop(L) != 2 || lua_type(L, 2) != LUA_TFUNCTION)
+    luaL_error(L, "invalid watching : expected task prototype");
+  lua_pushvalue(L, 1);
+  lua_pushcclosure(L, awaitbranch, 1);
+  lua_replace(L, 1);
+  return atm_par_any(L);
+}
+
+/* }------------------------------------------------------------------ */
 
 /* }------------------------------------------------------------------ */
 
@@ -1379,6 +1712,10 @@ static const luaL_Reg task_funcs[] = {
   {"abort", atm_abort},
   {"await.any", atm_await_any}, {"await.all", atm_await_all},
   {"await.until", atm_await_until}, {"await.while", atm_await_while},
+  {"await.spawn", atm_await_spawn}, {"await.or", atm_await_or},
+  {"await.and", atm_await_and}, {"await.not", atm_await_not},
+  {"par", atm_par}, {"par_any", atm_par_any}, {"par_all", atm_par_all},
+  {"watching", atm_watching},
   {NULL, NULL}
 };
 
@@ -1389,6 +1726,10 @@ static void opentasks (lua_State *L) {  /* 'atmos' table on top */
   luaL_newmetatable(L, XTASK); luaL_setfuncs(L, xtask_meta, 0); lua_pop(L, 1);
   luaL_newmetatable(L, POOL); luaL_setfuncs(L, pool_meta, 0); lua_pop(L, 1);
   luaL_newmetatable(L, PROTO); luaL_setfuncs(L, proto_meta, 0); lua_pop(L, 1);
+  luaL_newmetatable(L, PARSET);
+  lua_pushcfunction(L, parset_close);
+  lua_setfield(L, -2, "__close");
+  lua_pop(L, 1);
   lua_newtable(L);  /* await patterns metatable */
   lua_setfield(L, LUA_REGISTRYINDEX, ATM_PATT);
   lua_newtable(L);  /* cache: weak keys */
