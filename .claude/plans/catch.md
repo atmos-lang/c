@@ -129,7 +129,13 @@ Three opcodes and a per-thread stack of active regions.
 
 Decision: (A) first, because it is simpler and matches the reference;
 (B) is the alternative to switch to when `break`/`escape`/`return`
-across `catch` (or the closure cost) matter. With (B), `catch` becomes
+across `catch` (or the closure cost) matter. Scope of (B) also covers
+`watching P { body }` (tasks.md, stage 2a): the body would run inline
+in the current task, a hidden child task awaiting `P` would wake it at
+its pending `await` with a private error (the `lua_resumeerror` path),
+caught by the region; and with stackless coroutines (coroutine.md c)
+only inline bodies can `await`, so `catch` A and `watching` as a closure
+would not allow `await` inside. With (B), `catch` becomes
 a real block like `do :X {}` and the error values stay on the stack end
 to end. Switching replaces `catchexp` (parser) and `luaB_catch`; the
 tests stay, minus the "jumps across catch are errors" cases.

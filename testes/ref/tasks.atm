@@ -1771,36 +1771,36 @@ R.T("tasks.lua:2079 abort 4", """
   """
 ok
 """)
-;; R.T("tasks.lua:2093 abort 5", """
-;;         do {
-;;             spawn (task () {
-;;                 do {
-;;                     pin t1 = spawn (task () {
-;;                         pin t2 = spawn (task () {
-;;                             await(true)
-;;                             print(:1)
-;;                         }) ()
-;;                         await <true until (it==t2)>
-;;                         print(:2)
-;;                     }) ()
-;;                     await <true until (it==t1)>
-;;                     print(:3)
-;;                 }
-;;                 await(:X)
-;;                 print(:99)
-;;             }) ()
-;;             print(:0)
-;;             emit(:true)
-;;             print(:4)
-;;         }
-;;     """,
-;;   """
-;; 0
-;; 1
-;; 2
-;; 3
-;; 4
-;; """)
+R.T("tasks.lua:2093 abort 5", """
+        do {
+            spawn (task () {
+                do {
+                    pin t1 = spawn (task () {
+                        pin t2 = spawn (task () {
+                            await(true)
+                            print(:1)
+                        }) ()
+                        await <true until (it==t2)>
+                        print(:2)
+                    }) ()
+                    await <true until (it==t1)>
+                    print(:3)
+                }
+                await(:X)
+                print(:99)
+            }) ()
+            print(:0)
+            emit(:true)
+            print(:4)
+        }
+    """,
+  """
+0
+1
+2
+3
+4
+""")
 R.T("tasks.lua:2120 abort 6", """
         spawn (task () {
             ;;print(:x, `:number ceu_depth(ceu_block)`)
@@ -3289,50 +3289,50 @@ ok
 ;;   """
 ;; 2	true	true	false
 ;; """)
-;; R.T("tasks.lua:3594 tasks 25: former bug - tail call", """
-;;         pin ts = tasks()
-;;         task T () { print :ok }
-;;         spawn {
-;;             watching :X {
-;;                 await :Y
-;;                 spawn @ts T()
-;;             }
-;;         }
-;;         emit :Y
-;;     """,
-;;   """
-;; ok
-;; """)
+R.T("tasks.lua:3594 tasks 25: former bug - tail call", """
+        pin ts = tasks()
+        task T () { print :ok }
+        spawn {
+            watching :X {
+                await :Y
+                spawn @ts T()
+            }
+        }
+        emit :Y
+    """,
+  """
+ok
+""")
 
 ;; ---- EVERY
 
-;; R.T("tasks.lua:3613 every 1", """
-;;         spawn {
-;;             loop on :X {
-;;                 print(:X)
-;;             }
-;;         }
-;;         emit(:X)
-;;         emit(:Y)
-;;         emit(:X)
-;;     """,
-;;   """
-;; X
-;; X
-;; """)
-;; R.T("tasks.lua:3627 every 2", """
-;;         spawn {
-;;             loop v on :X [10] {
-;;                 print(:X, v@1)
-;;             }
-;;         }
-;;         emit(:X)
-;;         emit(:Y)
-;;         emit :X [10]
-;;     """,
-;;   """
-;; X	10
-;; """)
+R.T("tasks.lua:3613 every 1", """
+        spawn {
+            loop on :X {
+                print(:X)
+            }
+        }
+        emit(:X)
+        emit(:Y)
+        emit(:X)
+    """,
+  """
+X
+X
+""")
+R.T("tasks.lua:3627 every 2", """
+        spawn {
+            loop v on :X [10] {
+                print(:X, v@1)
+            }
+        }
+        emit(:X)
+        emit(:Y)
+        emit :X [10]
+    """,
+  """
+X	10
+""")
 ;; R.T("tasks.lua:3641 every-where", """
 ;;         spawn {
 ;;             loop on :X {
@@ -3372,188 +3372,188 @@ ok
 ;; x
 ;; ms
 ;; """)
-;; R.T("tasks.lua:3679 every table", """
-;;         spawn {
-;;             loop it on :X {
-;;                 print(it.v)
-;;             }
-;;         }
-;;         emit <-- :X [v=10]
-;;     """,
-;;   """
-;; 10
-;; """)
-;; R.T("tasks.lua:3691 every-break", """
-;;         spawn {
-;;             loop on true {
-;;                 break()
-;;             }
-;;             print(:ok)
-;;         }
-;;         emit(:ok)
-;;     """,
-;;   """
-;; ok
-;; """)
-;; R.T("tasks.lua:3704 every-break in watching", """
-;;         spawn {
-;;             watching :Z {
-;;                 loop on :X {
-;;                     break()
-;;                 }
-;;                 print(:inner)
-;;             }
-;;             print(:outer)
-;;         }
-;;         emit(:X)
-;;     """,
-;;   """
-;; inner
-;; outer
-;; """)
+R.T("tasks.lua:3679 every table", """
+        spawn {
+            loop it on :X {
+                print(it.v)
+            }
+        }
+        emit <-- :X [v=10]
+    """,
+  """
+10
+""")
+R.T("tasks.lua:3691 every-break", """
+        spawn {
+            loop on true {
+                break()
+            }
+            print(:ok)
+        }
+        emit(:ok)
+    """,
+  """
+ok
+""")
+R.T("tasks.lua:3704 every-break in watching", """
+        spawn {
+            watching :Z {
+                loop on :X {
+                    break()
+                }
+                print(:inner)
+            }
+            print(:outer)
+        }
+        emit(:X)
+    """,
+  """
+inner
+outer
+""")
 
 ;; ---- PAR / PAR_AND / PAR_OR / WATCHING
 
-;; R.T("tasks.lua:3724 par 0", """
-;;         spawn {
-;;             par {
-;;             } with {
-;;             }
-;;         }
-;;         print(:X)
-;;     """,
-;;   """
-;; X
-;; """)
-;; R.T("tasks.lua:3736 par 1", """
-;;         spawn {
-;;             par {
-;;                 loop on :X {
-;;                     print(:X)
-;;                 }
-;;             } with {
-;;                 loop on :Y {
-;;                     print(:Y)
-;;                 }
-;;             }
-;;         }
-;;         emit(:X)
-;;         emit(:Y)
-;;         emit(:X)
-;;     """,
-;;   """
-;; X
-;; Y
-;; X
-;; """)
-;; R.T("tasks.lua:3756 par 2", """
-;;         spawn {
-;;             par {
-;;                 await(:X)
-;;             } with {
-;;                 await(:Y)
-;;             }
-;;             print(:ok)
-;;         }
-;;         emit(:X)
-;;         emit(:X)
-;;         print(:antes)
-;;         emit(:Y)
-;;         print(:depois)
-;;     """,
-;;   """
-;; antes
-;; depois
-;; """)
-;; R.T("tasks.lua:3775 par :all 1", """
-;;         spawn {
-;;             par :all {
-;;                 await(:X)
-;;             } with {
-;;                 await(:Y)
-;;             }
-;;             print(:ok)
-;;         }
-;;         emit(:X)
-;;         emit(:X)
-;;         print(:antes)
-;;         emit(:Y)
-;;         print(:depois)
-;;     """,
-;;   """
-;; antes
-;; ok
-;; depois
-;; """)
-;; R.T("tasks.lua:3794 par :any 1", """
-;;         spawn {
-;;             par :any {
-;;                 await(:X)
-;;             } with {
-;;                 await(:Y)
-;;             }
-;;             print(:ok)
-;;         }
-;;         emit(:X)
-;;         emit(:X)
-;;         print(:antes)
-;;         emit(:Y)
-;;         print(:depois)
-;;     """,
-;;   """
-;; ok
-;; antes
-;; depois
-;; """)
-;; R.T("tasks.lua:3813 par :any 2", """
-;;         spawn {
-;;             par :any {
-;;                 await(:X)
-;;                 print(:x)
-;;             } with {
-;;                 defer {
-;;                     print(:y)
-;;                 }
-;;                 await(:Y)
-;;                 print(:no)
-;;             }
-;;             print(:ok)
-;;         }
-;;         emit(:X)
-;;         emit(:X)
-;;         print(:antes)
-;;         emit(:Y)
-;;         print(:depois)
-;;     """,
-;;   """
-;; x
-;; y
-;; ok
-;; antes
-;; depois
-;; """)
-;; R.T("tasks.lua:3837 watching 1", """
-;;         spawn {
-;;             watching :X {
-;;                 await(:Y)
-;;                 print(:y)
-;;                 await(:Z)
-;;                 print(:z)
-;;             }
-;;             print(:x)
-;;         }
-;;         print(:antes)
-;;         emit(:Y)
-;;         emit(:X)
-;;         emit(:Z)
-;;         print(:depois)
-;;     """,
-;;   """
-;; antes
-;; y
-;; x
-;; depois
-;; """)
+R.T("tasks.lua:3724 par 0", """
+        spawn {
+            par {
+            } with {
+            }
+        }
+        print(:X)
+    """,
+  """
+X
+""")
+R.T("tasks.lua:3736 par 1", """
+        spawn {
+            par {
+                loop on :X {
+                    print(:X)
+                }
+            } with {
+                loop on :Y {
+                    print(:Y)
+                }
+            }
+        }
+        emit(:X)
+        emit(:Y)
+        emit(:X)
+    """,
+  """
+X
+Y
+X
+""")
+R.T("tasks.lua:3756 par 2", """
+        spawn {
+            par {
+                await(:X)
+            } with {
+                await(:Y)
+            }
+            print(:ok)
+        }
+        emit(:X)
+        emit(:X)
+        print(:antes)
+        emit(:Y)
+        print(:depois)
+    """,
+  """
+antes
+depois
+""")
+R.T("tasks.lua:3775 par :all 1", """
+        spawn {
+            par :all {
+                await(:X)
+            } with {
+                await(:Y)
+            }
+            print(:ok)
+        }
+        emit(:X)
+        emit(:X)
+        print(:antes)
+        emit(:Y)
+        print(:depois)
+    """,
+  """
+antes
+ok
+depois
+""")
+R.T("tasks.lua:3794 par :any 1", """
+        spawn {
+            par :any {
+                await(:X)
+            } with {
+                await(:Y)
+            }
+            print(:ok)
+        }
+        emit(:X)
+        emit(:X)
+        print(:antes)
+        emit(:Y)
+        print(:depois)
+    """,
+  """
+ok
+antes
+depois
+""")
+R.T("tasks.lua:3813 par :any 2", """
+        spawn {
+            par :any {
+                await(:X)
+                print(:x)
+            } with {
+                defer {
+                    print(:y)
+                }
+                await(:Y)
+                print(:no)
+            }
+            print(:ok)
+        }
+        emit(:X)
+        emit(:X)
+        print(:antes)
+        emit(:Y)
+        print(:depois)
+    """,
+  """
+x
+y
+ok
+antes
+depois
+""")
+R.T("tasks.lua:3837 watching 1", """
+        spawn {
+            watching :X {
+                await(:Y)
+                print(:y)
+                await(:Z)
+                print(:z)
+            }
+            print(:x)
+        }
+        print(:antes)
+        emit(:Y)
+        emit(:X)
+        emit(:Z)
+        print(:depois)
+    """,
+  """
+antes
+y
+x
+depois
+""")
 R.T("tasks.lua:3857 do: return", """
         val x = do {
             10
@@ -3563,164 +3563,164 @@ R.T("tasks.lua:3857 do: return", """
   """
 10
 """)
-;; R.T("tasks.lua:3867 par :any 3: return", """
-;;         spawn {
-;;             val x = par :any {
-;;                 await(false)
-;;             } with {
-;;                 10
-;;             }
-;;             print(x)
-;;         }
-;;     """,
-;;   """
-;; 10
-;; """)
-;; R.T("tasks.lua:3881 par :all 3: return", """
-;;         spawn {
-;;             val x,y = par :all {
-;;                 await(true)
-;;                 10
-;;             } with {
-;;                 20
-;;             }
-;;             emit(:10)
-;;             X.print(x,y)
-;;         }
-;;     """,
-;;   """
-;; 10	20
-;; """)
-;; R.T("tasks.lua:3897 watching 2", """
-;;         spawn {
-;;             watching :X {
-;;                 print :Y
-;;             }
-;;             print :X
-;;         }
-;;     """,
-;;   """
-;; Y
-;; X
-;; """)
-;; R.T("tasks.lua:3911 watching until 1", """
-;;         var done = false
-;;         spawn {
-;;             watching until (done) {
-;;                 await(false)
-;;                 print(:never)
-;;             }
-;;             print(:aborted)
-;;         }
-;;         print(1)
-;;         emit(nil)               ;; done=false -> keep watching
-;;         print(2)
-;;         set done = true
-;;         emit(nil)               ;; done=true -> abort watching
-;;         print(3)
-;;     """,
-;;   """
-;; 1
-;; 2
-;; aborted
-;; 3
-;; """)
-;; R.T("tasks.lua:3933 watching f: error: unexpected function", """
-;;         val f = func () { true }
-;;         spawn {
-;;             watching f {
-;;                 await(false)
-;;             }
-;;         }
-;;     """,
-;;   R.P("invalid await : unexpected expression"))
-;; R.T("tasks.lua:3945 par :any 4", """
-;;         spawn {
-;;             par :any {
-;;                 await(:X)
-;;                 print("x")
-;;             } with {
-;;                 loop on :X {
-;;                     print("no")
-;;                 }
-;;             }
-;;             print("or")
-;;         }
-;;         emit(:X)
-;;         emit(:X)
-;;         emit(:X)
-;;         emit(:X)
-;;         print("ok")
-;;     """,
-;;   """
-;; x
-;; or
-;; ok
-;; """)
-;; R.T("tasks.lua:3967 par :any 5", """
-;;         spawn {
-;;             par :any {
-;;                 await(:X)
-;;                 print("x")
-;;             } with {
-;;                 loop on :X {
-;;                     print("no")
-;;                 }
-;;             }
-;;             print("or")
-;;         }
-;;         emit(:X)
-;;         print("ok")
-;;     """,
-;;   """
-;; x
-;; or
-;; ok
-;; """)
-;; R.T("tasks.lua:3986 par :any 6", """
-;;         spawn {
-;;             par :any {
-;;                 await (false)
-;;             } with {
-;;                 do :X {
-;;                     par :any {
-;;                         await (false)
-;;                     } with {
-;;                         await :A
-;;                         escape :X
-;;                     }
-;;                 }
-;;                 print :1
-;;             }
-;;             print :2
-;;         }
-;;         emit :A
-;;     """,
-;;   """
-;; 1
-;; 2
-;; """)
-;; R.T("tasks.lua:4018 emit target : transparent spawn-block", """
-;;         task Inner () {
-;;             await :go
-;;             emit @2 :h
-;;         }
-;;         task Mid () {
-;;             spawn {
-;;                 await Inner()
-;;             }
-;;             await(false)
-;;         }
-;;         spawn Mid()
-;;         par:any {
-;;             await :h
-;;             print("ok")
-;;         } with {
-;;             emit :go
-;;         }
-;;     """,
-;;   """
-;; ok
-;; """)
+R.T("tasks.lua:3867 par :any 3: return", """
+        spawn {
+            val x = par :any {
+                await(false)
+            } with {
+                10
+            }
+            print(x)
+        }
+    """,
+  """
+10
+""")
+R.T("tasks.lua:3881 par :all 3: return", """
+        spawn {
+            val x,y = par :all {
+                await(true)
+                10
+            } with {
+                20
+            }
+            emit(:10)
+            X.print(x,y)
+        }
+    """,
+  """
+10	20
+""")
+R.T("tasks.lua:3897 watching 2", """
+        spawn {
+            watching :X {
+                print :Y
+            }
+            print :X
+        }
+    """,
+  """
+Y
+X
+""")
+R.T("tasks.lua:3911 watching until 1", """
+        var done = false
+        spawn {
+            watching until (done) {
+                await(false)
+                print(:never)
+            }
+            print(:aborted)
+        }
+        print(1)
+        emit(nil)               ;; done=false -> keep watching
+        print(2)
+        set done = true
+        emit(nil)               ;; done=true -> abort watching
+        print(3)
+    """,
+  """
+1
+2
+aborted
+3
+""")
+R.T("tasks.lua:3933 watching f: error: unexpected function", """
+        val f = func () { true }
+        spawn {
+            watching f {
+                await(false)
+            }
+        }
+    """,
+  R.P("invalid await : unexpected expression"))
+R.T("tasks.lua:3945 par :any 4", """
+        spawn {
+            par :any {
+                await(:X)
+                print("x")
+            } with {
+                loop on :X {
+                    print("no")
+                }
+            }
+            print("or")
+        }
+        emit(:X)
+        emit(:X)
+        emit(:X)
+        emit(:X)
+        print("ok")
+    """,
+  """
+x
+or
+ok
+""")
+R.T("tasks.lua:3967 par :any 5", """
+        spawn {
+            par :any {
+                await(:X)
+                print("x")
+            } with {
+                loop on :X {
+                    print("no")
+                }
+            }
+            print("or")
+        }
+        emit(:X)
+        print("ok")
+    """,
+  """
+x
+or
+ok
+""")
+R.T("tasks.lua:3986 par :any 6", """
+        spawn {
+            par :any {
+                await (false)
+            } with {
+                do :X {
+                    par :any {
+                        await (false)
+                    } with {
+                        await :A
+                        escape :X
+                    }
+                }
+                print :1
+            }
+            print :2
+        }
+        emit :A
+    """,
+  """
+1
+2
+""")
+R.T("tasks.lua:4018 emit target : transparent spawn-block", """
+        task Inner () {
+            await :go
+            emit @2 :h
+        }
+        task Mid () {
+            spawn {
+                await Inner()
+            }
+            await(false)
+        }
+        spawn Mid()
+        par:any {
+            await :h
+            print("ok")
+        } with {
+            emit :go
+        }
+    """,
+  """
+ok
+""")
 
 R.finish()

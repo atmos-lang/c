@@ -1128,26 +1128,26 @@ R.T("exec.lua:1338 loop 11", """
 ;;   """
 ;; ok
 ;; """)
-;; R.T("exec.lua:1366 loop 13 : break value in loop on", """
-;;         spawn {
-;;             val x = loop it on :X {
-;;                 print(2)
-;;                 if it.n == 2 {
-;;                     break(it.n * 5)
-;;                 }
-;;                 print(99)
-;;             }
-;;             print(x)
-;;         }
-;;         emit :X [n=1]
-;;         emit :X [n=2]
-;;     """,
-;;   """
-;; 2
-;; 99
-;; 2
-;; 10
-;; """)
+R.T("exec.lua:1366 loop 13 : break value in loop on", """
+        spawn {
+            val x = loop it on :X {
+                print(2)
+                if it.n == 2 {
+                    break(it.n * 5)
+                }
+                print(99)
+            }
+            print(x)
+        }
+        emit :X [n=1]
+        emit :X [n=2]
+    """,
+  """
+2
+99
+2
+10
+""")
 R.T("exec.lua:1388 catch 1", """
         print(:1)
         catch :X {
@@ -1807,82 +1807,82 @@ R.T("exec.lua:2133 tasks 12: fake", """
 20
 20
 """)
-;; R.T("exec.lua:2149 tasks 13: abort", """
-;;         spawn {
-;;             watching :X {
-;;                 defer {
-;;                     print:defer
-;;                 }
-;;                 await(false)
-;;             }
-;;             print:abort
-;;         }
-;;         print:antes
-;;         emit :X
-;;         print:depois
-;;     """,
-;;   """
-;; antes
-;; defer
-;; abort
-;; depois
-;; """)
-;; R.T("exec.lua:2167 tasks 13: abort", """
-;;         val T = task (i) {
-;;             loop on :X {
-;;                 print(:X, i)
-;;             }
-;;         }
-;;         spawn {
-;;             var i = 1
-;;             loop {
-;;                 watching :Y {
-;;                     pin ts = tasks()
-;;                     do {
-;;                         spawn @ts T(i)
-;;                         spawn @ts T(i+1)
-;;                     }
-;;                     emit(:X)
-;;                     await(false)
-;;                 }
-;;                 set i = i + 8
-;;             }
-;;         }
-;;         print '==='
-;;         emit :Y
-;;         print '---'
-;;         emit :X
-;;         print :ok
-;;     """,
-;;   """
-;; X	1
-;; X	2
-;; ===
-;; X	9
-;; X	10
-;; ---
-;; X	9
-;; X	10
-;; ok
-;; """)
-;; R.T("exec.lua:2198 tasks 14: loop", """
-;;         spawn {
-;;             loop {
-;;                 await(:X)
-;;                 print :1
-;;                 watching(:X) {
-;;                     await(:Y)
-;;                 }
-;;                 print :2
-;;             }
-;;         }
-;;         emit(:X)
-;;         emit(:X)
-;;     """,
-;;   """
-;; 1
-;; 2
-;; """)
+R.T("exec.lua:2149 tasks 13: abort", """
+        spawn {
+            watching :X {
+                defer {
+                    print:defer
+                }
+                await(false)
+            }
+            print:abort
+        }
+        print:antes
+        emit :X
+        print:depois
+    """,
+  """
+antes
+defer
+abort
+depois
+""")
+R.T("exec.lua:2167 tasks 13: abort", """
+        val T = task (i) {
+            loop on :X {
+                print(:X, i)
+            }
+        }
+        spawn {
+            var i = 1
+            loop {
+                watching :Y {
+                    pin ts = tasks()
+                    do {
+                        spawn @ts T(i)
+                        spawn @ts T(i+1)
+                    }
+                    emit(:X)
+                    await(false)
+                }
+                set i = i + 8
+            }
+        }
+        print '==='
+        emit :Y
+        print '---'
+        emit :X
+        print :ok
+    """,
+  """
+X	1
+X	2
+===
+X	9
+X	10
+---
+X	9
+X	10
+ok
+""")
+R.T("exec.lua:2198 tasks 14: loop", """
+        spawn {
+            loop {
+                await(:X)
+                print :1
+                watching(:X) {
+                    await(:Y)
+                }
+                print :2
+            }
+        }
+        emit(:X)
+        emit(:X)
+    """,
+  """
+1
+2
+""")
 
 ;; ---- AWAIT / TASK
 

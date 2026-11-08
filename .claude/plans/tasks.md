@@ -240,3 +240,56 @@ clock patterns (`1s`), `await` combinators `&&`/`||`/`!`, `where`,
 backtick natives, the reference's error-trace format and compile-error
 format, `return` inside `catch` (catch.md option B), `++` on pools
 (needs `__pairs` in table concatenation), `xtask(f)` message text.
+
+## Stage 2a: compositions and patterns (design)
+
+Decisions (discussed before implementing):
+
+- `loop [ids] on P { body }` is inline: `loop { val ids = await(P);
+  body }`. No closure, so `break` (with a value), `until`/`while` and
+  `return` behave as in any loop. (The reference wraps it in a closure
+  and a `catch 'atm-loop'` only because its coder works with closures.)
+- `par { } with { }` → `par(\{ }, \{ })`, `par :any` → `par_any`,
+  `par :all` → `par_all`: each block is a closure spawned as a
+  transparent task, as `spawn { }` is; a branch is a task body, so a
+  closure is unavoidable (a coroutine needs a function). `par` awaits
+  forever (the branches live until the enclosing block ends); `par_any`
+  returns the values of the first branch to terminate and aborts the
+  others; `par_all` returns the value of each branch, in order, when
+  all have terminated. Branches are owned by the composition (a hidden
+  pin), so leaving it aborts them.
+- `watching P { body }` → `watching(P, \{ })` = `par_any(\{ await(P)
+  }, body)`: the body is a transparent task too (as the reference);
+  the value is the body's value or the awaited event.
+- `break`/`return`/`escape`/`until`/`while` inside a `par`/`watching`
+  body are compile errors, as inside `catch`: they are jumps here, not
+  throws as in the reference (`atm_break` = `throw('atm-loop')` caught
+  by every loop), and a jump cannot cross a closure. The inline
+  alternative (body in the current task, a hidden watcher task waking
+  it with a private error at its `await`, caught by a VM try region)
+  is catch.md option B, whose scope is `catch` and `watching`. With the
+  stackless coroutines of coroutine.md (c), closures that are task
+  bodies (`par` branches, `watching` bodies) may `await`; closures
+  called inline (`catch` A, `defer`) may not, which is another reason
+  for B.
+- Patterns `await <PAT>` (also after `watching`, `loop on`): leaves are
+  tags/values, `(E)` value expressions, `:any ts`/`:all ts`, `until (c)`/
+  `while (c)`, nested `<P>`, and a bare call `T(args)` which spawns
+  (`["await.spawn"]`); `!p` prefix; `p && p`, `p || p`, `p until (c)`,
+  `p while (c)` at one level, same operator only (mixing `||` and `&&`
+  without parentheses is a compile error). Compiled to constructor
+  calls `_ENV["await.or"](..)`, `["await.and"](..)`, `["await.not"](p)`,
+  `["await.until"](p, pred)`, `["await.while"](p, pred)`. Semantics as
+  the reference: `or` is `par_any` of the sub-awaits (the first to
+  match wins, sub-tasks of the losers are aborted), `and` is `par_all`,
+  `not p` re-awaits until an event that is not `p`; `until`/`while`
+  re-await while the predicate fails/holds, the predicate seeing the
+  event (`it`). `__atmos` metamethod for user patterns.
+- The reference's EVERY section (`every N` cases) is `loop on`.
+
+Tests (enabled, failing before the implementation): exec `loop 13`,
+`tasks 13` (×2), `tasks 14`; tasks.lua `abort 5`, `tasks 25`, EVERY
+(except `every-where`, `every-clock`), PAR/WATCHING (all); await.lua
+all but `op_clock_or` (clock, 2b) and `op_mixed_err` (compile-error
+format). Still out: `escape TCO` and `catch 8b` (escape as a throw
+across tasks), `await 1` (error-trace format).
