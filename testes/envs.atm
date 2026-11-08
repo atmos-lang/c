@@ -1,0 +1,205 @@
+;; Environments: 'atmos.env', 'atmos.loop' driving the steps,
+;; 'atmos.start', 'atmos.stop', '__atmos' patterns and events, the clock
+;; environment. See .claude/plans/tasks.md (stage 3) and the reference
+;; tests (lua-atmos tst/envs.lua, written against the Lua API).
+
+print("testing environments")
+
+;; output captured by a local 'print'
+var out = ""
+val func print (...) {
+  val t = table.pack(...)
+  loop i in (1, t.n) {
+    set t@i = tostring(t@i)
+  }
+  set out = out ++ table.concat(t, "\t") ++ "\n"
+}
+val func check (exp) {
+  assert(out == exp, out)
+  set out = ""
+}
+
+;; ---- quit
+
+do {  ;; quit: single env
+  var q = false
+  atmos.env([step = \{ emit(:X) }, quit = \{ set q = true }])
+  atmos.loop(\{ await(:X) })
+  assert(q)
+}
+
+do {  ;; quit: on error
+  var q = false
+  atmos.env([step = \{ emit(:X) }, quit = \{ set q = true }])
+  val ok, e = pcall(atmos.loop, \{
+    await(:X)
+    print(:err)
+    throw(:ERR)
+  })
+  assert(!ok && (e ?? :ERR))
+  assert(q)
+  check("err\n")
+}
+
+do {  ;; quit: two envs, reverse order
+  var order = ""
+  atmos.env([step = \{ emit(:X) }, quit = \{ set order = order ++ "1" },
+             mode = [primary = true, secondary = false]])
+  atmos.env([step = \{ }, quit = \{ set order = order ++ "2" },
+             mode = [primary = false, secondary = true]])
+  atmos.loop(\{ await(:X) })
+  assert(order == "21")
+}
+
+do {  ;; a step that returns true quits the loop
+  var n = 0
+  atmos.env([step = \{ set n = n + 1; n == 3 }])
+  val v = atmos.loop(\{ await(false); 10 })
+  assert((n == 3) && (v == nil))
+}
+
+;; ---- errors (the mode table)
+
+do {
+  val func flush () {  ;; unregisters the environments left by an error
+    atmos.loop(\{ nil })
+  }
+
+  val ok, err = pcall(func () {
+    atmos.env([step = \{ }])
+    atmos.env([step = \{ }])
+  })
+  assert(!ok && string.find(err, "first env must support primary mode"))
+  flush()
+
+  val ok2, err2 = pcall(func () {
+    atmos.env([step = \{ }, mode = [primary = true, secondary = false]])
+    atmos.env([step = \{ }])
+  })
+  assert(!ok2 && string.find(err2, "non%-first envs must support secondary mode"))
+  flush()
+
+  val ok3, err3 = pcall(func () {
+    atmos.env([step = \{ }, mode = [primary = false, secondary = true]])
+    atmos.env([step = \{ }, mode = [primary = false, secondary = true]])
+  })
+  assert(!ok3 && string.find(err3, "first env must support primary mode"))
+  flush()
+
+  val ok4, err4 = pcall(func () {
+    atmos.env([step = \{ }, mode = [primary = true, secondary = false]])
+    atmos.env([step = \{ }, mode = [primary = true, secondary = false]])
+  })
+  assert(!ok4 && string.find(err4, "non%-first envs must support secondary mode"))
+  flush()
+
+  val ok5, err5 = pcall(atmos.env, 10)
+  assert(!ok5 && string.find(err5, "invalid env : expected table"))
+}
+
+;; ---- multiple environments
+
+do {  ;; primary + secondary
+  var n = 0
+  atmos.env([step = \{
+    set n = n + 1
+    emit :sensor [n]
+    emit @:global 100ms
+  }, mode = [primary = true, secondary = false]])
+  atmos.env([step = \{ emit :net [n * 10] },
+             mode = [primary = false, secondary = true]])
+  atmos.loop(\{
+    val s = await :sensor
+    val x = await :net
+    print(s@1, x@1)
+  })
+  check("1\t10\n")
+}
+
+;; ---- '__atmos' metamethod
+
+do {  ;; event: true
+  val meta = [__atmos = \{ true }]
+  atmos.env([step = \{ emit(setmetatable([], meta)) }])
+  val v = atmos.loop(\{ await(:X); 1 })
+  assert(v == 1)
+}
+
+do {  ;; event: false short-circuits the matching
+  val meta = [__atmos = \{ false }]
+  var n = 0
+  atmos.env([step = \{
+    set n = n + 1
+    ifs {
+      n == 1 => emit(setmetatable([tag = "X"], meta))
+      n == 2 => emit(:X)
+    }
+  }])
+  atmos.loop(\{ await(:X); print(n) })
+  check("2\n")
+}
+
+do {  ;; pattern: true, result
+  val meta = [__atmos = \(me, e) { e }]
+  atmos.env([step = \{ emit(:X) }])
+  val pat = setmetatable([], meta)
+  val v = atmos.loop(\{ val e = await(pat); e })
+  assert(v == "X")
+}
+
+do {  ;; pattern: false short-circuits
+  val meta = [__atmos = \{ false }]
+  var n = 0
+  atmos.env([step = \{ set n = n + 1; emit(:X) }])
+  val pat = setmetatable(["==", "X"], meta)
+  atmos.loop(\{
+    par :any {
+      await(pat)
+      print(:woke)
+    } with {
+      loop _ in 3 { await(true) }
+      print("n=" ++ n)
+    }
+  })
+  check("n=3\n")
+}
+
+;; ---- start / stop
+
+do {
+  var r = nil
+  var q = false
+  atmos.env([step = \{ }, quit = \{ set q = true }])
+  atmos.start(\{ await(:Z); set r = :ok })
+  assert(r == nil)
+  emit(:Z)
+  assert(r == "ok")
+  atmos.stop()  ;; quits the environments
+  assert(q)
+}
+
+do {  ;; start requires a single env without modes
+  val ok, err = pcall(atmos.start, \{ })
+  assert(!ok && string.find(err, "invalid start : expected single%-mode env only"))
+  atmos.env([step = \{ }, mode = [primary = true, secondary = true]])
+  val ok2, err2 = pcall(atmos.start, \{ })
+  assert(!ok2 && string.find(err2, "invalid start : expected single%-mode env only"))
+  atmos.loop(\{ nil })  ;; flush
+}
+
+;; ---- the clock environment
+
+do {
+  val clock = require "atmos.env.clock"
+  assert(type(clock.now) == "number")
+  atmos.loop(\{
+    await(2ms)
+    val late = await(1ms)
+    assert(type(late) == "number")
+    print(:ok)
+  })
+  check("ok\n")
+  assert(clock.now > 0)
+}
+
+print("OK")

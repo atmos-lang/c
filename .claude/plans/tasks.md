@@ -405,3 +405,41 @@ convertible).
   the first only).
 - Results: exec 189, tasks 210, await 17, x 22, timers 9, toggle 2, all
   passing.
+
+## Stage 3: environments (design)
+
+Reference: `run.lua` (`M.env`, `M.loop` step loop, `M.start`,
+`M.stop`), `atmos/env/README.md`, `atmos/env/clock/init.lua`, tests
+`tst/envs.lua` (Lua API; rewritten in Atmos as `testes/envs.atm`),
+`tst/guide.lua`.
+
+- `atmos.env(e)`: registers a table with `step` (polls once, emits;
+  returning true quits the loop), optional `quit` (teardown) and
+  optional `mode = {primary=, secondary=}`. Registration order: a
+  second env requires the first to support primary mode and itself
+  secondary mode ("invalid env : first env must support primary mode",
+  "invalid env : non-first envs must support secondary mode");
+  `mode.current` is set to 'primary'/'secondary' then. An invalid
+  registration leaves nothing registered.
+- `atmos.loop(body, ...)`: spawns the body (under the running task if
+  any, else the root: nested loops, as the test harness, then see the
+  emits of a step issued from the enclosing task), then while the body
+  is alive calls each env's `step` in order, quitting if one returns
+  true, and sweeps dead tasks after each round; with no env and a
+  suspended body it returns (the reference spins). On exit, normal or
+  by error, it closes the body and calls `quit` on each env in reverse
+  order, unregistering them; the body's `ret` is the value.
+- `atmos.start(body, ...)`: for host-driven environments: requires a
+  single env without `mode` ("invalid start : expected single-mode env
+  only"), spawns the body and returns.
+- `atmos.stop()`: aborts the innermost loop body (or everything, outside
+  a loop), quits and unregisters the envs, resets the clock.
+- `__atmos` metamethod: a pattern with it is matched by
+  `__atmos(pattern, event)` (event nil at the start of the await); an
+  event with it is matched by `__atmos(event, pattern)`; a true result
+  returns the event, another truthy result is the value, false ends the
+  matching for that event (no default matching).
+- Clock env: `require "atmos.env.clock"` (a C module in
+  `package.preload`): `step` emits the elapsed microseconds of
+  `os.clock()` to the root; module fields `now`, `env`.
+- Loop bodies carry a flag so `atmos.stop()` finds the innermost one.
