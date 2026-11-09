@@ -2295,7 +2295,9 @@ static void toggleexp (LexState *ls, expdesc *v) {
 ** body's pending await; the region catches it (see catch.md):
 **
 **     OP_TRY A -> handler
-**     R[A] = _ENV["watching.spawn"](P); (watcher) <close> = R[A]
+**     R[A] = _ENV["watching.new"](P); (watcher) <close> = R[A]
+**     _ENV["watching.start"](R[A])   (inside the region: a pattern that
+**                                     holds already throws at once)
 **     body (value at R[A+1])
 **     OP_ENDTRY A; JMP join
 **   handler: OP_CATCH A 0         (e1 == watcher)
@@ -2320,7 +2322,8 @@ static int watchingstat (LexState *ls, expdesc *v) {
   enterblock(fs, &bl, 0);
   bl.nregions = 1;
   {  /* the watcher, pinned by the block, and the condition */
-    int cb = callbegin(ls, "watching.spawn");
+    expdesc w;
+    int cb = callbegin(ls, "watching.new");
     pattexp(ls, &e);
     luaK_exp2nextreg(fs, &e);
     callend(ls, &e, cb, 0, line);
@@ -2330,6 +2333,12 @@ static int watchingstat (LexState *ls, expdesc *v) {
     adjustlocalvars(ls, 1);
     checktoclose(fs, toclose);
     luaK_codeABC(fs, OP_MOVE, base, base + 2, 0);  /* CND = the watcher */
+    cb = callbegin(ls, "watching.start");  /* only now (CND is known) */
+    luaK_codeABC(fs, OP_MOVE, cb + 1, base + 2, 0);
+    luaK_reserveregs(fs, 1);
+    callend(ls, &w, cb, 0, line);
+    SETARG_C(getinstruction(fs, &w), 1);  /* no results */
+    fs->freereg = cast_byte(cb);
   }
   checknext(ls, '{');
   statlist(ls, &bv, &n);

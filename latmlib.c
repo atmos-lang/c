@@ -1984,12 +1984,20 @@ static int watcherbody (lua_State *L) {
   return watcher_k(L, LUA_OK, 0);
 }
 
-static int atm_watching_spawn (lua_State *L) {  /* watching.spawn(P) */
+/* watching.new(P): the watcher, not started (the owner records it as
+   the condition of its region before starting it: a pattern that holds
+   already makes it throw during 'watching.start') */
+static int atm_watching_new (lua_State *L) {
   luaL_checkany(L, 1);
   lua_settop(L, 1);
-  lua_pushvalue(L, 1);
-  lua_pushcclosure(L, watcherbody, 1);  /* at 2 */
-  return spawnaux(L, 0, 1, 2, 0);
+  lua_pushcclosure(L, watcherbody, 1);
+  newxtask(L, 1, 1);
+  return 1;
+}
+
+static int atm_watching_start (lua_State *L) {  /* watching.start(w) */
+  lua_settop(L, 1);
+  return spawnaux(L, 0, 1, 1, 0);
 }
 
 
@@ -2505,7 +2513,8 @@ static const luaL_Reg task_funcs[] = {
   {"await.and", atm_await_and}, {"await.not", atm_await_not},
   {"par", atm_par}, {"par_any", atm_par_any}, {"par_all", atm_par_all},
   {"watching", atm_watching}, {"toggle", atm_toggle},
-  {"watching.spawn", atm_watching_spawn}, {"atm.jump", atm_jump},
+  {"watching.new", atm_watching_new}, {"watching.start", atm_watching_start},
+  {"atm.jump", atm_jump},
   {NULL, NULL}
 };
 

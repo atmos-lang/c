@@ -194,9 +194,14 @@ to-be-closed variables as usual. `...` inside the body is now allowed.
 value, `A+2` = hidden pin `(watcher)`:
 
     OP_TRY A -> handler
-    R[A] = _ENV["watching.spawn"](P)   (a transparent task: await(P),
-                                       then throw(itself, results...))
+    R[A] = _ENV["watching.new"](P)     (a transparent task, not started:
+                                       await(P), then throw(itself,
+                                       results...))
     (watcher) <close> = R[A]           (aborted when the block ends)
+    _ENV["watching.start"](R[A])       (after CND is set: a pattern that
+                                       holds already, as a terminated
+                                       task, throws here and the body is
+                                       skipped, as in the reference)
     body (resreg A+1)
     OP_ENDTRY A -> join
     handler: OP_CATCH A 0              (CND = the watcher: e1 == watcher)
