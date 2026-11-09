@@ -110,6 +110,25 @@ do {  ;; 'until' and locals of the owner used inside the body
   check("2\n")
 }
 
+do {  ;; the pattern holds already: the body does not run (as the
+      ;; reference): a terminated task, a zero timer
+  pin t = spawn (task () { 10 }) ()
+  spawn {
+    val v = watching (t) {
+      print(:body)
+      await(false)
+      20
+    }
+    print(:after, v)
+    val u = watching 0ms {
+      print(:body)
+      await(false)
+    }
+    print(:after, u)
+  }
+  check("after\t10\nafter\t0\n")
+}
+
 ;; ---- spawn blocks: jumps to the owner
 
 do {  ;; break before the first await ("pre") and after it ("pos")
