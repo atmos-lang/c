@@ -204,9 +204,26 @@ C. Stackless (the idea above, swap variant). A suspended task is a
    saved frames, relocation of open upvalues on each swap, and
    `coroutine.*` on tasks losing meaning.
 
-Recommendation (for thousands of tasks): B3, then the task tables.
-B1 is free but small; B2 costs too much per wake; C saves more memory
-but at the price of a language rule.
+Games case (thousands of tasks, all woken every tick): wake cost
+dominates, not memory. Every stack is full size during each tick
+anyway, so shrinking buys nothing between ticks: B2 pays +20-25% per
+wake, B3 regrows every task after each GC cycle, B1 saves 240 bytes.
+Measured per wake (scratch build, 1000 / 5000 / 20000 tasks): task
+wake 0.81 / 0.83 / 1.0 us; raw `coroutine.resume`/`yield` of the
+same number of coroutines from a Lua loop 0.38 / 0.39-0.49 / 0.39-0.44
+us. So about half of a wake is the task runtime, not the switch.
+gprof of the emit benchmark: ~12 `lua_getfield` (string-keyed lookups
+in the xtask/link/struct tables, `luaH_getstr` alone ~24% of the
+time), 3 `luaL_getmetafield` (`__atmos`) and ~18 `lua_type` per wake.
+
+Recommendation (for games): keep stackful coroutines (A, no B), and
+cut the runtime overhead of a wake: keep the task tree and the hot
+fields (status, pass, time, up/dns links, awaited pattern) in C
+structs (the task userdata) instead of string-keyed tables, and
+cache the `__atmos` lookup. Expected: wake close to the raw switch
+(~0.4-0.5 us) and ~400 bytes less per task. C (stackless) would go
+further on both, at the price of the "await only at the task level"
+rule.
 
 ### Status
 
