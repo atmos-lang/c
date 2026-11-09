@@ -1255,6 +1255,19 @@ LUA_API int lua_gc (lua_State *L, int what, ...) {
 */
 
 
+/* Atmos: number of Lua frames active in the thread (a task body that
+   suspends directly has one; see coroutine.md, shallow awaits) */
+LUA_API int lua_luaframes (lua_State *L) {
+  CallInfo *ci;
+  int n = 0;
+  lua_lock(L);
+  for (ci = L->ci; ci != &L->base_ci; ci = ci->previous)
+    if (isLua(ci)) n++;
+  lua_unlock(L);
+  return n;
+}
+
+
 /* Atmos: raise the 'n' top values with the given status (a jump out of
    a task body, 'LUA_ERRJUMP', has no message handler) */
 LUA_API int lua_errorstatus (lua_State *L, int status, int n) {

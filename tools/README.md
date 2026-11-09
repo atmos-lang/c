@@ -143,6 +143,14 @@ Semantics assumed for the Atmos implementation (the tests rely on them):
   and events; `require "atmos.env.clock"` is built in, emitting the
   elapsed processor time); a loop body is spawned under the running
   task when there is one (nested loops), else under the root
+- suspensions are shallow (unlike the reference): `await`, `par`,
+  `par :any/:all`, `watching` (library) and `toggle on` only at the
+  level of a task body (its inline blocks included; `spawn { }`, `par`
+  branches and task prototypes are bodies of their own), never from a
+  function it calls (helpers, `pcall`'d functions, `defer`, lambda
+  branches, metamethods): "invalid await : called from a nested
+  function"; helpers that await are tasks (`await T()`); raw
+  `coroutine.yield` is not restricted
 
 ## tst2atm.py
 

@@ -1438,6 +1438,16 @@ static int predresult (lua_State *L, int residx, int eidx) {
 static int await_k (lua_State *L, int status, lua_KContext ctx);
 
 /*
+** Suspensions are shallow (see coroutine.md): no Lua function may sit
+** between the task body and the runtime function that suspends it
+** (runtime C frames, as an 'await' inside a 'par_any', are fine).
+*/
+static void chkshallow (lua_State *L, const char *name) {
+  if (lua_luaframes(L) > 1)
+    luaL_error(L, "invalid %s : called from a nested function", name);
+}
+
+/*
 ** Checks the pattern (index 1) against the event (index 3, or none
 ** when 'hasevent' is false, right after the await starts). Returns the
 ** number of results, or -1 to keep waiting.
@@ -1762,6 +1772,7 @@ static int atm_await (lua_State *L) {  /* await(p) */
     luaL_error(L, "invalid await : unexpected function");
   pushme(L, 1);  /* the thread's xtask */
   if (lua_isnil(L, 2)) luaL_error(L, "invalid await : expected enclosing task");
+  chkshallow(L, "await");
   kind = pattkind(L, 1);
   if (kind != NULL) {
     if (strcmp(kind, "spawn") == 0) {  /* spawn the task, await it */
@@ -1832,6 +1843,7 @@ static int parbegin (lua_State *L, const char *name) {
   if (!isxtask(L, -1))
     luaL_error(L, "invalid %s : expected enclosing task", name);
   lua_pop(L, 1);
+  chkshallow(L, name);
   for (i = 1; i <= n; i++) {
     if (lua_type(L, i) != LUA_TFUNCTION)
       luaL_error(L, "invalid %s : expected task prototype", name);
@@ -1992,6 +2004,8 @@ static int atm_watching (lua_State *L) {
   luaL_checkany(L, 1);
   if (lua_gettop(L) != 2 || lua_type(L, 2) != LUA_TFUNCTION)
     luaL_error(L, "invalid watching : expected task prototype");
+  if (lua_luaframes(L) > 1)
+    luaL_error(L, "invalid watching : called from a nested function");
   lua_pushvalue(L, 1);
   lua_pushcclosure(L, awaitbranch, 1);
   lua_replace(L, 1);
@@ -2162,6 +2176,7 @@ static int atm_toggle_on (lua_State *L) {  /* toggle(:T, filters..., body) */
   pushme(L, 1);
   if (!isxtask(L, -1)) luaL_error(L, "invalid toggle : expected enclosing task");
   lua_pop(L, 1);
+  chkshallow(L, "toggle");
   if (body > 2) {  /* filters at 2..body-1 */
     lua_rotate(L, 2, 1);  /* body below the filters */
     filterpatt(L, 3);  /* stack: tag, body, filter */
