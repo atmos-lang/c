@@ -52,17 +52,46 @@ value stays at `reg`, like a callee frame vanishing and leaving results
 at the func slot; `value_result` describes it as `VNONRELOC reg`, as the
 parser describes a call adjusted to one result.
 
-What is not supported is more than one value:
+## Several values (design, implemented after catch option B)
 
-- fixed count (`do { (1, 2) }`, `break(a, b)`): feasible by storing n
-  values at `reg..reg+n-1` and reporting n, if every exit of the block
-  agrees on n (or pads with nils to the maximum); small extension of
-  `store_value`/`value_result`. Not done because the reference truncates
-  to one value too.
-- open count (`break(f())` with all results of `f`): only `OP_CALL`,
-  `OP_VARARG`, `OP_RETURN`, `OP_SETLIST` set or read `L->top`; an exit in
-  the middle of a block cannot set `L->top`, so this needs a new opcode
-  or a runtime helper. Left out.
+The reference gives a block all the values of its exit: `val a, b = do
+:X { escape(:X, 10, 20) }` is `10, 20`, `do { (1, 2) }` is `1, 2`
+(manual: "the whole block being escaped evaluates to the other
+arguments"). Here every exit truncated, keeping the *last* extra value
+(`break(1, 2)` gave `2`). Design, with a static arity per exit and no
+runtime count:
+
+- Each exit of a compound statement (`do`/`loop`/`if`/`ifs`/`match`/
+  `test`: the normal end of the body, `break`/`until`/`while` values,
+  `escape` values, branch ends) yields k values, k known at compile
+  time: 0 (`escape(:X)`, `break()`, a loop's normal exit, `if` without
+  `else`), 1, or the n values of a parenthesized tuple or of an
+  argument list. The values are evaluated first (above the block's
+  locals) and then moved to `reg..reg+k-1`, `reg` being the value
+  register of the construct; the construct records the arities seen
+  (`ResDesc.arities`, a bit set; at most 15 values).
+- Exits are grouped by arity: `break`/`escape` jump to a label named
+  per arity (`break#k`, `tag#k`, created at the block end as the
+  single `break`/tag labels were) and branch ends keep one jump list
+  per arity. At the end of the construct the maximum arity `max` is
+  known (at least 1); the labels/lists are resolved in increasing arity
+  and each one is followed by `OP_LOADNIL reg+k .. reg+max-1` (nil
+  padding), falling through into the next (re-padding is harmless), so
+  that every exit leaves exactly `max` values. A construct whose exits
+  are all single-valued (the common case) gets no padding and stays a
+  `VNONRELOC reg` expression, exactly as before.
+- With `max > 1` the construct ends with `OP_BLOCKRES reg B C` (`B-1 =
+  max` values available at `reg..`, `C-1` wanted, `C = 0` open: `L->top
+  = reg + max`), and the expression is `VCALL`-like, so `val a, b = do
+  ...`, `print(do ...)` and `f(loop ...)` get all values through the
+  usual `luaK_setreturns`/`luaK_setoneret`; a single-value context takes
+  `reg`. (`catch` keeps its own `OP_CATCHRES`: its error path has a
+  dynamic count.)
+- Statement position discards (`discard` sets `C = 1`). Function bodies
+  ending in a multi-valued block still return one value (`tailreturn`:
+  a block is like a call there).
+- Jumps out of task bodies carry one value to the owner's loop/block
+  (the reference's `break(v)`), unchanged.
 
 ## Open points
 

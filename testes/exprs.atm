@@ -118,4 +118,69 @@ do {
   assert(select(9, id(1, 2, 3, 4, 5, 6, 7, 8, do { val x = 9; x })) == 9)
 }
 
+;; ---- several values (see .claude/plans/expressions.md)
+
+do {
+  val func count (...) { select("#", ...) }
+  ;; a parenthesized tuple as the block value
+  val a, b = do { (10, 20) }
+  assert((a == 10) && (b == 20))
+  assert(count(do { (1, 2, 3) }) == 3)
+  val x = do { (10, 20) }  ;; one wanted: the first
+  assert(x == 10)
+  ;; escape with several values
+  val c, d = do :X { escape(:X, 1, 2); 99 }
+  assert((c == 1) && (d == 2))
+  val e, f = do :X { do :Y { escape(:X, 3, 4) }; 99 }
+  assert((e == 3) && (f == 4))
+  ;; break with several values; the loop's normal exit pads with nils
+  val g, h = loop { break(5, 6) }
+  assert((g == 5) && (h == 6))
+  var n = 0
+  val i, j = loop { set n = n + 1; until(n == 2, 7, 8) }
+  assert((i == 7) && (j == 8))
+  val k, l = loop { set n = n + 1; while(n < 4, 9) }
+  assert((k == 9) && (l == nil))
+  ;; exits of different arities: shorter ones are padded with nils
+  val func m (c) { do :X { if c { escape(:X, 1) }; escape(:X, 2, 3) } }
+  assert((count(m(true)) == 2) && (count(m(false)) == 2))
+  val m1, m2 = m(true)
+  assert((m1 == 1) && (m2 == nil))
+  val m3, m4 = m(false)
+  assert((m3 == 2) && (m4 == 3))
+  val func z (c) { loop { if c { break() }; break(1, 2, 3) } }
+  assert((count(z(true)) == 3) && (count(z(false)) == 3))
+  assert(z(true) == nil)
+  ;; if / ifs / match branches
+  val func w (c) { if c { (1, 2) } else { 3 } }
+  val w1, w2 = w(true)
+  assert((w1 == 1) && (w2 == 2) && (count(w(false)) == 2) && (w(false) == 3))
+  val func v (c) { ifs { c == 1 => (1, 2) ; c == 2 => 3 } }
+  assert((count(v(1)) == 2) && (select(2, v(1)) == 2) && (v(2) == 3) && (v(3) == nil))
+  val func u (c) { match c { 1 => (1, 2) ; else => 3 } }
+  assert((count(u(1)) == 2) && (u(0) == 3))
+  ;; single-valued constructs are unchanged (one value, even when open)
+  assert(count(do { 1 }) == 1)
+  assert(count(loop { break(1) }) == 1)
+  assert(count(if true { 1 } else { 2 }) == 1)
+  assert(count(do { }) == 1)
+  assert(count(loop { break() }) == 1)
+  ;; values of an open block in a call and a return
+  val func s (...) { (...) }
+  assert(count(s(do { (1, 2) }, 3)) == 3)
+  assert(count(s(1, do { (2, 3) })) == 3)
+  val func r () { return(do { (4, 5) }) }
+  assert(count(r()) == 2)
+  ;; a block in statement position with several values is fine
+  do { (1, 2) }
+  loop { break(1, 2) }
+  ;; pending variables close before the values are stored
+  var log = ""
+  val p, q = do :X {
+    pin o = setmetatable([], [__close = \{ set log = log ++ "c" }])
+    escape(:X, 1, 2)
+  }
+  assert((p == 1) && (q == 2) && (log == "c"))
+}
+
 print("OK")

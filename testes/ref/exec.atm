@@ -178,24 +178,24 @@ R.T("exec.lua:228 do 1", """
   """
 [0]
 """)
-;; R.T("exec.lua:240 do 2", """
-;;         val a,b = do :X {
-;;             escape(:X,10,20)
-;;         }
-;;         print(a,b)
-;;     """,
-;;   """
-;; 10	20
-;; """)
-;; R.T("exec.lua:250 do 3", """
-;;         val a,b = do :X {
-;;             (10,20)
-;;         }
-;;         print(a,b)
-;;     """,
-;;   """
-;; 10	20
-;; """)
+R.T("exec.lua:240 do 2", """
+        val a,b = do :X {
+            escape(:X,10,20)
+        }
+        print(a,b)
+    """,
+  """
+10	20
+""")
+R.T("exec.lua:250 do 3", """
+        val a,b = do :X {
+            (10,20)
+        }
+        print(a,b)
+    """,
+  """
+10	20
+""")
 R.T("exec.lua:260 do 4", """
         val x = do :X {
             escape <- :X [10]
@@ -2412,13 +2412,13 @@ R.T("exec.lua:2817 error 1", """
 
 ;; ---- REQUIRE
 
-;; R.T("exec.lua:2843 require 1", """
-;;         val Z,f = require "z"
-;;         print(f, Z.f(10))
-;;     """,
-;;   """
-;; ./z.atm	20
-;; """)
+R.T("exec.lua:2843 require 1", """
+        val Z,f = require "z"
+        print(f, Z.f(10))
+    """,
+  """
+./z.atm	20
+""")
 ;; R.T("exec.lua:2853 require 2: error", """
 ;;         require "y"
 ;;         print(1 + true)

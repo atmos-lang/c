@@ -467,3 +467,10 @@ Note: exec `loop 7` (`loop k,v in [x=1,y=2]`) accepts two output orders
 in the reference (`assert(out == a or out == b)`); the converter keeps
 the first only and string hashing is randomized per run, so the case is
 flaky and stays disabled.
+
+## Pools and `++`
+
+`xs ++ ys` with pools: `concatinto` (ltm.c) iterates a table through
+its `__pairs` metamethod when it has one (pools keep their tasks in a
+hidden table and expose them through `__pairs`), appending the values
+in order; the result is a plain table of tasks (`tasks 24`).

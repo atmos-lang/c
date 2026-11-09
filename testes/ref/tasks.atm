@@ -3277,18 +3277,18 @@ R.T("tasks.lua:3562 tasks 23: awake t.up.up", """
   """
 ok
 """)
-;; R.T("tasks.lua:3581 tasks 24: ++", """
-;;         task T () { await(false) }
-;;         pin xs = tasks()
-;;         pin ys = tasks()
-;;         val x = spawn @xs T()
-;;         val y = spawn @ys T()
-;;         val ts = xs ++ ys
-;;         print(#(xs ++ ys), x?>ts, y?>ts, 10?>ts)
-;;     """,
-;;   """
-;; 2	true	true	false
-;; """)
+R.T("tasks.lua:3581 tasks 24: ++", """
+        task T () { await(false) }
+        pin xs = tasks()
+        pin ys = tasks()
+        val x = spawn @xs T()
+        val y = spawn @ys T()
+        val ts = xs ++ ys
+        print(#(xs ++ ys), x?>ts, y?>ts, 10?>ts)
+    """,
+  """
+2	true	true	false
+""")
 R.T("tasks.lua:3594 tasks 25: former bug - tail call", """
         pin ts = tasks()
         task T () { print :ok }
