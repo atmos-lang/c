@@ -1,0 +1,211 @@
+;; Shallow suspensions: 'await', 'par', 'par :any/:all' and 'toggle on'
+;; only at the level of a task body (inline blocks are part of it;
+;; 'spawn { }', 'par' branches and task prototypes are bodies of their
+;; own), never from a function called by the body. Raw
+;; 'coroutine.yield' is not restricted. See .claude/plans/coroutine.md
+;; ("Decision: shallow awaits, swapped stacks").
+
+print("testing shallow suspensions")
+
+val realprint = print
+var out = ""
+val func print (...) {
+  val t = table.pack(...)
+  loop i in (1, t.n) {
+    set t@i = tostring(t@i)
+  }
+  set out = out ++ table.concat(t, "\t") ++ "\n"
+}
+val func check (exp) {
+  assert(out == exp, out)
+  set out = ""
+}
+val func has (e, msg) {
+  (type(e) == "string") && (string.find(e, msg, 1, true) != nil)
+}
+
+;; ---- errors
+
+do {  ;; await in a function called by a task body
+  val f = func () { await(:X) }
+  val ok, e = pcall(\{
+    spawn {
+      f()
+    }
+  })
+  print(ok, has(e, "invalid await : called from a nested function"))
+  check("false\ttrue\n")
+}
+
+do {  ;; await in a function called through 'pcall'
+  spawn {
+    val ok, e = pcall(func () { await(:X) })
+    print(ok, has(e, "invalid await : called from a nested function"))
+  }
+  check("false\ttrue\n")
+}
+
+do {  ;; await in a lambda branch (a closure)
+  val ok, e = pcall(\{
+    spawn {
+      if true => \{ await(:X) }
+    }
+  })
+  print(ok, has(e, "invalid await : called from a nested function"))
+  check("false\ttrue\n")
+}
+
+do {  ;; await in a 'defer'
+  val ok, e = pcall(\{
+    spawn {
+      defer { await(:X) }
+    }
+  })
+  print(ok, has(e, "invalid await : called from a nested function"))
+  check("false\ttrue\n")
+}
+
+do {  ;; 'par' in a nested function
+  val g = func () {
+    par {
+      await(:X)
+    } with {
+      await(:Y)
+    }
+  }
+  val ok, e = pcall(\{
+    spawn {
+      g()
+    }
+  })
+  print(ok, has(e, "invalid par : called from a nested function"))
+  check("false\ttrue\n")
+}
+
+do {  ;; 'par :any' in a nested function
+  val g = func () {
+    par :any {
+      await(:X)
+    } with {
+      await(:Y)
+    }
+  }
+  val ok, e = pcall(\{
+    spawn {
+      g()
+    }
+  })
+  print(ok, has(e, "invalid par_any : called from a nested function"))
+  check("false\ttrue\n")
+}
+
+do {  ;; 'toggle on' in a nested function
+  val g = func () {
+    toggle on :T {
+      await(:X)
+    }
+  }
+  val ok, e = pcall(\{
+    spawn {
+      g()
+    }
+  })
+  print(ok, has(e, "invalid toggle : called from a nested function"))
+  check("false\ttrue\n")
+}
+
+;; ---- allowed
+
+do {  ;; inline blocks are the body
+  spawn {
+    do {
+      await(:A)
+      print(:do)
+    }
+    loop i in 1 {
+      await(:B)
+      print(:loop)
+    }
+    if true {
+      await(:C)
+      print(:if)
+    }
+    catch :E {
+      await(:D)
+      print(:catch)
+    }
+    watching :Z {
+      await(:E)
+      print(:watching)
+    }
+    val v = await <:F || :G>
+    print(:or, v)
+  }
+  emit(:A)
+  emit(:B)
+  emit(:C)
+  emit(:D)
+  emit(:E)
+  emit(:G)
+  check("do\nloop\nif\ncatch\nwatching\nor\tG\n")
+}
+
+do {  ;; tasks spawned by a nested function have their own body
+  val h = func () {
+    spawn {
+      await(:X)
+      print(:h)
+    }
+  }
+  spawn {
+    h()
+    await(:Y)
+    print(:y)
+  }
+  emit(:X)
+  emit(:Y)
+  check("h\ny\n")
+}
+
+do {  ;; helpers that await become tasks: 'await T()'
+  val T = task (e) {
+    await(e)
+    10
+  }
+  spawn {
+    val v = await T(:X)
+    print(:t, v)
+  }
+  emit(:X)
+  check("t\t10\n")
+}
+
+do {  ;; 'par' branches are bodies
+  spawn {
+    par :all {
+      await(:X)
+      print(:x)
+    } with {
+      await(:Y)
+      print(:y)
+    }
+    print(:all)
+  }
+  emit(:Y)
+  emit(:X)
+  check("y\nx\nall\n")
+}
+
+do {  ;; a raw yield is not restricted
+  val f = func () {
+    coroutine.yield()
+  }
+  spawn {
+    f()
+    print(:resumed)
+  }
+  emit(:X)
+  check("resumed\n")
+}
+
+realprint("OK")

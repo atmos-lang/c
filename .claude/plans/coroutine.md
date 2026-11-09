@@ -275,6 +275,49 @@ is worth it only if memory per task becomes the limit (10000 tasks:
 ~11 MB stackful vs ~4 MB stackless) or the remaining ~0.12 us switch
 matters, and the rule is accepted.
 
+### Decision: shallow awaits, swapped stacks (in progress)
+
+Decided: tasks are "stackless" with the rule that Atmos suspensions
+(`await`, `par`, `par :any/:all`, the library `watching`, `toggle on`)
+are only allowed at the task body level: no Lua function call may sit
+between the task body and the suspension (inline blocks are part of
+the body; `par` branches, `spawn { }` bodies and `toggle on` bodies
+are task bodies of their own). Violations raise
+"invalid <name> : called from a nested function". Raw
+`coroutine.yield` is not restricted (the swap saves any depth; only
+memory grows). Consequences: helper functions that await become tasks
+(`await(T())`); `await` in a `defer`, a `pcall`'d function, a
+metamethod, an iterator or a lambda branch (`=> \{ }`, a closure) is
+an error.
+
+Implementation, in two stages:
+
+1. The rule: a core query of the number of Lua frames of the running
+   thread (`lua_luaframes`); the suspending runtime functions require
+   at most one (the body; runtime C frames in between are fine).
+2. Swapped stacks (the swap variant, keeping one `lua_State` per
+   task): a task thread is marked stackless at spawn; while suspended
+   its stack is a private buffer sized to its live slots (up to `top`,
+   plus a small margin for the resume arguments); `lua_resume` copies
+   it onto a working stack (one per nesting depth of stackless
+   resumes, in `global_State`, grown on demand) and copies it back when
+   the resume returns (yield, end or error), reusing the private
+   buffer when the size fits. Pointers are converted with
+   `relstack`/`correctstack` (as `luaD_reallocstack`); try regions
+   already keep offsets. The frames' reserved `ci->top` may lie beyond
+   the private buffer while suspended (only `lua_checkstack` and the
+   GC look at it: the GC does not shrink stackless threads). Idle
+   working stacks may hold stale values, so the GC atomic phase clears
+   them (a stale value is never older than the last atomic phase).
+   Expected: ~1.1-1.2 KB per idle task (from ~1.5), the stack part
+   staying small even when every task wakes every tick; a few tens of
+   ns per wake for the two copies.
+   Not done (possible later stage): dropping the `lua_State` per task
+   (a task = closure + saved frames running on a worker thread per
+   depth) would save ~300-400 bytes more, but the runtime identifies
+   tasks by their thread (`me`, the coroutine->xtask cache,
+   `RUNNING`, `coroutine.running`), all of which would change.
+
 ### Status
 
 (c): stackless coroutines are not implemented (decision pending, see

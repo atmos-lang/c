@@ -200,6 +200,7 @@ do {  ;; (
   dofile('envs.atm')
   dofile('jumps.atm')
   dofile('emit.atm')
+  dofile('shallow.atm')
   dofile('ref/streams.atm')
   dofile('ref/thread.atm')
   dofile('math.atm')
