@@ -2148,7 +2148,7 @@ static void pattbin (LexState *ls, expdesc *e) {
   int op;
   pattunary(ls, e);
   op = ls->t.token;
-  if (op == TK_UNTIL || op == TK_WHILE)
+  if ((op == TK_UNTIL || op == TK_WHILE) && sameline(ls))
     pattpred(ls, e);
   else if (op == TK_OR || op == TK_AND) {
     int base = callwith(ls, e, (op == TK_OR) ? "await.or" : "await.and");
@@ -2160,7 +2160,7 @@ static void pattbin (LexState *ls, expdesc *e) {
     } while (ls->t.token == op);
     callend(ls, e, base, 0, line);
   }
-  if (pattop(ls->t.token))
+  if (pattop(ls->t.token) && sameline(ls))
     luaX_syntaxerror(ls,
       "operation error : use parentheses to disambiguate");
 }
@@ -2175,7 +2175,9 @@ static void pattexp (LexState *ls, expdesc *e) {
   }
   else {  /* bare or value: a leaf, optionally with a predicate */
     pattprim(ls, e);
-    if (ls->t.token == TK_UNTIL || ls->t.token == TK_WHILE)
+    /* (as the reference: no separator before a pattern's 'until' or
+       'while'; on the next line they are statements) */
+    if ((ls->t.token == TK_UNTIL || ls->t.token == TK_WHILE) && sameline(ls))
       pattpred(ls, e);
   }
 }
