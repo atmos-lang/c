@@ -1,0 +1,353 @@
+;; Broadcasts ('emit') and the awaits they wake: the cases the runtime
+;; may decide without resuming the task (tags, booleans, clock,
+;; tasks, pools, table patterns) and those it must not (user patterns
+;; and events with '__atmos', predicates, raw 'coroutine.yield').
+;; See .claude/plans/coroutine.md ("Wasted resumes").
+
+print("testing emit and await matching")
+
+val realprint = print
+var out = ""
+val func print (...) {
+  val t = table.pack(...)
+  loop i in (1, t.n) {
+    set t@i = tostring(t@i)
+  }
+  set out = out ++ table.concat(t, "\t") ++ "\n"
+}
+val func check (exp) {
+  assert(out == exp, out)
+  set out = ""
+}
+
+;; ---- tags
+
+do {  ;; a tag matches itself and its sub-tags at a '.' boundary
+  spawn {
+    loop {
+      val e = await(:X)
+      print(:X, e)
+    }
+  }
+  spawn {
+    loop {
+      val e = await(:X.Y)
+      print(:XY, e)
+    }
+  }
+  emit(:X)
+  emit(:X.Y)
+  emit(:XY)
+  emit(:Z)
+  emit(:X.Y.Z)
+  check("X\tX\nX\tX.Y\nXY\tX.Y\nX\tX.Y.Z\nXY\tX.Y.Z\n")
+}
+
+do {  ;; a tagged table matches by its tag; a type name matches its values
+  spawn {
+    val e = await(:X)
+    print(e.v)
+    val n = await(:boolean)
+    print(:b, n)
+  }
+  emit(:Y [v=1])
+  emit(:X [v=2])
+  emit(:no)
+  emit(true)
+  check("2\nb\ttrue\n")
+}
+
+do {  ;; 'true': any event; 'false': none
+  spawn {
+    val e = await(true)
+    print(:any, e)
+  }
+  spawn {
+    await(false)
+    print(:never)
+  }
+  emit(:A)
+  emit(:B)
+  check("any\tA\n")
+}
+
+;; ---- table patterns
+
+do {  ;; pattern =>= event: only tables can match
+  spawn {
+    val e = await(:X [v=1])
+    print(e.v, e.w)
+  }
+  emit(:X)
+  emit(:X [v=2])
+  emit(:X [v=1, w=3])
+  check("1\t3\n")
+}
+
+;; ---- clock
+
+do {  ;; a timer counts down numeric ticks only, and reports the nearest
+  spawn {
+    val late = await(10ms)
+    print(:a, late)
+  }
+  spawn {
+    val dt, late = await(:clock)
+    print(:clock, dt, late)
+  }
+  emit(:X)
+  print(atmos.next())
+  emit @:global 4ms
+  print(atmos.next())
+  emit(:X)
+  emit @:global 9ms
+  check("10000\nclock\t4000\t0\n6000\na\t3000\n")
+}
+
+do {  ;; a tick is split at the nearest timer; the late part is carried
+  spawn {
+    loop {
+      val late = await(10ms)
+      print(:a, late)
+    }
+  }
+  spawn {
+    val late = await(15ms)
+    print(:b, late)
+  }
+  emit @:global 25ms
+  check("a\t15000\nb\t10000\na\t5000\n")
+}
+
+;; ---- tasks and pools
+
+do {  ;; a task awaited from outside its owner wakes on any later event
+  var G = nil
+  spawn {  ;; before the owner: the broadcast reaches it first
+    await(:start)
+    val v, t = await(G)
+    print(:term, v, t == G)
+  }
+  spawn (task () {  ;; a real task (not transparent): owner of 't'
+    pin t = spawn (task () {
+      await(:A)
+      10
+    }) ()
+    set G = t
+    await(false)
+  }) ()
+  emit(:start)
+  emit(:A)  ;; 't' terminates after the awaiting task saw ':A'
+  print(:after_A)
+  emit(:B)
+  check("after_A\nterm\t10\ttrue\n")
+}
+
+do {  ;; :any / :all wake on terminations of the pool's tasks only
+  pin ts = tasks()
+  task T (v) {
+    await(v)
+    v
+  }
+  spawn @ts T(:a)
+  spawn @ts T(:b)
+  spawn {
+    val v = await :any ts
+    print(:any, v)
+    val w = await :all ts
+    print(:all, w)
+  }
+  emit(:x)
+  emit(:a)
+  emit(:y)
+  emit(:b)
+  check("any\ta\nall\tb\n")
+}
+
+;; ---- user patterns and events, predicates, raw yields
+
+do {  ;; a pattern with '__atmos' decides on every event
+  val P = setmetatable([], [__atmos = func (p, e) {
+    print(:check, e)
+    e == :B
+  }])
+  spawn {
+    val e = await(P)
+    print(:got, e)
+  }
+  emit(:A)
+  emit(:B)
+  check("check\tnil\ncheck\tA\ncheck\tB\ngot\tB\n")
+}
+
+do {  ;; an event with '__atmos' decides for every awaiting task
+  val E = setmetatable([], [__atmos = func (e, p) {
+    print(:dec, p)
+    p == false
+  }])
+  spawn {
+    await(10ms)
+    print(:timer)
+  }
+  spawn {
+    await(false)
+    print(:false)
+  }
+  emit(E)
+  emit @:global 10ms
+  check("dec\t10000\ndec\tfalse\nfalse\ntimer\n")
+}
+
+do {  ;; predicates run in the task, on the events of their pattern
+  val f = func (e) { print(:pred, e.v) ; e.v == 2 }
+  spawn {
+    val e = await <:X until (f(it))>
+    print(:got, e.v)
+  }
+  emit(:Y [v=1])
+  emit(:X [v=1])
+  emit(:X [v=2])
+  check("pred\t1\npred\t2\ngot\t2\n")
+}
+
+do {  ;; a raw yield in a task body is resumed by every event
+  spawn {
+    loop i in 2 {
+      val e = coroutine.yield()
+      print(:yield, e)
+    }
+  }
+  emit(:A)
+  emit(:B)
+  emit(:C)
+  check("yield\tA\nyield\tB\n")
+}
+
+;; ---- order, time stamps, aborts, errors
+
+do {  ;; a task awakes once per emit; tasks spawned by a reaction do not
+      ;; see the event being broadcast
+  spawn {
+    loop {
+      await(:X)
+      print(:a)
+      spawn {
+        await(:X)
+        print(:b)
+      }
+    }
+  }
+  emit(:X)
+  check("a\n")
+  emit(:X)
+  check("b\na\n")
+}
+
+do {  ;; a sibling aborted by an earlier reaction is not resumed
+  var G = nil
+  spawn {
+    await(:X)
+    print(:first)
+    abort(G)
+  }
+  spawn {
+    pin t = spawn (task () {
+      await(:X)
+      print(:never)
+    }) ()
+    set G = t
+    await(false)
+  }
+  emit(:X)
+  check("first\n")
+}
+
+do {  ;; an error in a child is raised at the owner's await; the later
+      ;; children of that owner do not see the event
+  spawn {
+    catch :E {
+      spawn {
+        await(:go)
+        throw(:E)
+      }
+      spawn {
+        await(:go)
+        print(:sibling)
+      }
+      await(false)
+    }
+    print(:caught)
+  }
+  spawn {
+    await(:go)
+    print(:other)
+  }
+  emit(:go)
+  check("caught\nother\n")
+}
+
+do {  ;; an uncaught error reaches the emitter
+  spawn {
+    await(:go)
+    error("oops")
+  }
+  val ok, err = pcall(\{ emit(:go) })
+  print(ok, string.match(err, "oops"))
+  check("false\toops\n")
+}
+
+do {  ;; toggled off: only the events that pass the filter
+  pin t = spawn (task () {
+    loop {
+      val e = await(true)
+      print(:got, e)
+    }
+  }) ()
+  toggle t(false) with :b
+  emit(:a)
+  emit(:b)
+  toggle t(true)
+  emit(:c)
+  check("got\tb\ngot\t0\ngot\tc\n")
+}
+
+
+
+;; ---- cost: an event that matches no task, or a tick that expires no
+;; timer, must cost much less than a wake (the task is not resumed)
+
+do {
+  val N = 5000
+  var c = 0
+  pin ts = tasks()
+  loop i in N {
+    spawn @ts (task () {
+      loop {
+        await(:X)
+        set c = c + 1
+      }
+    }) ()
+  }
+  pin us = tasks()
+  loop i in N {
+    spawn @us (task () {
+      loop {
+        await(1000s)
+        set c = c + 1
+      }
+    }) ()
+  }
+  val func time (f) {
+    val t0 = os.clock()
+    loop j in 20 { f() }
+    os.clock() - t0
+  }
+  val wake = time(\{ emit @ts :X })
+  val miss = time(\{ emit @ts :Y })
+  val tick = time(\{ emit @:global 1ms })
+  assert(c == (20 * N))
+  assert((miss / wake) < 0.4, "miss/wake = " ++ tostring(miss / wake))
+  assert((tick / wake) < 0.4, "tick/wake = " ++ tostring(tick / wake))
+}
+
+realprint("OK")

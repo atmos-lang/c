@@ -199,6 +199,7 @@ do {  ;; (
   dofile('ref/timers.atm')
   dofile('envs.atm')
   dofile('jumps.atm')
+  dofile('emit.atm')
   dofile('ref/streams.atm')
   dofile('ref/thread.atm')
   dofile('math.atm')
