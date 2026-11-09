@@ -2744,9 +2744,13 @@ static int suffixloop (LexState *ls, expdesc *v, int nocall) {
           int plus = (ls->t.token == '+');
           int line = ls->linenumber;
           luaX_next(ls);
-          luaK_exp2anyreg(fs, v);
-          key = *v;  /* copy of table */
-          luaK_prefix(fs, OPR_LEN, &key, line);  /* #t */
+          luaK_exp2anyreg(fs, v);  /* the table (maybe a temporary) */
+          /* #t in a fresh register above it (a unary operation would
+             free the table's temporary register and reuse it) */
+          init_exp(&key, VNONRELOC, fs->freereg);
+          luaK_reserveregs(fs, 1);
+          luaK_codeABC(fs, OP_LEN, key.u.info, v->u.info, 0);
+          luaK_fixline(fs, line);
           if (plus) {  /* #t + 1 */
             expdesc one;
             init_exp(&one, VKINT, 0);
