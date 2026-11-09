@@ -140,9 +140,55 @@ keeps calls from the body working without giving each coroutine a big stack.
    event into thousands of waiting tasks then costs one frame copy per
    awakened task instead of one full coroutine switch.
 
+### Measurements and options (proposal, to decide)
+
+Measured with the current implementation (`testes` build): a task
+suspended at its body level costs 1534 bytes; suspended 20 calls deep,
+3846; one `emit` waking 20000 waiting tasks takes 11 ms (0.55 us per
+task). The 1534 bytes are: `lua_State` 256, its stack 45 slots x 16 =
+720 (`BASIC_STACK_SIZE`, allocated at creation and never shrunk), two
+`CallInfo`s (the body frame and the C frame of `await`) 144, and about
+400 for the xtask table, its link table and the struct userdata. Each
+call level at the suspension point adds a `CallInfo` (72) plus stack.
+
+Options:
+
+A. Keep stackful coroutines (status quo). No language restriction;
+   `await` works in helper functions called by a task, in callbacks,
+   anywhere a yield works. About 1.5 KB per idle task.
+
+B. Shrink on suspend. Keep one `lua_State` per task but, when it
+   yields, reallocate its stack down to what the live frames use (the
+   body frame plus the `await` frame, typically 10-20 slots) and let it
+   grow again on resume (`luaD_reallocstack`, as `luaD_shrinkstack`
+   does on GC). No restriction; one reallocation per switch (a few
+   hundred bytes copied: cheaper than the resume itself for awaiting
+   tasks); about 0.8-0.9 KB per idle task; a change of ~40 lines in the
+   yield/resume path, task-only (a flag on the thread, set by
+   `spawn`). Deep suspension points still cost their frames.
+
+C. Stackless (the idea above, swap variant). A suspended task is a
+   closure plus a saved copy of its body frame (`maxstacksize` slots,
+   about 200-300 bytes), no `lua_State`; waking copies the frame onto a
+   working stack. About 5x less memory than today and a faster wake-up,
+   but a language rule: `await` (and `emit` paths that may suspend)
+   only in the task body's own frame and in its inline blocks (`do`,
+   `loop`, `if`, `catch`, `watching`, `loop on`: all inline now), never
+   in a function called by the task, in a `defer`, a `pcall` callback
+   or a metamethod. Helper functions that await become impossible; the
+   reference allows them (plain Lua coroutines). Also a large change:
+   a new coroutine representation beside `lua_State`, GC traversal of
+   saved frames, relocation of open upvalues on each swap, and
+   `coroutine.*` on tasks losing meaning.
+
+Recommendation: B if memory per task matters now (thousands of idle
+tasks), A otherwise; C only if "await only at the task level" is
+accepted as a language rule, which is a design decision rather than an
+implementation one.
+
 ### Status
 
-Idea stage; nothing implemented for (c). Item (a) is implemented
+Idea stage; nothing implemented for (c) beyond the measurements above. Item (a) is implemented
 (`lua_resumeerror` in `ldo.c`, `coroutine.error` in `lcorolib.c`;
 tests `testes/coerror.atm`); (b) is not needed (see above). Note: as
 in Lua, the to-be-closed variables of a coroutine that dies by an
