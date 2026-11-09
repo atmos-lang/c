@@ -259,7 +259,11 @@ let `emittree` test it:
 - `or`/`and`/`not`: leaves are transparent tasks with simple patterns,
   filtered the same way.
 A filtered-out task then costs a C test (tens of ns) instead of a
-resume. Also: `emittree` runs every child under a `lua_pcall` (a
+resume. Difference found by the SNKRX benchmark (tools/bench): the
+reference, which resumes every timer on every event, re-reports the
+timer's remaining time (`CLK.min`) on non-tick events too; a stale
+report (a timer that the current piece then expires) can split the
+next piece. This implementation reports only on ticks (TODO.md item 10). Also: `emittree` runs every child under a `lua_pcall` (a
 `setjmp` per child, matched or not); resumes are already protected
 (`lua_resume` returns the status), so the per-child pcall can go too.
 

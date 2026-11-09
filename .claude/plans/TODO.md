@@ -117,3 +117,24 @@ Lua module in the reference: `ref/streams.atm` cases disabled).
 - Tail call optimization is bad for error messages / tracebacks
   (`(...tail calls...)`). Could it be disabled? Or made explicit
   (opt-in syntax)?
+
+## 10. Gaps found by the games (tools/bench)
+
+Running pico-rocks, pico-birds (birds-11) and the SNKRX port (see
+`tools/bench/README.md`) needed rewrites for constructs the reference
+accepts and this implementation does not (yet), to decide:
+
+- `e where { x = ... }` (already item 7; used by all three games).
+- statements after `=>` (`=> set x = v`, `=> break()`, `=> emit ...`):
+  the reference treats every statement as an expression.
+- bare `break`, `return e` / `return [..]` without parentheses.
+- `until (c, v)` / `while (c, v)`: break with a value.
+- `spawn v->f(..)` (pipe call after `spawn`).
+- the Lua 5.3 compat `math.pow` (Ubuntu's 5.4 has it; games use it).
+- timer reports: the reference re-reports a timer's remaining time
+  whenever any event resumes its task (every event resumes every task),
+  so a stale report can split the next clock piece (SNKRX diverges
+  there); this implementation decides timers in C and reports only on
+  ticks. Matching it would mean reporting `clk` on non-tick events in
+  `wakes` (a few lines; tested as an experiment: SNKRX then matches
+  pixel for pixel).
