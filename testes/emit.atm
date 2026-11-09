@@ -223,6 +223,54 @@ do {  ;; a raw yield in a task body is resumed by every event
   check("yield\tA\nyield\tB\n")
 }
 
+;; ---- the pattern ends at the line: 'until'/'while' on the next line
+;; are statements of the enclosing loop (as the reference: no separator
+;; before a pattern's 'until'/'while')
+
+do {
+  var n = 0
+  spawn {
+    loop {
+      await :X
+      until (n >= 1)
+      print(:again)
+    }
+    print(:out)
+  }
+  emit(:X)
+  set n = 1
+  emit(:X)
+  check("again\nout\n")
+}
+
+do {
+  var n = 0
+  spawn {
+    loop {
+      await :X
+      while (n < 1)
+      print(:again)
+    }
+    print(:out)
+  }
+  emit(:X)
+  set n = 1
+  emit(:X)
+  check("again\nout\n")
+}
+
+do {  ;; on the same line: a predicate of the pattern
+  var n = 0
+  spawn {
+    await :X until (n >= 1)
+    print(:got)
+  }
+  emit(:X)
+  set n = 1
+  emit(:X)
+  check("got\n")
+}
+
 ;; ---- order, time stamps, aborts, errors
 
 do {  ;; a task awakes once per emit; tasks spawned by a reaction do not
