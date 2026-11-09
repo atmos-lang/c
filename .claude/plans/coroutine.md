@@ -157,15 +157,38 @@ A. Keep stackful coroutines (status quo). No language restriction;
    `await` works in helper functions called by a task, in callbacks,
    anywhere a yield works. About 1.5 KB per idle task.
 
-B. Shrink on suspend. Keep one `lua_State` per task but, when it
-   yields, reallocate its stack down to what the live frames use (the
-   body frame plus the `await` frame, typically 10-20 slots) and let it
-   grow again on resume (`luaD_reallocstack`, as `luaD_shrinkstack`
-   does on GC). No restriction; one reallocation per switch (a few
-   hundred bytes copied: cheaper than the resume itself for awaiting
-   tasks); about 0.8-0.9 KB per idle task; a change of ~40 lines in the
-   yield/resume path, task-only (a flag on the thread, set by
-   `spawn`). Deep suspension points still cost their frames.
+B. Shrink the stack of suspended tasks. Keep one `lua_State` per task
+   and give back the unused part of its stack. Measured with a
+   prototype (scratch copy, 20000 tasks each in `loop { await(:X) }`,
+   50 emits; "busy" also allocates a table per wake so that GC cycles
+   run during the emits):
+
+   | variant                                   | bytes/task | us/wake idle | us/wake busy |
+   |-------------------------------------------|-----------:|-------------:|-------------:|
+   | none (status quo)                         | 1582       | 0.92-1.00    | 1.07-1.26    |
+   | B1 safe: shrink on yield to Lua's in-use  | 1342       | 0.95-1.05    | 1.16-1.45    |
+   | B2 tight: shrink on yield to top, regrow on resume | 1038 | 1.02-1.39 | 2.04-2.20    |
+   | B3 lazy: tight shrink only in GC, regrow on resume | 1038 | 0.94-1.11 | 1.27-1.45    |
+
+   Lua's "in use" includes the 20 slots (`LUA_MINSTACK`) reserved for
+   the C frame of `await`, so B1 only saves 15 slots (240 bytes); after
+   the first suspension the stack already has that size and no further
+   reallocation happens (no measurable cost). B2 drops the reserve but
+   pays a reallocation on every yield and every resume: +70% per wake
+   when tasks are busy. B3 drops it only when a GC cycle traverses a
+   suspended task (`luaD_shrinkstack`, already called by the GC for
+   every thread), so a task pays at most one regrow per GC cycle and
+   only if it was shrunk: idle tasks get the small stack, busy tasks
+   barely notice (within noise to +10%). B3 needs care: the stack of a
+   suspended task can then be smaller than its C frame's `ci->top`, so
+   it must be regrown before anything is pushed onto it (resume, and
+   `lua_xmove`/pushes by the task runtime), and `stackinuse` must not
+   assert on it.
+
+   The remaining ~1 KB is: `lua_State` 256, stack ~6+5 slots 176, two
+   `CallInfo`s 144, and ~450 of task tables (xtask table, link table,
+   struct userdata); the tables are the next target (one userdata with
+   user values instead of tables), independent of A/B/C.
 
 C. Stackless (the idea above, swap variant). A suspended task is a
    closure plus a saved copy of its body frame (`maxstacksize` slots,
@@ -181,10 +204,9 @@ C. Stackless (the idea above, swap variant). A suspended task is a
    saved frames, relocation of open upvalues on each swap, and
    `coroutine.*` on tasks losing meaning.
 
-Recommendation: B if memory per task matters now (thousands of idle
-tasks), A otherwise; C only if "await only at the task level" is
-accepted as a language rule, which is a design decision rather than an
-implementation one.
+Recommendation (for thousands of tasks): B3, then the task tables.
+B1 is free but small; B2 costs too much per wake; C saves more memory
+but at the price of a language rule.
 
 ### Status
 
