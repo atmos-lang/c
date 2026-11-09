@@ -275,7 +275,7 @@ is worth it only if memory per task becomes the limit (10000 tasks:
 ~11 MB stackful vs ~4 MB stackless) or the remaining ~0.12 us switch
 matters, and the rule is accepted.
 
-### Decision: shallow awaits, swapped stacks (in progress)
+### Decision: shallow awaits, swapped stacks (done)
 
 Decided: tasks are "stackless" with the rule that Atmos suspensions
 (`await`, `par`, `par :any/:all`, the library `watching`, `toggle on`)
@@ -312,6 +312,22 @@ Implementation, in two stages:
    Expected: ~1.1-1.2 KB per idle task (from ~1.5), the stack part
    staying small even when every task wakes every tick; a few tens of
    ns per wake for the two copies.
+   Done (`ldo.c` swapin/swapout, `lstate.h` WorkStack, `lgc.c`
+   atomic clears the idle working stacks and does not shrink stackless
+   threads, `luaE_trimCI` frees spare CallInfos at swap-out when the
+   thread went deep; `lua_setstackless` for task threads; tests
+   `testes/stacks.atm`). Measured (before -> after, clean build):
+
+   | per task                    | 1000 tasks      | 20000 tasks     |
+   |-----------------------------|-----------------|-----------------|
+   | memory of an idle task      | 1514 -> 1003 B  | 1534 -> 1022 B  |
+   | matching wake               | 0.33 -> 0.37 us | 0.55 -> 0.44 us |
+   | non-matching event, tick    | unchanged (0.07, 0.03 us)         |
+
+   (With many tasks the smaller footprint wins back the copies.) The
+   remaining ~1 KB: `lua_State` 256 + one spare and two active
+   CallInfos, the private stack (~12 slots), the node userdata with
+   its user values, the task table and its empty `dns` table.
    Not done (possible later stage): dropping the `lua_State` per task
    (a task = closure + saved frames running on a worker thread per
    depth) would save ~300-400 bytes more, but the runtime identifies

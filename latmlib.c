@@ -643,6 +643,7 @@ static XTask *newxtask (lua_State *L, int fidx, int tra) {
   fidx = lua_absindex(L, fidx);
   t = newnamed(L, XTASK, NK_XTASK);  /* the xtask table */
   th = lua_newthread(L);
+  lua_setstackless(th);
   lua_pushvalue(L, fidx);
   lua_xmove(L, th, 1);  /* body function into the thread */
   t->th = th;

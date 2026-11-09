@@ -127,6 +127,26 @@ void luaE_shrinkCI (lua_State *L) {
 
 
 /*
+** Atmos: free the unused CallInfos after the first 'keep' ones (a
+** stackless thread that went deep between suspensions).
+*/
+void luaE_trimCI (lua_State *L, int keep) {
+  CallInfo *ci = L->ci;
+  CallInfo *next;
+  while (keep-- > 0 && ci->next != NULL)
+    ci = ci->next;
+  next = ci->next;
+  ci->next = NULL;
+  while (next != NULL) {
+    CallInfo *n2 = next->next;
+    L->nci--;
+    luaM_free(L, next);
+    next = n2;
+  }
+}
+
+
+/*
 ** Called when 'getCcalls(L)' larger or equal to LUAI_MAXCCALLS.
 ** If equal, raises an overflow error. If value is larger than
 ** LUAI_MAXCCALLS (which means it is handling an overflow) but
@@ -180,6 +200,13 @@ static void freestack (lua_State *L) {
   L->ci = &L->base_ci;  /* free the entire 'ci' list */
   freeCI(L);
   lua_assert(L->nci == 0);
+  if (L->pstack != NULL) {  /* Atmos: freed while on a working stack */
+    WorkStack *ws = &G(L)->wstacks[L->wdepth];  /* (only by 'lua_close') */
+    luaM_freearray(L, L->pstack, cast_sizet(L->psize + EXTRA_STACK));
+    L->pstack = NULL;
+    ws->s = NULL;  /* the working stack goes with the thread */
+    ws->size = 0;
+  }
   /* free stack */
   luaM_freearray(L, L->stack.p, cast_sizet(stacksize(L) + EXTRA_STACK));
 }
@@ -248,6 +275,9 @@ static void preinit_thread (lua_State *L, global_State *g) {
   L->ntry = L->sizetry = 0;
   L->trystatus = LUA_OK;
   L->trynres = 0;
+  L->stackless = 0;
+  L->pstack = NULL;
+  L->psize = L->wdepth = 0;
   L->oldpc = 0;
   L->base_ci.previous = L->base_ci.next = NULL;
 }
@@ -275,6 +305,7 @@ static void close_state (lua_State *L) {
     luai_userstateclose(L);
   }
   luaM_freearray(L, G(L)->strt.hash, cast_sizet(G(L)->strt.size));
+  luaD_freeworkstacks(L);  /* Atmos */
   freestack(L);
   luaM_freearray(L, L->tryregions, cast_sizet(L->sizetry));
   lua_assert(gettotalbytes(g) == sizeof(global_State));
@@ -404,6 +435,8 @@ LUA_API lua_State *lua_newstate (lua_Alloc f, void *ud, unsigned seed) {
   g->gray = g->grayagain = NULL;
   g->weak = g->ephemeron = g->allweak = NULL;
   g->twups = NULL;
+  g->wstacks = NULL;
+  g->sizews = g->wdepth = 0;
   g->GCtotalbytes = sizeof(global_State);
   g->GCmarked = 0;
   g->GCdebt = 0;

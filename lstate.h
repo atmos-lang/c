@@ -301,9 +301,20 @@ typedef struct TryRegion {
 } TryRegion;
 
 
+/*
+** Atmos: working stacks of stackless threads (tasks), one per nesting
+** depth of their resumes; see .claude/plans/coroutine.md.
+*/
+typedef struct WorkStack {
+  StackValue *s;  /* the stack (NULL: not allocated) */
+  int size;  /* its size (without EXTRA_STACK) */
+} WorkStack;
+
+
 struct lua_State {
   CommonHeader;
   lu_byte allowhook;
+  lu_byte stackless;  /* Atmos: runs on a working stack (a task) */
   TStatus status;
   TStatus trystatus;  /* Atmos: status of the error being handled by a region */
   int trynres;  /* Atmos: values of a 'catch' (OP_ENDTRY/OP_CATCH -> OP_CATCHRES) */
@@ -324,6 +335,9 @@ struct lua_State {
   TryRegion *tryregions;  /* Atmos: stack of active regions */
   int ntry;  /* number of active regions */
   int sizetry;  /* size of 'tryregions' */
+  StackValue *pstack;  /* Atmos: private stack while on a working stack */
+  int psize;  /* size of 'pstack' (without EXTRA_STACK) */
+  int wdepth;  /* Atmos: index of its working stack while on it */
   l_uint32 nCcalls;  /* number of nested non-yieldable or C calls */
   int oldpc;  /* last pc traced */
   int nci;  /* number of items in 'ci' list */
@@ -388,6 +402,9 @@ typedef struct global_State {
   struct lua_State *twups;  /* list of threads with open upvalues */
   lua_CFunction panic;  /* to be called in unprotected errors */
   TString *memerrmsg;  /* message for memory-allocation errors */
+  WorkStack *wstacks;  /* Atmos: working stacks of stackless threads */
+  int sizews;  /* size of 'wstacks' */
+  int wdepth;  /* number of working stacks in use */
   TString *tmname[TM_N];  /* array with tag-method names */
   struct Table *mt[LUA_NUMTYPES];  /* metatables for basic types */
   TString *strcache[STRCACHE_N][STRCACHE_M];  /* cache for strings in API */
@@ -465,6 +482,7 @@ LUAI_FUNC void luaE_freethread (lua_State *L, lua_State *L1);
 LUAI_FUNC lu_mem luaE_threadsize (lua_State *L);
 LUAI_FUNC CallInfo *luaE_extendCI (lua_State *L, int err);
 LUAI_FUNC void luaE_shrinkCI (lua_State *L);
+LUAI_FUNC void luaE_trimCI (lua_State *L, int keep);
 LUAI_FUNC void luaE_checkcstack (lua_State *L);
 LUAI_FUNC void luaE_incCstack (lua_State *L);
 LUAI_FUNC void luaE_warning (lua_State *L, const char *msg, int tocont);

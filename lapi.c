@@ -1268,6 +1268,15 @@ LUA_API int lua_luaframes (lua_State *L) {
 }
 
 
+/* Atmos: 'L' (a new thread, a task) keeps only its live stack slots
+   while suspended and runs on a shared working stack */
+LUA_API void lua_setstackless (lua_State *L) {
+  lua_lock(L);
+  L->stackless = 1;
+  lua_unlock(L);
+}
+
+
 /* Atmos: raise the 'n' top values with the given status (a jump out of
    a task body, 'LUA_ERRJUMP', has no message handler) */
 LUA_API int lua_errorstatus (lua_State *L, int status, int n) {

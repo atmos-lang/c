@@ -493,6 +493,153 @@ int luaD_reallocstack (lua_State *L, int newsize, int raiseerror) {
 
 
 /*
+** {==================================================================
+** Atmos: stackless threads (tasks; see .claude/plans/coroutine.md).
+** While suspended, such a thread keeps a private stack sized to its
+** live slots (up to 'top', plus SWAPMARGIN for the values pushed to
+** resume it); the reserved tops of its frames ('ci->top') may lie
+** beyond it. A resume copies the live slots to the working stack of
+** its depth (big enough for every 'ci->top') and back when it returns.
+** Slots of a working stack above the live ones keep stale values from
+** previous threads; none is older than the last atomic phase of the
+** GC, which clears the idle working stacks ('luaD_clearworkstacks').
+** ===================================================================
+*/
+
+#define SWAPMARGIN	2
+#define SWAPCIS		1  /* spare CallInfos kept while suspended */
+#define WSMAXIDLE	(4 * BASIC_STACK_SIZE)  /* bigger idle ones are freed */
+
+static int maxtop (lua_State *L) {  /* highest slot reserved by a frame */
+  CallInfo *ci;
+  StkId lim = L->top.p;
+  for (ci = L->ci; ci != NULL; ci = ci->previous)
+    if (lim < ci->top.p) lim = ci->top.p;
+  return cast_int(lim - L->stack.p);
+}
+
+
+/* moves the stack of 'L' to 'newstack' (size 'newsize'), copying its
+   'n' live slots */
+static void movestack (lua_State *L, StackValue *newstack, int newsize,
+                       int n) {
+  StkId oldstack = L->stack.p;
+  relstack(L);
+  memcpy(newstack, oldstack, cast_sizet(n) * sizeof(StackValue));
+  L->stack.p = newstack;
+  L->stack_last.p = newstack + newsize;
+  correctstack(L, oldstack);
+}
+
+
+static void swapin (lua_State *L) {
+  global_State *g = G(L);
+  int d = g->wdepth;
+  int need = maxtop(L) + 1;
+  WorkStack *ws;
+  if (d >= g->sizews) {  /* one more depth */
+    int i, oldsize = g->sizews;
+    luaM_growvector(L, g->wstacks, d, g->sizews, WorkStack, INT_MAX,
+                    "working stacks");
+    for (i = oldsize; i < g->sizews; i++) {
+      g->wstacks[i].s = NULL;
+      g->wstacks[i].size = 0;
+    }
+  }
+  ws = &g->wstacks[d];
+  if (ws->size < need) {  /* (re)allocate it, all nil */
+    int i, size = (need < BASIC_STACK_SIZE) ? BASIC_STACK_SIZE : need;
+    StackValue *s = luaM_newvector(L, size + EXTRA_STACK, StackValue);
+    for (i = 0; i < size + EXTRA_STACK; i++)
+      setnilvalue(s2v(s + i));
+    if (ws->s != NULL)
+      luaM_freearray(L, ws->s, cast_sizet(ws->size + EXTRA_STACK));
+    ws->s = s;
+    ws->size = size;
+  }
+  L->wdepth = d;
+  L->pstack = L->stack.p;
+  L->psize = stacksize(L);
+  movestack(L, ws->s, ws->size, cast_int(L->top.p - L->stack.p));
+  g->wdepth++;
+}
+
+
+static void swapout (lua_State *L) {
+  global_State *g = G(L);
+  WorkStack *ws = &g->wstacks[--g->wdepth];
+  int n = cast_int(L->top.p - L->stack.p);  /* live slots */
+  int size = n + SWAPMARGIN;
+  StackValue *ps = L->pstack;
+  int i;
+  ws->s = L->stack.p;  /* (it may have been reallocated) */
+  ws->size = stacksize(L);
+  if (L->psize < size || L->psize > size + 2 * SWAPMARGIN) {
+    lu_byte oldgcstop = g->gcstopem;
+    g->gcstopem = 1;  /* no emergency collection with a moving stack */
+    ps = luaM_reallocvector(L, ps, L->psize + EXTRA_STACK,
+                               size + EXTRA_STACK, StackValue);
+    g->gcstopem = oldgcstop;
+    if (l_unlikely(ps == NULL)) {  /* keep the working stack as its own */
+      luaM_freearray(L, L->pstack, cast_sizet(L->psize + EXTRA_STACK));
+      L->pstack = NULL;
+      ws->s = NULL;
+      ws->size = 0;
+      return;
+    }
+  }
+  else
+    size = L->psize;
+  for (i = n; i < size + EXTRA_STACK; i++)
+    setnilvalue(s2v(ps + i));
+  movestack(L, ps, size, n);
+  L->pstack = NULL;
+  {  /* went deep? keep only a few spare CallInfos */
+    CallInfo *ci;
+    int active = 0;
+    for (ci = L->ci; ci != &L->base_ci; ci = ci->previous)
+      active++;
+    if (L->nci > active + SWAPCIS)
+      luaE_trimCI(L, SWAPCIS);
+  }
+}
+
+
+/* clears the idle working stacks (GC atomic phase); frees big ones */
+void luaD_clearworkstacks (lua_State *L) {
+  global_State *g = G(L);
+  int d, i;
+  for (d = g->wdepth; d < g->sizews; d++) {
+    WorkStack *ws = &g->wstacks[d];
+    if (ws->s == NULL) continue;
+    if (ws->size > WSMAXIDLE) {
+      luaM_freearray(L, ws->s, cast_sizet(ws->size + EXTRA_STACK));
+      ws->s = NULL;
+      ws->size = 0;
+    }
+    else
+      for (i = 0; i < ws->size + EXTRA_STACK; i++)
+        setnilvalue(s2v(ws->s + i));
+  }
+}
+
+
+void luaD_freeworkstacks (lua_State *L) {
+  global_State *g = G(L);
+  int d;
+  for (d = 0; d < g->sizews; d++)
+    if (g->wstacks[d].s != NULL)
+      luaM_freearray(L, g->wstacks[d].s,
+                     cast_sizet(g->wstacks[d].size + EXTRA_STACK));
+  luaM_freearray(L, g->wstacks, cast_sizet(g->sizews));
+  g->wstacks = NULL;
+  g->sizews = 0;
+}
+
+/* }================================================================== */
+
+
+/*
 ** Try to grow the stack by at least 'n' elements. When 'raiseerror'
 ** is true, raises any error; otherwise, return 0 in case of errors.
 */
@@ -1073,8 +1220,11 @@ typedef struct ResumeInfo {
 static void resume (lua_State *L, void *ud) {
   ResumeInfo *ri = cast(ResumeInfo *, ud);
   int n = ri->n;  /* number of arguments */
-  StkId firstArg = L->top.p - n;  /* first argument */
+  StkId firstArg;
   CallInfo *ci = L->ci;
+  if (L->stackless)  /* Atmos: run on a working stack */
+    swapin(L);
+  firstArg = L->top.p - n;  /* first argument */
   if (ri->raise) {  /* 'lua_resumeerror' */
     L->status = LUA_OK;  /* mark that it is running (again) */
     if (ri->status != LUA_ERRRUN)  /* a jump (no message handler) */
@@ -1184,6 +1334,8 @@ static int resume_aux (lua_State *L, lua_State *from, int nargs,
       luaD_seterrorobj(L, status, L->top.p);  /* push error message */
     L->ci->top.p = L->top.p;
   }
+  if (L->pstack != NULL)  /* Atmos: back to its private stack */
+    swapout(L);
   *nresults = (status == LUA_YIELD) ? L->ci->u2.nyield
             : errorstatus(status) ? L->nerr  /* error values at the top */
             : cast_int(L->top.p - (L->ci->func.p + 1));

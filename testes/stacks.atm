@@ -185,7 +185,7 @@ do {  ;; traceback of a suspended task
     set th = coroutine.running()
     await(false)
   }
-  val tb = debug.traceback(th)
+  val tb = require("debug").traceback(th)
   print(string.find(tb, "await", 1, true) != nil)
   check("true\n")
 }

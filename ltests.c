@@ -494,7 +494,8 @@ static void check_stack (global_State *g, lua_State *L1) {
   assert(L1->top.p <= L1->stack_last.p);
   assert(L1->tbclist.p <= L1->top.p);
   for (ci = L1->ci; ci != NULL; ci = ci->previous) {
-    assert(ci->top.p <= L1->stack_last.p);
+    /* (Atmos: a suspended stackless thread keeps only its live slots) */
+    assert(ci->top.p <= L1->stack_last.p || L1->stackless);
     assert(lua_checkpc(ci));
   }
   for (o = L1->stack.p; o < L1->stack_last.p; o++)

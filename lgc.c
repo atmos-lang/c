@@ -706,7 +706,7 @@ static l_mem traversethread (global_State *g, lua_State *th) {
   for (uv = th->openupval; uv != NULL; uv = uv->u.open.next)
     markobject(g, uv);  /* open upvalues cannot be collected */
   if (g->gcstate == GCSatomic) {  /* final traversal? */
-    if (!g->gcemergency)
+    if (!g->gcemergency && !th->stackless)  /* (Atmos: managed by swaps) */
       luaD_shrinkstack(th); /* do not change stack in emergency cycle */
     for (o = th->top.p; o < th->stack_last.p + EXTRA_STACK; o++)
       setnilvalue2s(o);  /* clear dead stack slice */
@@ -1549,6 +1549,7 @@ static void atomic (lua_State *L) {
   lua_assert(g->ephemeron == NULL && g->weak == NULL);
   lua_assert(!iswhite(mainthread(g)));
   g->gcstate = GCSatomic;
+  luaD_clearworkstacks(L);  /* Atmos: stale values of idle working stacks */
   markobject(g, L);  /* mark running thread */
   /* registry and global metatables may be changed by API */
   markvalue(g, &g->l_registry);

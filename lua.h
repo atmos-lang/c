@@ -373,6 +373,7 @@ LUA_API int   (lua_error) (lua_State *L);
 LUA_API int   (lua_errorn) (lua_State *L, int n);
 LUA_API int   (lua_errorstatus) (lua_State *L, int status, int n);
 LUA_API int   (lua_luaframes) (lua_State *L);
+LUA_API void  (lua_setstackless) (lua_State *L);
 
 LUA_API int   (lua_next) (lua_State *L, int idx);
 

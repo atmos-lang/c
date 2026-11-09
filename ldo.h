@@ -102,6 +102,8 @@ LUAI_FUNC int luaD_checkminstack (lua_State *L);
 LUAI_FUNC void luaD_anchorobj (lua_State *L, Table *anchor, GCObject *obj);
 
 LUAI_FUNC l_noret luaD_throw (lua_State *L, TStatus errcode);
+LUAI_FUNC void luaD_freeworkstacks (lua_State *L);
+LUAI_FUNC void luaD_clearworkstacks (lua_State *L);
 LUAI_FUNC l_noret luaD_thrown (lua_State *L, TStatus errcode, int nerr);
 LUAI_FUNC l_noret luaD_throwbaselevel (lua_State *L, TStatus errcode);
 LUAI_FUNC TStatus luaD_rawrunprotected (lua_State *L, Pfunc f, void *ud);

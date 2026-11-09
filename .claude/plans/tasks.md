@@ -134,6 +134,9 @@ stackless coroutines of coroutine.md (c) plug in underneath it.
   (table of children), the toggle gate and the awaited pattern. `ret`
   and `pub` are fields of the table. A prototype is a table with its
   function in `_`. A weak table maps coroutines to xtasks (`me`).
+  Task threads are stackless (`lua_setstackless`): small private stack
+  while suspended, a shared working stack while running; suspensions
+  are shallow (coroutine.md).
 - `spawn`: create, link, `lua_resume`; the result handling is
   `task_result` (error: close subtree and re-raise with all values;
   aborted while running: close now; dead: store `ret`, emit the task to
