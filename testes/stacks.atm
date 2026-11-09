@@ -1,0 +1,240 @@
+;; Task stacks: a suspended task keeps a small private copy of its live
+;; stack and runs on a shared working stack (one per nesting depth of
+;; resumes). See .claude/plans/coroutine.md ("Decision: shallow awaits,
+;; swapped stacks").
+
+print("testing task stacks")
+
+val realprint = print
+var out = ""
+val func print (...) {
+  val t = table.pack(...)
+  loop i in (1, t.n) {
+    set t@i = tostring(t@i)
+  }
+  set out = out ++ table.concat(t, "\t") ++ "\n"
+}
+val func check (exp) {
+  assert(out == exp, out)
+  set out = ""
+}
+
+;; ---- values across swaps
+
+do {  ;; closures over the locals of a suspended task (open upvalues)
+  var inc = nil
+  spawn {
+    var x = 0
+    set inc = func () { set x = x + 1 }
+    loop i in 2 {
+      await(:X)
+      print(:x, x)
+    }
+  }
+  spawn {
+    await(:X)
+    inc()
+    inc()
+  }
+  emit(:X)  ;; A sees 0 and suspends, then B increments A's local
+  inc()
+  emit(:X)
+  check("x\t0\nx\t3\n")
+}
+
+do {  ;; deep recursion between awaits (the working stack grows)
+  val func rec (n) {
+    if n == 0 { 0 } else { 1 + rec(n - 1) }
+  }
+  spawn {
+    val a = 10
+    await(:X)
+    print(rec(5000), a)
+    await(:X)
+    print(rec(100), a)
+  }
+  emit(:X)
+  emit(:X)
+  check("5000\t10\n100\t10\n")
+}
+
+do {  ;; nested emits: one working stack per depth
+  spawn {
+    val c = :c
+    loop {
+      await(:C)
+      print(c)
+    }
+  }
+  spawn {
+    val b = :b
+    loop {
+      await(:B)
+      print(b)
+      emit(:C)
+      print(b)
+    }
+  }
+  spawn {
+    val a = :a
+    loop {
+      await(:A)
+      print(a)
+      emit(:B)
+      print(a)
+    }
+  }
+  emit(:A)
+  check("a\nb\nc\nb\na\n")
+}
+
+do {  ;; raw yields from deep calls keep their frames
+  val func deep (n, acc) {
+    if n == 0 {
+      val e = coroutine.yield()
+      acc ++ ":" ++ tostring(e)
+    } else {
+      deep(n - 1, acc ++ tostring(n))
+    }
+  }
+  spawn {
+    print(deep(5, ""))
+  }
+  emit(:X)
+  check("54321:X\n")
+}
+
+do {  ;; varargs of a task body
+  val T = task (...) {
+    await(:X)
+    print(...)
+  }
+  spawn T(1, 2, 3)
+  emit(:X)
+  check("1\t2\t3\n")
+}
+
+do {  ;; a plain coroutine inside a task
+  spawn {
+    val co = coroutine.wrap(func (a) {
+      val b = coroutine.yield(a + 1)
+      b * 2
+    })
+    await(:X)
+    val v = co(1)
+    await(:X)
+    print(v, co(10))
+  }
+  emit(:X)
+  emit(:X)
+  check("2\t20\n")
+}
+
+;; ---- closing, errors, GC, debug
+
+do {  ;; aborting a suspended task runs its defers and closes its pins
+  val T = task () {
+    defer { print(:inner) }
+    await(false)
+  }
+  pin t = spawn (task () {
+    pin u = spawn T()
+    defer { print(:outer) }
+    await(false)
+  }) ()
+  abort(t)
+  check("inner\nouter\n")
+}
+
+do {  ;; errors in a woken task, caught in its body
+  spawn {
+    val ok, e = catch :E {
+      val big = [1, 2, 3]
+      await(:X)
+      throw(:E [v=#big])
+    }
+    print(:caught, ok, e.v)
+  }
+  emit(:X)
+  check("caught\tfalse\t3\n")
+}
+
+do {  ;; collections while tasks run and while they are suspended
+  pin ts = tasks()
+  loop i in 200 {
+    spawn @ts (task () {
+      val t = [i, string.rep("x", i)]
+      loop {
+        await(:X)
+        collectgarbage("step")
+        assert((t@1 == i) && (#(t@2) == i))
+      }
+    }) ()
+  }
+  loop j in 5 {
+    emit(:X)
+    collectgarbage()
+  }
+  print(:gc, #ts)
+  check("gc\t200\n")
+}
+
+do {  ;; traceback of a suspended task
+  var th = nil
+  spawn {
+    set th = coroutine.running()
+    await(false)
+  }
+  val tb = debug.traceback(th)
+  print(string.find(tb, "await", 1, true) != nil)
+  check("true\n")
+}
+
+
+
+;; ---- memory: an idle task keeps only its live slots
+
+do {
+  val N = 5000
+  pin ts = tasks()
+  collectgarbage()
+  collectgarbage()
+  val m0 = collectgarbage("count")
+  loop i in N {
+    spawn @ts (task () {
+      loop {
+        await(:X)
+      }
+    }) ()
+  }
+  collectgarbage()
+  collectgarbage()
+  val m1 = collectgarbage("count")
+  val per = ((m1 - m0) * 1024) / N
+  assert(per < 1250, "bytes per idle task: " ++ tostring(per))
+
+  ;; tasks that went deep between awaits shrink back
+  val func rec (n) {
+    if n == 0 { 0 } else { 1 + rec(n - 1) }
+  }
+  pin us = tasks()
+  collectgarbage()
+  collectgarbage()
+  val m2 = collectgarbage("count")
+  loop i in N {
+    spawn @us (task () {
+      loop {
+        rec(50)
+        await(:Y)
+      }
+    }) ()
+  }
+  emit(:Y)
+  collectgarbage()
+  collectgarbage()
+  val m3 = collectgarbage("count")
+  val per2 = ((m3 - m2) * 1024) / N
+  assert(per2 < 1250, "bytes per idle task after recursion: " ++ tostring(per2))
+}
+
+realprint("OK")
