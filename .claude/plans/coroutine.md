@@ -163,23 +163,26 @@ B. Shrink the stack of suspended tasks. Keep one `lua_State` per task
    50 emits; "busy" also allocates a table per wake so that GC cycles
    run during the emits):
 
-   | variant                                   | bytes/task | us/wake idle | us/wake busy |
-   |-------------------------------------------|-----------:|-------------:|-------------:|
-   | none (status quo)                         | 1582       | 0.92-1.00    | 1.07-1.26    |
-   | B1 safe: shrink on yield to Lua's in-use  | 1342       | 0.95-1.05    | 1.16-1.45    |
-   | B2 tight: shrink on yield to top, regrow on resume | 1038 | 1.02-1.39 | 2.04-2.20    |
-   | B3 lazy: tight shrink only in GC, regrow on resume | 1038 | 0.94-1.11 | 1.27-1.45    |
+   | variant                                   | bytes/task | us/wake idle (1k / 20k tasks) | us/wake busy (1k / 20k) |
+   |-------------------------------------------|-----------:|--------------:|--------------:|
+   | none (status quo)                         | 1562-1582  | 0.53 / 0.79   | 0.73 / 1.03   |
+   | B1 safe: shrink on yield to Lua's in-use  | 1322-1342  | 0.54 / 0.88   | 0.70 / 1.00   |
+   | B2 tight: shrink on yield to top, regrow on resume | 1018-1038 | 0.73 / 1.06 | 1.10 / 1.81 |
+   | B3 lazy: tight shrink only in GC, regrow on resume | 1018-1038 | 0.56 / 1.03 | 0.77 / 1.34 |
+
+   (Clean builds with compile-time switches; a first round used
+   `getenv` in the resume path and overstated all times.)
 
    Lua's "in use" includes the 20 slots (`LUA_MINSTACK`) reserved for
    the C frame of `await`, so B1 only saves 15 slots (240 bytes); after
    the first suspension the stack already has that size and no further
    reallocation happens (no measurable cost). B2 drops the reserve but
-   pays a reallocation on every yield and every resume: +70% per wake
-   when tasks are busy. B3 drops it only when a GC cycle traverses a
+   pays a reallocation on every yield and every resume: +40-75% per
+   wake when tasks are busy. B3 drops it only when a GC cycle traverses a
    suspended task (`luaD_shrinkstack`, already called by the GC for
    every thread), so a task pays at most one regrow per GC cycle and
-   only if it was shrunk: idle tasks get the small stack, busy tasks
-   barely notice (within noise to +10%). B3 needs care: the stack of a
+   only if it was shrunk: idle tasks get the small stack; busy tasks
+   pay +5% (1k tasks) to +30% (20k tasks). B3 needs care: the stack of a
    suspended task can then be smaller than its C frame's `ci->top`, so
    it must be regrown before anything is pushed onto it (resume, and
    `lua_xmove`/pushes by the task runtime), and `stackinuse` must not
@@ -206,24 +209,43 @@ C. Stackless (the idea above, swap variant). A suspended task is a
 
 Games case (thousands of tasks, all woken every tick): wake cost
 dominates, not memory. Every stack is full size during each tick
-anyway, so shrinking buys nothing between ticks: B2 pays +20-25% per
-wake, B3 regrows every task after each GC cycle, B1 saves 240 bytes.
-Measured per wake (scratch build, 1000 / 5000 / 20000 tasks): task
-wake 0.81 / 0.83 / 1.0 us; raw `coroutine.resume`/`yield` of the
-same number of coroutines from a Lua loop 0.38 / 0.39-0.49 / 0.39-0.44
-us. So about half of a wake is the task runtime, not the switch.
-gprof of the emit benchmark: ~12 `lua_getfield` (string-keyed lookups
-in the xtask/link/struct tables, `luaH_getstr` alone ~24% of the
-time), 3 `luaL_getmetafield` (`__atmos`) and ~18 `lua_type` per wake.
+anyway, so shrinking buys nothing between ticks and B1/B2/B3 only add
+cost. Measured per wake (clean build): task wake 0.53 us (1000 tasks)
+/ 0.79 us (20000); raw `coroutine.resume`/`yield` from a Lua loop
+0.14-0.16 us; a plain Lua call from the same loop 0.03 us. So the
+coroutine switch itself is ~0.12 us, and the task runtime is the
+remaining ~0.4-0.6 us (75-80% of a wake). gprof of the emit benchmark:
+~12 `lua_getfield` (string-keyed lookups in the xtask/link/struct
+tables, `luaH_getstr` alone ~24% of the time), 3 `luaL_getmetafield`
+(`__atmos`) and ~18 `lua_type` per wake.
 
-Recommendation (for games): keep stackful coroutines (A, no B), and
-cut the runtime overhead of a wake: keep the task tree and the hot
+Stackless (C) for this case. What it can save: memory, ~1.1 KB per
+task (after the struct refactor below) down to ~0.3-0.5 KB (closure,
+saved body frame, task struct); per wake, at most the switch, ~0.12
+us. What it costs: (1) the rule "await only in the task body and its
+inline blocks"; the reference tests never break it (instrumented run
+of `testes/ref`: 567 awaits, all from the body frame or from the C
+body of a transparent task), but lua-atmos' env-socket does
+(`xaccept`, `xconnect`, `xrecv` are plain functions that await; they
+would become tasks, `await(xrecv(tcp))`); (2) the largest change so
+far: resuming a Lua frame from a saved copy on a shared stack,
+relocating open upvalues, the tbc list and the try regions on each
+swap, GC traversal of saved frames, per-task error recovery without a
+per-task `lua_State`, debug info/tracebacks of suspended tasks. A
+middle ground without the rule is stack copying (save all of the
+task's frames, any depth, to a block reused across switches): memory
+like B2 (~1 KB, `lua_State` kept), switch a bit cheaper than B2 (two
+memcpy + pointer correction, no malloc), i.e. still dearer than today.
+
+Recommendation (for games): keep stackful coroutines (A, no B) and cut
+the runtime overhead of a wake first: keep the task tree and the hot
 fields (status, pass, time, up/dns links, awaited pattern) in C
-structs (the task userdata) instead of string-keyed tables, and
-cache the `__atmos` lookup. Expected: wake close to the raw switch
-(~0.4-0.5 us) and ~400 bytes less per task. C (stackless) would go
-further on both, at the price of the "await only at the task level"
-rule.
+structs (the task userdata) instead of string-keyed tables, and cache
+the `__atmos` lookup. Expected: wake ~0.2-0.3 us, ~400 bytes less per
+task. Every option needs this anyway. Then measure again: stackless
+is worth it only if memory per task becomes the limit (10000 tasks:
+~11 MB stackful vs ~4 MB stackless) or the remaining ~0.12 us switch
+matters, and the rule is accepted.
 
 ### Status
 
