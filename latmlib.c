@@ -318,25 +318,61 @@ static const luaL_Reg X_funcs[] = {
 #define ST_ABORTED	1
 #define ST_TOGGLED	2
 
-typedef struct XTask {
-  lua_State *th;  /* its coroutine (anchored in the user value table) */
+/* kinds of nodes */
+#define NK_XTASK	1
+#define NK_POOL		2
+
+/*
+** What a suspended task is awaiting, as far as a broadcast can decide
+** without resuming it (see coroutine.md, "Wasted resumes"): 'akind' is
+** the filter of the current suspension (AW_RESUME: resume on every
+** broadcast, the default for any yield other than 'await'); 'pkind'
+** is the kind of the pattern of the 'await' in progress; 'wkind' is
+** what the broadcast found when it decided the match by itself (the
+** await returns without checking again), or AW_RESUME.
+*/
+#define AW_RESUME	0  /* undecided: resume (user code decides) */
+#define AW_NEVER	1  /* internal waits that never proceed by an event */
+#define AW_FALSE	2  /* await(false) */
+#define AW_TRUE		3  /* await(true): any event */
+#define AW_TAG		4  /* a tag or plain value: 'event ?? pattern' */
+#define AW_TABLE	5  /* a table pattern: only tables can match */
+#define AW_TASK		6  /* termination of a task */
+#define AW_POOL		7  /* :any / :all of a pool: task events only */
+#define AW_CLOCK	8  /* a timer: countdown in 'clk' */
+#define AW_CLOCKANY	9  /* await(:clock): any tick */
+
+/*
+** Tasks and pools share one struct (the '_' userdata); its user values
+** hold the references (UV_*).
+*/
+typedef struct Node {
+  lua_State *th;  /* its coroutine (anchored in UV_TH) */
+  struct Node *atask;  /* AW_TASK: the awaited task (anchored in UV_PATT) */
   lua_Integer time;  /* time stamp of its current await */
   lua_Integer pass;  /* time of the last emit let through by its gate */
+  lua_Integer max;  /* pool: maximum number of tasks (-1: unbounded) */
+  lua_Number clk;  /* AW_CLOCK: time left */
+  unsigned char kind;  /* NK_* */
   unsigned char tra;  /* transparent task */
   unsigned char pin;  /* owned by a block or a pool */
   unsigned char status;  /* ST_* */
   unsigned char isloop;  /* body of an 'atmos.loop' */
-} XTask;
+  unsigned char isroot;  /* the root pool */
+  unsigned char pkind, akind, wkind;  /* AW_* */
+} Node;
+
+typedef Node XTask;
+typedef Node Pool;
+
+#define UV_TH		1  /* the coroutine */
+#define UV_UP		2  /* the owner (table) */
+#define UV_DNS		3  /* the children (sequence of tables) */
+#define UV_GATE		4  /* the gate task of a toggled-off node */
+#define UV_PATT		5  /* AW_TAG/AW_TASK: the awaited pattern */
+#define NUV		5
 
 static int LOOPFLAG = 0;  /* the next task created is a loop body */
-
-typedef struct Pool {
-  lua_Integer max;  /* maximum number of tasks (-1: unbounded) */
-  lua_Integer pass;
-  unsigned char pin;
-  unsigned char isroot;
-  unsigned char status;  /* ST_OK or ST_TOGGLED */
-} Pool;
 
 /* the clock: nearest reported timer and the remainder of the current
    tick after the piece being broadcast (see tasks.md, stage 2b) */
@@ -376,9 +412,9 @@ static int resumetask (lua_State *co, lua_State *from, int nargs, int *nres) {
 /*
 ** Tasks, pools and prototypes are tables (so that 'type' says "table",
 ** as in the reference) with a metatable that names them; the C struct
-** is a userdata in field '_', whose user value table holds the
-** internal references ('th', 'up', 'dns', 'gate'); 'pub' and 'ret'
-** are plain fields of the table; a prototype has its function in '_'.
+** is a userdata in field '_', whose user values hold the internal
+** references (UV_*); 'pub' and 'ret' are plain fields of the table; a
+** prototype has its function in '_'.
 */
 static int hasmeta (lua_State *L, int idx, const char *name) {
   int res = 0;
@@ -407,45 +443,45 @@ static void *structof (lua_State *L, int idx) {  /* the '_' userdata */
 #define isrootpool(L,i)	(ispool(L, i) && poolof(L, i)->isroot)
 
 
-/* user value table of a task/pool (in its '_' userdata) */
-static void getuv (lua_State *L, int idx) {
+/* pushes the '_' userdata of the task/pool at 'idx'; returns its struct */
+static Node *pushnode (lua_State *L, int idx) {
   lua_getfield(L, idx, "_");
-  lua_getiuservalue(L, -1, 1);
-  lua_remove(L, -2);
+  return (Node *)lua_touserdata(L, -1);
 }
 
 
-/* new table with metatable 'name' and a '_' userdata of 'size' bytes
-   whose user value table holds 'dns'; pushes the table, returns the
-   userdata */
-static void *newnamed (lua_State *L, const char *name, size_t size) {
-  void *p;
+/* new table with metatable 'name' and a zeroed '_' node of kind 'kind'
+   with an empty 'dns'; pushes the table, returns the node */
+static Node *newnamed (lua_State *L, const char *name, int kind) {
+  Node *p;
   lua_newtable(L);
   luaL_setmetatable(L, name);
-  p = lua_newuserdatauv(L, size, 1);
-  lua_newtable(L);  /* user value table */
+  p = (Node *)lua_newuserdatauv(L, sizeof(Node), NUV);
+  memset(p, 0, sizeof(Node));
+  p->kind = (unsigned char)kind;
   lua_newtable(L);
-  lua_setfield(L, -2, "dns");
-  lua_setiuservalue(L, -2, 1);
+  lua_setiuservalue(L, -2, UV_DNS);
   lua_setfield(L, -2, "_");
   return p;
 }
 
 
-static int uvget (lua_State *L, int idx, const char *k) {
+/* pushes the user value 'k' (UV_*) of the task/pool at 'idx' */
+static int uvget (lua_State *L, int idx, int k) {
+  int t;
   idx = lua_absindex(L, idx);
-  getuv(L, idx);
-  lua_getfield(L, -1, k);
+  lua_getfield(L, idx, "_");
+  t = lua_getiuservalue(L, -1, k);
   lua_remove(L, -2);
-  return lua_type(L, -1);
+  return t;
 }
 
 
-static void uvset (lua_State *L, int idx, const char *k) {  /* value on top */
+static void uvset (lua_State *L, int idx, int k) {  /* value on top */
   idx = lua_absindex(L, idx);
-  getuv(L, idx);
+  lua_getfield(L, idx, "_");
   lua_insert(L, -2);
-  lua_setfield(L, -2, k);
+  lua_setiuservalue(L, -2, k);
   lua_pop(L, 1);
 }
 
@@ -459,8 +495,7 @@ static void uvset (lua_State *L, int idx, const char *k) {  /* value on top */
 static const char *const costatname[] =
   {"running", "dead", "suspended", "normal"};
 
-static int costatus (lua_State *L, int idx) {
-  XTask *t = xtaskof(L, idx);
+static int nodestatus (lua_State *L, Node *t) {
   lua_State *co = t->th;
   if (L == co) return CO_RUNNING;
   switch (lua_status(co)) {
@@ -475,6 +510,8 @@ static int costatus (lua_State *L, int idx) {
   }
 }
 
+#define costatus(L,idx)	nodestatus(L, xtaskof(L, idx))
+
 
 /*
 ** Pushes the running xtask, or nil. With 'tra' false, transparent
@@ -486,6 +523,7 @@ static void pushme (lua_State *L, int tra) {
   lua_pushthread(L);
   lua_rawget(L, -2);
   lua_remove(L, -2);
+  if (tra) return;  /* the thread's own xtask (or nil) */
   for (;;) {
     if (lua_isnil(L, -1))
       return;
@@ -498,7 +536,7 @@ static void pushme (lua_State *L, int tra) {
     }
     else if (tra || !(xtaskof(L, -1))->tra)
       return;
-    uvget(L, -1, "up");  /* go up */
+    uvget(L, -1, UV_UP);  /* go up */
     lua_remove(L, -2);
   }
 }
@@ -518,7 +556,7 @@ static void toowner (lua_State *L, int tra) {
     }
     else if (tra || !(xtaskof(L, -1))->tra)
       return;
-    uvget(L, -1, "up");
+    uvget(L, -1, UV_UP);
     lua_remove(L, -2);
   }
 }
@@ -533,7 +571,7 @@ static int isancestor (lua_State *L, int idx) {
       lua_pop(L, 1);
       return 1;
     }
-    uvget(L, -1, "up");
+    uvget(L, -1, UV_UP);
     lua_remove(L, -2);
   }
   lua_pop(L, 1);
@@ -543,7 +581,7 @@ static int isancestor (lua_State *L, int idx) {
 
 /* mark the owner of 'idx' for the sweep of dead tasks */
 static void markgc (lua_State *L, int idx) {
-  if (uvget(L, idx, "up") != LUA_TNIL) {
+  if (uvget(L, idx, UV_UP) != LUA_TNIL) {
     lua_getfield(L, LUA_REGISTRYINDEX, ATM_GC);
     lua_insert(L, -2);
     lua_pushboolean(L, 1);
@@ -561,7 +599,7 @@ static void sweep (lua_State *L) {
   while (lua_next(L, -2)) {
     lua_Integer n, i, j = 0;
     lua_pop(L, 1);  /* boolean */
-    uvget(L, -1, "dns");  /* gc, owner, dns */
+    uvget(L, -1, UV_DNS);  /* gc, owner, dns */
     n = (lua_Integer)lua_rawlen(L, -1);
     for (i = 1; i <= n; i++) {
       lua_rawgeti(L, -1, i);
@@ -588,8 +626,8 @@ static void link (lua_State *L, int upidx, int tidx) {
   upidx = lua_absindex(L, upidx);
   tidx = lua_absindex(L, tidx);
   lua_pushvalue(L, upidx);
-  uvset(L, tidx, "up");
-  uvget(L, upidx, "dns");
+  uvset(L, tidx, UV_UP);
+  uvget(L, upidx, UV_DNS);
   lua_pushvalue(L, tidx);
   lua_rawseti(L, -2, (lua_Integer)lua_rawlen(L, -2) + 1);
   lua_pop(L, 1);
@@ -603,20 +641,18 @@ static XTask *newxtask (lua_State *L, int fidx, int tra) {
   XTask *t;
   lua_State *th;
   fidx = lua_absindex(L, fidx);
-  t = (XTask *)newnamed(L, XTASK, sizeof(XTask));  /* the xtask table */
+  t = newnamed(L, XTASK, NK_XTASK);  /* the xtask table */
   th = lua_newthread(L);
   lua_pushvalue(L, fidx);
   lua_xmove(L, th, 1);  /* body function into the thread */
   t->th = th;
-  t->time = 0;
-  t->pass = 0;
   t->isloop = (unsigned char)LOOPFLAG;
   LOOPFLAG = 0;
   t->tra = (unsigned char)tra;
-  t->pin = 0;
   t->status = ST_OK;
+  t->pkind = t->akind = t->wkind = AW_RESUME;
   lua_pushvalue(L, -1);
-  uvset(L, -3, "th");  /* anchor the thread */
+  uvset(L, -3, UV_TH);  /* anchor the thread */
   lua_getfield(L, LUA_REGISTRYINDEX, ATM_CACHE);  /* cache[th] = xtask */
   lua_pushvalue(L, -2);
   lua_pushvalue(L, -4);
@@ -639,7 +675,7 @@ static void closextask (lua_State *L, int idx) {
   int st;
   idx = lua_absindex(L, idx);
   t = xtaskof(L, idx);
-  uvget(L, idx, "dns");
+  uvget(L, idx, UV_DNS);
   n = (lua_Integer)lua_rawlen(L, -1);
   for (i = 1; i <= n; i++) {
     lua_rawgeti(L, -1, i);
@@ -647,7 +683,7 @@ static void closextask (lua_State *L, int idx) {
     lua_pop(L, 1);
   }
   lua_pop(L, 1);
-  if (uvget(L, idx, "gate") != LUA_TNIL)
+  if (uvget(L, idx, UV_GATE) != LUA_TNIL)
     closextask(L, -1);
   lua_pop(L, 1);
   st = costatus(L, idx);
@@ -670,7 +706,7 @@ static void closextask (lua_State *L, int idx) {
 static void closepool (lua_State *L, int idx) {
   lua_Integer n, i;
   idx = lua_absindex(L, idx);
-  uvget(L, idx, "dns");
+  uvget(L, idx, UV_DNS);
   n = (lua_Integer)lua_rawlen(L, -1);
   for (i = 1; i <= n; i++) {
     lua_rawgeti(L, -1, i);
@@ -678,7 +714,7 @@ static void closepool (lua_State *L, int idx) {
     lua_pop(L, 1);
   }
   lua_pop(L, 1);
-  if (uvget(L, idx, "gate") != LUA_TNIL)
+  if (uvget(L, idx, UV_GATE) != LUA_TNIL)
     closextask(L, -1);
   lua_pop(L, 1);
   markgc(L, idx);
@@ -722,7 +758,7 @@ static void taskresult (lua_State *L, int tidx, int status, int nres) {
     else
       lua_pushnil(L);
     lua_setfield(L, tidx, "ret");
-    uvget(L, tidx, "up");  /* owner... */
+    uvget(L, tidx, UV_UP);  /* owner... */
     toowner(L, 0);  /* ...as a non-transparent task (or nil) */
     if (lua_isnil(L, -1)) {  /* under the root: target is the running task */
       lua_pop(L, 1);
@@ -762,97 +798,197 @@ static int isaborted (lua_State *L) {
 
 
 /*
-** Protected emit to one child: args (time, child, event).
+** A broadcast in progress: its time stamp and what the matches need to
+** know about the event (computed once).
 */
-static void emittree (lua_State *L, lua_Integer time, int tidx, int eidx);
+typedef struct Emit {
+  lua_Integer time;
+  int eidx;  /* the event (absolute index) */
+  int evtype;  /* its type */
+  int evatmos;  /* it has '__atmos': it decides for every await */
+  int evtask;  /* it is a task (a termination) */
+  lua_Number evnum;  /* a tick: its value */
+} Emit;
 
-static int emitchild (lua_State *L) {
-  emittree(L, lua_tointeger(L, 1), 2, 3);
-  return 0;
+
+/*
+** Does the suspended task 't' (its node userdata at 'ud') proceed with
+** the event? Decides in C the awaits that need no user code (see
+** 'classify'); sets 'wkind' when the await may return without checking
+** again. Timers count down here (and report the nearest one).
+*/
+static int wakes (lua_State *L, Node *t, int ud, Emit *em) {
+  switch (t->akind) {
+    case AW_RESUME: return 1;
+    case AW_NEVER: return 0;
+    default: break;
+  }
+  if (em->evatmos) return 1;  /* the event decides (in the task) */
+  switch (t->akind) {
+    case AW_FALSE: return 0;
+    case AW_TRUE: break;
+    case AW_TAG: {
+      int m;
+      lua_getiuservalue(L, ud, UV_PATT);
+      m = luaB_tagmatch(L, em->eidx, lua_gettop(L));
+      lua_pop(L, 1);
+      if (!m) return 0;
+      break;
+    }
+    case AW_TABLE: return (em->evtype == LUA_TTABLE);
+    case AW_TASK: return (nodestatus(L, t->atask) == CO_DEAD);
+    case AW_POOL: return em->evtask;
+    case AW_CLOCK: {
+      if (em->evtype != LUA_TNUMBER) return 0;
+      t->clk -= em->evnum;
+      if (t->clk > 0) {  /* not yet: report it */
+        if (t->clk < CLKMIN) CLKMIN = t->clk;
+        return 0;
+      }
+      break;
+    }
+    case AW_CLOCKANY: {
+      if (em->evtype != LUA_TNUMBER) return 0;
+      break;
+    }
+  }
+  t->wkind = t->akind;  /* decided: the await returns at once */
+  return 1;
 }
 
 
 /*
-** Broadcast of the event at 'eidx' to the subtree of the task/pool at
-** 'tidx': children first, in order, then the task itself if it is
-** awaiting since before this emit. An error in a child is raised at
-** the awaiting point of its owner ('lua_resumeerror'), or propagated.
+** Resumes a task (protected by the caller): (task, node, mode, values...);
+** mode LUA_OK resumes it with the values (the event), otherwise raises
+** the values at its await with that status. Then 'taskresult'.
 */
-static void emittree (lua_State *L, lua_Integer time, int tidx, int eidx) {
-  int isx;
-  int base;
-  int err = 0;
-  int errstatus = LUA_OK;
+static int wakef (lua_State *L) {
+  Node *t = (Node *)lua_touserdata(L, 2);  /* (the node of the task at 1) */
+  int mode = (int)lua_tointeger(L, 3);
+  int n = lua_gettop(L) - 3;  /* values */
+  int status, nres;
+  t->akind = AW_RESUME;  /* running: no filter */
+  if (mode != LUA_OK) t->wkind = AW_RESUME;
+  luaL_checkstack(t->th, n, "task wake");
+  lua_xmove(L, t->th, n);
+  if (mode == LUA_OK)
+    status = resumetask(t->th, L, n, &nres);
+  else
+    status = lua_resumethrow(t->th, L, mode, n, &nres);
+  if (status == LUA_YIELD && t->status != ST_ABORTED)
+    lua_pop(t->th, nres);  /* suspended again (as in 'taskresult') */
+  else
+    taskresult(L, 1, status, nres);
+  return 0;
+}
+
+
+/* removes the values between 'base' and the 'n' values on the top */
+static void keeptop (lua_State *L, int base, int n) {
+  int k = lua_gettop(L) - n - base;  /* values to remove */
+  if (k > 0) {
+    lua_rotate(L, base + 1, -k);
+    lua_pop(L, k);
+  }
+}
+
+
+/*
+** Broadcast of the event to the subtree of the task/pool at 'tidx':
+** children first, in order, then the task itself if it is awaiting
+** since before this emit and the event matches. Returns LUA_OK, or an
+** error status with '*nerr' error values on the top (in place of
+** nothing): an error in a child is raised at the awaiting point of its
+** owner ('lua_resumethrow'), or returned to the caller.
+*/
+static int emittree (lua_State *L, Emit *em, int tidx, int *nerr) {
+  Node *t;
+  int base, ud, dns;
+  int st = LUA_OK;
   lua_Integer n, i;
   tidx = lua_absindex(L, tidx);
-  eidx = lua_absindex(L, eidx);
-  isx = isxtask(L, tidx);
-  if ((isx ? (xtaskof(L, tidx))->status : (poolof(L, tidx))->status)
-      == ST_TOGGLED) {  /* toggled off: only what its gate lets through */
-    int pass = 0;
-    if (uvget(L, tidx, "gate") != LUA_TNIL) {
-      lua_Integer *p = isx ? &(xtaskof(L, tidx))->pass
-                           : &(poolof(L, tidx))->pass;
-      *p = 0;
-      emittree(L, time, -1, eidx);  /* the gate reacts first... */
-      pass = (*p != 0);  /* ...and stamps if the filter matched */
-    }
-    lua_pop(L, 1);
-    if (!pass) return;
-  }
+  luaL_checkstack(L, 8, "broadcast");  /* node, dns, child, match, wake */
   base = lua_gettop(L);
-  uvget(L, tidx, "dns");
-  n = (lua_Integer)lua_rawlen(L, -1);
+  t = pushnode(L, tidx);
+  ud = base + 1;
+  if (t->status == ST_TOGGLED) {  /* toggled off: only what its gate lets through */
+    int pass = 0;
+    if (lua_getiuservalue(L, ud, UV_GATE) != LUA_TNIL) {
+      t->pass = 0;
+      st = emittree(L, em, -1, nerr);  /* the gate reacts first... */
+      if (st != LUA_OK) {
+        keeptop(L, base, *nerr);
+        return st;
+      }
+      pass = (t->pass != 0);  /* ...and stamps if the filter matched */
+    }
+    if (!pass) {
+      lua_settop(L, base);
+      return LUA_OK;
+    }
+    lua_settop(L, ud);
+  }
+  lua_getiuservalue(L, ud, UV_DNS);
+  dns = base + 2;
+  n = (lua_Integer)lua_rawlen(L, dns);
   DEPTH++;
-  for (i = 1; i <= n && !err; i++) {
-    int top = lua_gettop(L);
-    lua_pushcfunction(L, emitchild);
-    lua_pushinteger(L, time);
-    lua_rawgeti(L, -4 + 1, i);  /* dns[i] (dns is below the function and time) */
-    lua_pushvalue(L, eidx);
-    errstatus = lua_pcall(L, 3, 0, 0);
-    if (errstatus != LUA_OK)
-      err = lua_gettop(L) - top;  /* number of error values (on the stack) */
+  for (i = 1; i <= n; i++) {
+    lua_rawgeti(L, dns, i);
+    st = emittree(L, em, -1, nerr);
+    if (st != LUA_OK) break;  /* error values above the child */
+    lua_pop(L, 1);
   }
   DEPTH--;
-  if (isx) {
-    XTask *t = xtaskof(L, tidx);
-    if (err) {
-      if (costatus(L, tidx) == CO_SUSPENDED) {  /* raise at its await */
-        int nres;
-        int status;
-        luaL_checkstack(t->th, err, "task error");
-        lua_xmove(L, t->th, err);
-        lua_remove(L, base + 1);  /* dns */
-        status = lua_resumethrow(t->th, L, errstatus, err, &nres);
-        taskresult(L, tidx, status, nres);  /* re-raises if not handled */
-        return;
-      }
-      else {
-        lua_remove(L, base + 1);  /* dns */
-        lua_errorstatus(L, errstatus, err);
-      }
+  if (st != LUA_OK) {
+    if (t->kind == NK_XTASK && nodestatus(L, t) == CO_SUSPENDED) {
+      int k = *nerr;  /* raise at its await */
+      int top;
+      keeptop(L, base, k);
+      lua_pushcfunction(L, wakef);
+      lua_pushvalue(L, tidx);
+      lua_pushlightuserdata(L, t);
+      lua_pushinteger(L, st);
+      lua_rotate(L, base + 1, 4);  /* below the error values */
+      st = lua_pcall(L, k + 3, 0, 0);  /* re-raises if not handled */
+      top = lua_gettop(L);
+      *nerr = top - base;
+      return st;
     }
-    else if (t->time < time && costatus(L, tidx) == CO_SUSPENDED) {
-      int nres, status;
-      lua_pushvalue(L, eidx);
-      lua_xmove(L, t->th, 1);  /* the event */
-      status = resumetask(t->th, L, 1, &nres);
-      taskresult(L, tidx, status, nres);
-    }
+    keeptop(L, base, *nerr);  /* propagate */
+    return st;
   }
-  else if (err) {
-    lua_remove(L, base + 1);
-    lua_errorstatus(L, errstatus, err);
+  if (t->kind == NK_XTASK && t->time < em->time &&
+      nodestatus(L, t) == CO_SUSPENDED && wakes(L, t, ud, em)) {
+    lua_settop(L, base);
+    lua_pushcfunction(L, wakef);
+    lua_pushvalue(L, tidx);
+    lua_pushlightuserdata(L, t);
+    lua_pushinteger(L, LUA_OK);
+    lua_pushvalue(L, em->eidx);
+    st = lua_pcall(L, 4, 0, 0);
+    *nerr = lua_gettop(L) - base;
+    return st;
   }
   lua_settop(L, base);
+  return LUA_OK;
 }
 
 
 /* a new broadcast of the event at 'eidx' to the subtree of 'tgtidx' */
 static void emitto (lua_State *L, int tgtidx, int eidx) {
-  TIME++;
-  emittree(L, TIME, tgtidx, eidx);
+  Emit em;
+  int st, nerr = 0;
+  tgtidx = lua_absindex(L, tgtidx);
+  em.eidx = lua_absindex(L, eidx);
+  em.time = ++TIME;
+  em.evtype = lua_type(L, em.eidx);
+  em.evatmos = (luaL_getmetafield(L, em.eidx, "__atmos") != LUA_TNIL);
+  if (em.evatmos) lua_pop(L, 1);
+  em.evtask = isxtask(L, em.eidx);
+  em.evnum = (em.evtype == LUA_TNUMBER) ? lua_tonumber(L, em.eidx) : 0;
+  st = emittree(L, &em, tgtidx, &nerr);
+  if (st != LUA_OK)
+    lua_errorstatus(L, st, nerr);
 }
 
 
@@ -883,7 +1019,7 @@ static void spawncore (lua_State *L, int upidx, int tra, int tidx, int nargs) {
     t = xtaskof(L, tidx);
     if (t->tra != tra)
       luaL_error(L, "invalid spawn : transparent modifier mismatch");
-    if (uvget(L, tidx, "up") != LUA_TNIL)
+    if (uvget(L, tidx, UV_UP) != LUA_TNIL)
       luaL_error(L, "invalid spawn : unexpected active task");
     lua_pop(L, 1);
     lua_pushvalue(L, tidx);
@@ -906,7 +1042,7 @@ static void spawncore (lua_State *L, int upidx, int tra, int tidx, int nargs) {
     t->pin = 1;
     if (p->max >= 0) {  /* bounded pool: count live tasks */
       lua_Integer n, i, live = 0;
-      uvget(L, -1, "dns");
+      uvget(L, -1, UV_DNS);
       n = (lua_Integer)lua_rawlen(L, -1);
       for (i = 1; i <= n; i++) {
         lua_rawgeti(L, -1, i);
@@ -995,12 +1131,9 @@ static int atm_tasks (lua_State *L) {  /* tasks([max]) */
     lua_pop(L, 1);
     lua_getfield(L, LUA_REGISTRYINDEX, ATM_ROOT);
   }
-  p = (Pool *)newnamed(L, POOL, sizeof(Pool));
+  p = newnamed(L, POOL, NK_POOL);
   p->max = max;
-  p->pin = 0;
-  p->isroot = 0;
   p->status = ST_OK;
-  p->pass = 0;
   link(L, 1, 2);
   return 1;
 }
@@ -1023,7 +1156,7 @@ static int atm_abort (lua_State *L) {  /* abort(t) */
 static void exitclose (lua_State *L, int idx) {
   lua_Integer n, i;
   idx = lua_absindex(L, idx);
-  uvget(L, idx, "dns");
+  uvget(L, idx, UV_DNS);
   n = (lua_Integer)lua_rawlen(L, -1);
   for (i = 1; i <= n; i++) {
     lua_rawgeti(L, -1, i);
@@ -1033,7 +1166,7 @@ static void exitclose (lua_State *L, int idx) {
   lua_pop(L, 1);
   if (isxtask(L, idx)) {
     XTask *t = xtaskof(L, idx);
-    if (uvget(L, idx, "gate") != LUA_TNIL)
+    if (uvget(L, idx, UV_GATE) != LUA_TNIL)
       exitclose(L, -1);
     lua_pop(L, 1);
     if (costatus(L, idx) != CO_DEAD) {
@@ -1078,7 +1211,7 @@ static int atm_stop (lua_State *L) {
   lua_settop(L, 0);
   pushme(L, 1);
   while (isxtask(L, -1) && !(xtaskof(L, -1))->isloop) {  /* up to the body */
-    uvget(L, -1, "up");
+    uvget(L, -1, UV_UP);
     lua_remove(L, -2);
   }
   if (isxtask(L, -1))
@@ -1136,12 +1269,12 @@ static void pushtarget (lua_State *L, int idx) {
     lua_getfield(L, LUA_REGISTRYINDEX, ATM_ROOT);
   }
   while (n > 0) {
-    uvget(L, -1, "up");
+    uvget(L, -1, UV_UP);
     lua_remove(L, -2);
     if (lua_isnil(L, -1)) luaL_error(L, "invalid emit : invalid target");
     while (!isrootpool(L, -1) && isxtask(L, -1) &&
            (xtaskof(L, -1))->tra) {
-      uvget(L, -1, "up");
+      uvget(L, -1, UV_UP);
       lua_remove(L, -2);
       if (lua_isnil(L, -1)) luaL_error(L, "invalid emit : invalid target");
     }
@@ -1342,12 +1475,12 @@ static int awaitmatch (lua_State *L, int hasevent) {
     arg = lua_gettop(L);
     if (strcmp(kind, "any") == 0 || strcmp(kind, "all") == 0) {
       if (!hasevent || !isxtask(L, 3)) return -1;
-      uvget(L, 3, "up");
+      uvget(L, 3, UV_UP);
       if (!lua_rawequal(L, -1, arg)) return -1;  /* not from this pool */
       lua_pop(L, 1);
       if (kind[1] == 'l') {  /* all: every task of the pool dead? */
         lua_Integer n, i;
-        uvget(L, arg, "dns");
+        uvget(L, arg, UV_DNS);
         n = (lua_Integer)lua_rawlen(L, -1);
         for (i = 1; i <= n; i++) {
           lua_rawgeti(L, -1, i);
@@ -1427,14 +1560,86 @@ static int awaitmatch (lua_State *L, int hasevent) {
 }
 
 
+/*
+** The kind of the pattern at index 1 for the broadcasts (AW_*), for
+** the task 't' (its node userdata at 'ud') starting an 'await'.
+** User code (an '__atmos' metamethod, a predicate, a '__eq' of a
+** userdata) can only run in the task: AW_RESUME.
+*/
+static int classify (lua_State *L, Node *t, int ud) {
+  int k;
+  const char *kind;
+  if (luaL_getmetafield(L, 1, "__atmos") != LUA_TNIL) {
+    lua_pop(L, 1);
+    k = AW_RESUME;
+  }
+  else if ((kind = pattkind(L, 1)) != NULL)
+    k = (strcmp(kind, "any") == 0 || strcmp(kind, "all") == 0)
+        ? AW_POOL : AW_RESUME;
+  else if (isxtask(L, 1)) {
+    k = AW_TASK;
+    t->atask = xtaskof(L, 1);
+  }
+  else switch (lua_type(L, 1)) {
+    case LUA_TNUMBER: {
+      k = AW_CLOCK;
+      t->clk = lua_tonumber(L, 1);
+      break;
+    }
+    case LUA_TSTRING: {
+      k = (strcmp(lua_tostring(L, 1), "clock") == 0) ? AW_CLOCKANY : AW_TAG;
+      break;
+    }
+    case LUA_TBOOLEAN: k = lua_toboolean(L, 1) ? AW_TRUE : AW_FALSE; break;
+    case LUA_TTABLE: k = AW_TABLE; break;
+    case LUA_TNIL: case LUA_TLIGHTUSERDATA: case LUA_TTHREAD:
+      k = AW_TAG; break;
+    default: k = AW_RESUME; break;  /* userdata ('__eq') */
+  }
+  t->pkind = (unsigned char)k;
+  t->wkind = AW_RESUME;
+  if (k == AW_TAG || k == AW_TASK) {  /* the pattern, for the broadcasts */
+    lua_pushvalue(L, 1);
+    lua_setiuservalue(L, ud, UV_PATT);
+  }
+  return k;
+}
+
+/* suspends the 'await' of 't' (stack: pattern, me) */
+static int awaityield (lua_State *L, Node *t) {
+  t->akind = t->pkind;
+  return lua_yieldk(L, 0, 0, await_k);
+}
+
+/* the 'await' of 't' returns 'n' values */
+static int awaitdone (lua_State *L, Node *t, int n) {
+  (void)L;
+  t->pkind = t->akind = t->wkind = AW_RESUME;
+  return n;
+}
+
 static int await_k (lua_State *L, int status, lua_KContext ctx) {
+  Node *t = xtaskof(L, 2);
   int n;
   (void)status; (void)ctx;
   /* stack: pattern, me, event */
+  switch (t->wkind) {  /* decided by the broadcast? */
+    case AW_TRUE: case AW_TAG:
+      lua_pushvalue(L, 3);
+      return awaitdone(L, t, 1);
+    case AW_CLOCK:  /* expired: how late */
+      pushnum(L, CLKLATE - t->clk);
+      return awaitdone(L, t, 1);
+    case AW_CLOCKANY:  /* elapsed, late */
+      lua_pushvalue(L, 3);
+      pushnum(L, CLKLATE);
+      return awaitdone(L, t, 2);
+    default: break;
+  }
   n = awaitmatch(L, 1);
-  if (n >= 0) return n;
+  if (n >= 0) return awaitdone(L, t, n);
   lua_settop(L, 2);
-  return lua_yieldk(L, 0, 0, await_k);
+  return awaityield(L, t);
 }
 
 
@@ -1555,8 +1760,8 @@ static int atm_await (lua_State *L) {  /* await(p) */
   if (ispool(L, 1)) luaL_error(L, "invalid await : unexpected tasks pool");
   if (lua_type(L, 1) == LUA_TFUNCTION)
     luaL_error(L, "invalid await : unexpected function");
-  pushme(L, 1);
-  if (!isxtask(L, 2)) luaL_error(L, "invalid await : expected enclosing task");
+  pushme(L, 1);  /* the thread's xtask */
+  if (lua_isnil(L, 2)) luaL_error(L, "invalid await : expected enclosing task");
   kind = pattkind(L, 1);
   if (kind != NULL) {
     if (strcmp(kind, "spawn") == 0) {  /* spawn the task, await it */
@@ -1576,12 +1781,21 @@ static int atm_await (lua_State *L) {  /* await(p) */
     else if (strcmp(kind, "until2") == 0 || strcmp(kind, "while2") == 0)
       return predloop(L);
   }
-  t = xtaskof(L, 2);
-  t->time = TIME;  /* reacts only to broadcasts after this point */
-  n = awaitmatch(L, 0);
-  if (n >= 0) return n;
   lua_settop(L, 2);
-  return lua_yieldk(L, 0, 0, await_k);
+  t = pushnode(L, 2);
+  t->time = TIME;  /* reacts only to broadcasts after this point */
+  switch (classify(L, t, 3)) {
+    case AW_TAG: case AW_TRUE: case AW_FALSE: case AW_TABLE:
+    case AW_CLOCKANY: case AW_POOL:
+      break;  /* no event yet: cannot match */
+    default: {  /* user patterns, predicates, tasks, timers: check now */
+      lua_settop(L, 2);
+      n = awaitmatch(L, 0);
+      if (n >= 0) return awaitdone(L, t, n);
+    }
+  }
+  lua_settop(L, 2);
+  return awaityield(L, t);
 }
 
 /* }------------------------------------------------------------------ */
@@ -1643,17 +1857,22 @@ static int branchdead (lua_State *L, int setidx, int i) {
   return dead;
 }
 
-static void stamp (lua_State *L) {  /* 'me' reacts to later broadcasts */
+/* 'me' reacts to later broadcasts; returns it */
+static Node *stamp (lua_State *L) {
+  Node *t;
   pushme(L, 1);
-  (xtaskof(L, -1))->time = TIME;
+  t = xtaskof(L, -1);
+  t->time = TIME;
   lua_pop(L, 1);
+  return t;
 }
 
-/* par: the branches run until the enclosing block ends */
+/* par: the branches run until the enclosing block ends (no event makes
+   it proceed: only a jump or an abort ends it) */
 static int par_k (lua_State *L, int status, lua_KContext ctx) {
   (void)status;
   lua_settop(L, (int)ctx);
-  stamp(L);
+  stamp(L)->akind = AW_NEVER;
   return lua_yieldk(L, 0, ctx, par_k);
 }
 
@@ -1842,10 +2061,10 @@ static void toggleoff (lua_State *L, int idx, int first) {
     lua_pushcclosure(L, gateloop, 2);
     g = newxtask(L, -1, 1);
     lua_remove(L, -2);  /* the function */
-    uvget(L, idx, "up");
-    uvset(L, -2, "up");
+    uvget(L, idx, UV_UP);
+    uvset(L, -2, UV_UP);
     lua_pushvalue(L, -1);
-    uvset(L, idx, "gate");
+    uvset(L, idx, UV_GATE);
     status = resumetask(g->th, L, 0, &nres);  /* run to its first await */
     taskresult(L, -1, status, nres);
     lua_pop(L, 1);
@@ -1868,10 +2087,10 @@ static int atm_toggle (lua_State *L) {  /* toggle(t, bool, filters...) */
     if (*st != ST_TOGGLED)
       luaL_error(L, "invalid toggle : expected toggled off task");
     *st = ST_OK;
-    if (uvget(L, 1, "gate") != LUA_TNIL) {
+    if (uvget(L, 1, UV_GATE) != LUA_TNIL) {
       closextask(L, -1);
       lua_pushnil(L);
-      uvset(L, 1, "gate");
+      uvset(L, 1, UV_GATE);
     }
     lua_pop(L, 1);
     lua_pushinteger(L, 0);  /* a zero tick: timers re-report, 'true' wakes */
@@ -2222,7 +2441,7 @@ static int pool_close (lua_State *L) {
 }
 
 static int pool_len (lua_State *L) {
-  uvget(L, 1, "dns");
+  uvget(L, 1, UV_DNS);
   lua_pushinteger(L, (lua_Integer)lua_rawlen(L, -1));
   return 1;
 }
@@ -2235,7 +2454,7 @@ static int poolnext (lua_State *L) {  /* (dns, i) -> i+1, dns[i+1] */
 
 static int pool_pairs (lua_State *L) {
   lua_pushcfunction(L, poolnext);
-  uvget(L, 1, "dns");
+  uvget(L, 1, UV_DNS);
   lua_pushinteger(L, 0);
   return 3;
 }
@@ -2295,9 +2514,9 @@ static void opentasks (lua_State *L) {  /* 'atmos' table on top */
   lua_setfield(L, LUA_REGISTRYINDEX, ATM_CACHE);
   lua_newtable(L);
   lua_setfield(L, LUA_REGISTRYINDEX, ATM_GC);
-  root = (Pool *)newnamed(L, POOL, sizeof(Pool));
+  root = newnamed(L, POOL, NK_POOL);
   root->max = -1; root->pin = 1; root->isroot = 1;
-  root->status = ST_OK; root->pass = 0;
+  root->status = ST_OK;
   lua_setfield(L, LUA_REGISTRYINDEX, ATM_ROOT);
   lua_newuserdatauv(L, 0, 0);  /* exit sentinel: finalized at 'lua_close' */
   lua_createtable(L, 0, 1);

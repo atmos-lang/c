@@ -145,7 +145,7 @@ do {  ;; a task awaited from outside its owner wakes on any later event
 
 do {  ;; :any / :all wake on terminations of the pool's tasks only
   pin ts = tasks()
-  task T (v) {
+  val T = task (v) {
     await(v)
     v
   }
@@ -337,17 +337,25 @@ do {
       }
     }) ()
   }
-  val func time (f) {
-    val t0 = os.clock()
-    loop j in 20 { f() }
-    os.clock() - t0
+  val func time (f) {  ;; best of 3 runs of 20, without the GC
+    var best = math.huge
+    loop k in 3 {
+      collectgarbage()
+      collectgarbage("stop")
+      val t0 = os.clock()
+      loop j in 20 { f() }
+      set best = math.min(best, os.clock() - t0)
+      collectgarbage("restart")
+    }
+    best
   }
   val wake = time(\{ emit @ts :X })
   val miss = time(\{ emit @ts :Y })
   val tick = time(\{ emit @:global 1ms })
-  assert(c == (20 * N))
+  assert(c == (60 * N))
   assert((miss / wake) < 0.4, "miss/wake = " ++ tostring(miss / wake))
-  assert((tick / wake) < 0.4, "tick/wake = " ++ tostring(tick / wake))
+  ;; (a tick crosses both pools: twice the tasks of 'wake')
+  assert((tick / (2 * wake)) < 0.4, "tick/wake = " ++ tostring(tick / (2 * wake)))
 }
 
 realprint("OK")

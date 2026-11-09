@@ -277,7 +277,28 @@ matters, and the rule is accepted.
 
 ### Status
 
-Idea stage; nothing implemented for (c) beyond the measurements above. Item (a) is implemented
+(c): stackless coroutines are not implemented (decision pending, see
+above). Implemented instead, as recommended for games: the task
+runtime keeps its data in one C struct per task/pool with user-value
+slots (no string-keyed user value table), the broadcast decides the
+simple matches in C and resumes only the tasks that may proceed, and
+the per-child `lua_pcall` is gone (tests `testes/emit.atm`). Measured
+(clean build; before -> after):
+
+| per task                         | 1000 tasks      | 20000 tasks     |
+|----------------------------------|-----------------|-----------------|
+| matching wake                    | 0.52 -> 0.33 us | 0.88 -> 0.59 us |
+| event that matches nothing       | 0.37 -> 0.07 us | 0.59 -> 0.08 us |
+| tick that expires no timer       | 0.31 -> 0.03 us | 0.51 -> 0.06 us |
+| memory of an idle task           | 1562 -> 1514 B  | 1582 -> 1534 B  |
+
+The memory gain is small: the task table, the node userdata (with its
+user values) and the empty `dns` table remain; creating `dns` lazily
+or merging the tables is the next step if memory matters. A matching
+wake still costs ~4 string-keyed lookups (the node from the task
+table twice, the coroutine->xtask cache, `__atmos` of the pattern).
+
+Item (a) is implemented
 (`lua_resumeerror` in `ldo.c`, `coroutine.error` in `lcorolib.c`;
 tests `testes/coerror.atm`); (b) is not needed (see above). Note: as
 in Lua, the to-be-closed variables of a coroutine that dies by an

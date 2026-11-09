@@ -126,19 +126,26 @@ stackless coroutines of coroutine.md (c) plug in underneath it.
 
 ### Runtime (C)
 
-- `XTask` userdata: coroutine (`lua_State*`, kept alive through the
-  user value table), `up`, `dns` (table), `status` (none/aborted/
-  toggled), `time`, `tra` (transparent), `pin`, `ret`, `toggle` gate.
-  `Tasks` userdata: `up`, `dns`, `max`, `toggle`. `Task` prototype
-  userdata: the function. A weak table maps coroutines to xtasks
-  (`me`).
+- Tasks and pools are tables (field `_`: a `Node` userdata, one
+  struct for both: coroutine `lua_State*`, `status` (none/aborted/
+  toggled), `time`, `pass`, `tra` (transparent), `pin`, `max`, and the
+  await filter `akind`/`pkind`/`wkind`, `clk`, `atask`); the node's
+  user values (slots, no string keys) hold the coroutine, `up`, `dns`
+  (table of children), the toggle gate and the awaited pattern. `ret`
+  and `pub` are fields of the table. A prototype is a table with its
+  function in `_`. A weak table maps coroutines to xtasks (`me`).
 - `spawn`: create, link, `lua_resume`; the result handling is
   `task_result` (error: close subtree and re-raise with all values;
   aborted while running: close now; dead: store `ret`, emit the task to
   the owner's await, close subtree).
-- `emit`: recursive traversal in C with `lua_pcall` per child; a child
-  error wakes the owner with `lua_resumeerror`; the owner is resumed
-  with `(nil, e)` when `time` allows. Clock ticks (`emit @:global 10s`)
+- `emit`: recursive traversal in C returning a status (no protected
+  call per child); a task is resumed (under `lua_pcall`) only when its
+  `time` allows and its await filter says the event may match: tags,
+  `true`/`false`, timers (countdown in the node), `:clock`, task
+  termination, `:any`/`:all` and table patterns are decided in C;
+  `__atmos` patterns/events, predicates and raw yields always resume
+  (see coroutine.md, "Wasted resumes"). A child error is raised at the
+  owner's await with `lua_resumethrow`, or returned up. Clock ticks (`emit @:global 10s`)
   split in pieces at the nearest timer (`CLK.min`/`late`).
 - `await`: C function with a continuation (`lua_yieldk`) matching on
   each wake; task termination via the emitted task; pools by owner;
