@@ -334,4 +334,32 @@ do {
   assert(!f)
 }
 
+;; ---- last and next index: t@# and t@+
+
+do {
+  val t = [1]  ;; a local
+  set t@+ = 2
+  assert((#t == 2) && (t@# == 2))
+  val g = [ party = [], gold = 3 ]  ;; a field (a temporary register)
+  set g.party@+ = :a
+  set g.party@+ = :b
+  assert((#g.party == 2) && (g.party@1 == :a) && (g.party@# == :b))
+  assert(g.gold == 3)
+  val n = [ a = [ b = [10] ] ]  ;; nested
+  set n.a.b@+ = 20
+  assert((n.a.b@# == 20) && (#n.a.b == 2))
+  set XG = [ l = [] ]  ;; a global
+  set XG.l@+ = 1
+  set XG.l@+ = 2
+  assert((XG.l@# == 2) && (#XG.l == 2))
+  set XG = nil
+  val f = func () {  ;; an upvalue
+    set t@+ = 3
+    t@#
+  }
+  assert((f() == 3) && (#t == 3))
+  val x = g.party@#  ;; as a value
+  assert(x == :b)
+}
+
 print("OK")
