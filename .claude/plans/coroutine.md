@@ -237,12 +237,40 @@ task's frames, any depth, to a block reused across switches): memory
 like B2 (~1 KB, `lua_State` kept), switch a bit cheaper than B2 (two
 memcpy + pointer correction, no malloc), i.e. still dearer than today.
 
+Wasted resumes. Today (as in the reference) `emit` resumes every
+suspended task of the subtree and the match runs inside the task
+(`awaitmatch` in the `await` loop), which yields again on a miss. In a
+game most tasks await something other than the current event, so most
+resumes are wasted. Measured (clean build, 1000 / 20000 tasks): an
+emit that matches no task costs 0.37 / 0.58 us per task (70% of a
+matching wake, 0.55 / 0.89); a clock tick that expires no timer costs
+0.31 / 0.51 us per task. Deciding the match in C before resuming
+removes these: keep the awaited pattern in the task struct (pattern
+value in a user value slot, kind and clock countdown in C fields) and
+let `emittree` test it:
+- tag/value patterns: equality / tag hierarchy, decided in C;
+- clock: the countdown is decremented in C (and `CLKMIN` reported);
+  resume only on expiry, with `late`;
+- task termination: resume only on the awaited task's event;
+- `true` (any event): always resume;
+- `__atmos` and Lua predicates (`until`/`while` with a function): user
+  code that must run in the task's context; keep resuming (they are
+  the minority);
+- `or`/`and`/`not`: leaves are transparent tasks with simple patterns,
+  filtered the same way.
+A filtered-out task then costs a C test (tens of ns) instead of a
+resume. Also: `emittree` runs every child under a `lua_pcall` (a
+`setjmp` per child, matched or not); resumes are already protected
+(`lua_resume` returns the status), so the per-child pcall can go too.
+
 Recommendation (for games): keep stackful coroutines (A, no B) and cut
 the runtime overhead of a wake first: keep the task tree and the hot
 fields (status, pass, time, up/dns links, awaited pattern) in C
 structs (the task userdata) instead of string-keyed tables, and cache
-the `__atmos` lookup. Expected: wake ~0.2-0.3 us, ~400 bytes less per
-task. Every option needs this anyway. Then measure again: stackless
+the `__atmos` lookup; on top of it, decide simple matches in C so
+that only tasks that proceed are resumed, and drop the per-child
+pcall. Expected: wake ~0.2-0.3 us, a non-matching task ~0.05 us or
+less, ~400 bytes less per task. Every option needs this anyway. Then measure again: stackless
 is worth it only if memory per task becomes the limit (10000 tasks:
 ~11 MB stackful vs ~4 MB stackless) or the remaining ~0.12 us switch
 matters, and the rule is accepted.
