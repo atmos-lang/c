@@ -49,10 +49,10 @@ the converted tests assume.
 ## 3. Expression-based language
 
 See [expressions.md](expressions.md): how statement values are
-implemented (value register, no hidden locals, no block closures), what
-the converted Lua suite does and does not exercise, and the open points
-(functions ending in a call return its first value; truncation to one
-value; `match`/`where`/`catch`/pipes pending).
+implemented (value register, no hidden locals, no block closures),
+several values per block (static arities, nil padding, `OP_BLOCKRES`;
+done), what the converted Lua suite does and does not exercise, and the
+open point (functions ending in a call return its first value).
 
 ## 4. Errors with multiple values
 

@@ -52,6 +52,13 @@ Semantics assumed for the Atmos implementation (the tests rely on them):
 - `func NAME (...) {...}` assigns to the visible variable `NAME` (global if
   none is in scope), like Lua's `function NAME`
 - a parenthesized single expression truncates to one value (`(f())`)
+- a block (`do`, `loop`, `if`, `ifs`, `match`) yields all the values of
+  its exit: a parenthesized tuple as its last expression, `break(a, b)`,
+  `escape(:X, a, b)`, `until(c, a, b)`, `=> (a, b)` branches; exits with
+  fewer values are padded with nils to the longest (at most 15); `val a,
+  b = do :X { escape(:X, 1, 2) }`, `f(loop { break(1, 2) })` and a
+  function body ending in such a block get all of them, a non-final
+  argument position one (as a call)
 - two statements on one line need `;` between them; newlines otherwise are
   whitespace
 - `"""..."""` and `'''...'''` are raw multi-line strings (no escapes),

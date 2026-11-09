@@ -73,6 +73,23 @@ typedef struct Owner {
 
 
 /*
+** Values of a compound statement ('do', 'loop', 'if', 'ifs', 'match',
+** 'test'): each exit yields a known number of values (0, 1 or those
+** of a tuple), stored at 'reg..'; exits are grouped by arity and the
+** shorter ones padded with nils to the maximum at the end of the
+** construct (see .claude/plans/expressions.md, "Several values").
+*/
+#define MAXARITY	15
+
+typedef struct ResDesc {
+  int reg;  /* first value register */
+  unsigned int arities;  /* bit k set: some exit yields k values */
+  int endarity;  /* arity of the normal end (falls through) */
+  int jumps[MAXARITY + 1];  /* pending jumps of branch ends, per arity */
+} ResDesc;
+
+
+/*
 ** nodes for block list (list of active blocks)
 */
 typedef struct BlockCnt {
@@ -87,7 +104,7 @@ typedef struct BlockCnt {
   TString *tag;  /* tag of a 'do :tag' block (NULL otherwise) */
   lu_byte hasescape;  /* true if block has pending escapes */
   lu_byte nregions;  /* try regions to pop when leaving the block */
-  short resreg;  /* register holding the block value (or -1) */
+  ResDesc *res;  /* values of the construct ('break'/'escape' target) */
   struct Owner *owner;  /* region owning the tasks spawned in the block */
   struct Owner ownerbuf;  /* its storage (no heap: parse errors longjmp) */
 } BlockCnt;
@@ -117,7 +134,8 @@ struct Owner;
 static void blockowner (LexState *ls);
 static void openowner (LexState *ls, struct Owner *o, int reg);
 static void closeowner (LexState *ls, struct Owner *o, int line);
-static void breakjump (LexState *ls, BlockCnt *bl, int line);
+static void breakjump (LexState *ls, BlockCnt *bl, int n, int line);
+static void createlabel (LexState *ls, TString *name);
 static int newgotoentry (LexState *ls, TString *name, int line);
 static void pattexp (LexState *ls, expdesc *e);
 static void pattbin (LexState *ls, expdesc *e);
@@ -464,20 +482,141 @@ static void closeupto (FuncState *fs, int reg) {
 ** Store the value of 'e' into register 'reg' (nil if 'e' is void),
 ** closing enclosing blocks above 'reg' first.
 */
-static void store_value (LexState *ls, int reg, expdesc *e) {
+static void initres (ResDesc *rd, int reg) {
+  int k;
+  rd->reg = reg;
+  rd->arities = 0;
+  rd->endarity = 0;
+  for (k = 0; k <= MAXARITY; k++)
+    rd->jumps[k] = NO_JUMP;
+}
+
+
+/* the number of values of the construct (at least one: nil) */
+static int maxarity (ResDesc *rd) {
+  int k;
+  for (k = MAXARITY; k > 1; k--)
+    if (rd->arities & (1u << k)) return k;
+  return 1;
+}
+
+
+/*
+** Stores the 'n' values of 'e' (0: none; 1; or the last of 'n' values
+** in consecutive registers, as a tuple) as an exit of 'rd': the values
+** are evaluated first, enclosing upvalues are closed, then they are
+** moved to 'rd->reg..'. Returns the arity.
+*/
+static int storevalues (LexState *ls, ResDesc *rd, expdesc *e, int n) {
   FuncState *fs = ls->fs;
-  if (e->k == VVOID) {
-    closeupto(fs, reg);
-    luaK_nil(fs, reg, 1);
+  if (e->k == VVOID)
+    n = 0;
+  luaY_checklimit(fs, n, MAXARITY, "values of a block");
+  if (n == 0) {  /* no value: nil, stored here (no padding to execute) */
+    closeupto(fs, rd->reg);
+    luaK_nil(fs, rd->reg, 1);
+    n = 1;
   }
-  else {
+  else if (n == 1) {
     expdesc var;
     luaK_exp2anyreg(fs, e);  /* evaluate before closing */
-    closeupto(fs, reg);
+    closeupto(fs, rd->reg);
     init_exp(&var, VLOCAL, 0);  /* fake local variable at 'reg' */
-    var.u.var.ridx = cast_byte(reg);
+    var.u.var.ridx = cast_byte(rd->reg);
     var.u.var.vidx = 0;
     luaK_storevar(fs, &var, e);
+  }
+  else {
+    int first, i;
+    luaK_exp2nextreg(fs, e);
+    first = fs->freereg - n;
+    closeupto(fs, rd->reg);
+    for (i = 0; i < n; i++) {
+      if (first + i != rd->reg + i)
+        luaK_codeABC(fs, OP_MOVE, rd->reg + i, first + i, 0);
+    }
+  }
+  rd->arities |= (1u << n);
+  return n;
+}
+
+
+/* a single value (or none) as an exit of 'rd' */
+static void store_value (LexState *ls, ResDesc *rd, expdesc *e) {
+  storevalues(ls, rd, e, 1);
+}
+
+
+/* label name of the exits of arity 'n' ('break#n', 'tag#n') */
+static TString *aritylabel (LexState *ls, TString *base, int n) {
+  lua_State *L = ls->L;
+  const char *s = luaO_pushfstring(L, "%s#%d", getstr(base), n);
+  TString *ts = luaX_newstring(ls, s, strlen(s));
+  L->top.p--;  /* remove the string pushed by 'luaO_pushfstring' */
+  return ts;
+}
+
+
+/*
+** Padding of the exits of arity 'k' to 'max' values; exits of lower
+** arity fall through the paddings of the higher ones (harmless).
+*/
+static void padexit (FuncState *fs, ResDesc *rd, int k, int max) {
+  if (k < max)
+    luaK_nil(fs, rd->reg + k, max - k);
+}
+
+
+/*
+** End of the exits of a construct: the normal end (arity
+** 'rd->endarity', falling through here) is padded and jumps over the
+** stubs of the other arities, one per arity in increasing order, each
+** a label 'name#k' (gotos of 'break'/'escape') or the pending jumps
+** of branch ends ('name' NULL), followed by its padding.
+*/
+static void finishexits (LexState *ls, ResDesc *rd, TString *name) {
+  FuncState *fs = ls->fs;
+  int max = maxarity(rd);
+  unsigned int others = rd->arities & ~(1u << rd->endarity);
+  int jmp = NO_JUMP;
+  int k;
+  /* exits of the normal arity join the normal end before its padding */
+  if (name == NULL)
+    luaK_patchtohere(fs, rd->jumps[rd->endarity]);
+  else
+    createlabel(ls, aritylabel(ls, name, rd->endarity));
+  padexit(fs, rd, rd->endarity, max);
+  if (others != 0) {  /* exits of other arities? */
+    jmp = luaK_jump(fs);  /* the normal end skips their stubs */
+    for (k = 0; k <= MAXARITY; k++) {
+      if (others & (1u << k)) {
+        if (name != NULL)
+          createlabel(ls, aritylabel(ls, name, k));
+        else
+          luaK_patchtohere(fs, rd->jumps[k]);
+        padexit(fs, rd, k, max);
+      }
+    }
+    luaK_patchtohere(fs, jmp);
+  }
+}
+
+
+/*
+** The values of a compound statement as an expression: one value at
+** 'rd->reg' (a temporary), or 'max' values through OP_BLOCKRES
+** (adjusted by the consumer as a call's results).
+*/
+static void finishres (LexState *ls, ResDesc *rd, expdesc *v) {
+  FuncState *fs = ls->fs;
+  int max = maxarity(rd);
+  fs->freereg = cast_byte(rd->reg);
+  luaK_reserveregs(fs, max);  /* (checks the frame size) */
+  if (max == 1)
+    init_exp(v, VNONRELOC, rd->reg);
+  else {
+    fs->freereg = cast_byte(rd->reg + 1);
+    init_exp(v, VCALL, luaK_codeABC(fs, OP_BLOCKRES, rd->reg, max + 1, 2));
   }
 }
 
@@ -487,12 +626,7 @@ static void store_value (LexState *ls, int reg, expdesc *e) {
 ** free register when the statement started; describe it as a
 ** temporary on the top of the stack.
 */
-static void value_result (LexState *ls, int reg, expdesc *v) {
-  FuncState *fs = ls->fs;
-  init_exp(v, VNONRELOC, reg);
-  fs->freereg = cast_byte(reg);
-  luaK_reserveregs(fs, 1);  /* the value register (checks frame size) */
-}
+
 
 
 /*
@@ -914,7 +1048,7 @@ static void enterblock (FuncState *fs, BlockCnt *bl, lu_byte isloop) {
   bl->tag = NULL;
   bl->hasescape = 0;
   bl->nregions = 0;
-  bl->resreg = -1;
+  bl->res = NULL;
   bl->owner = NULL;
   bl->previous = fs->bl;  /* link block in function's block list */
   fs->bl = bl;
@@ -948,9 +1082,9 @@ static void leaveblock (FuncState *fs) {
   removevars(fs, bl->nactvar);  /* remove block locals */
   lua_assert(bl->nactvar == fs->nactvar);  /* back to level on entry */
   if (bl->isloop == 2)  /* has to fix pending breaks? */
-    createlabel(ls, ls->brkn);
+    finishexits(ls, bl->res, ls->brkn);
   if (bl->tag != NULL && bl->hasescape)  /* has pending escapes? */
-    createlabel(ls, bl->tag);
+    finishexits(ls, bl->res, bl->tag);
   solvegotos(fs, bl);
   if (bl->previous == NULL) {  /* was it the last block? */
     if (bl->firstgoto < ls->dyd->gt.n)  /* still pending gotos? */
@@ -1125,7 +1259,7 @@ static void statlist (LexState *ls, expdesc *v, int *n) {
 ** Parse a block ('{' statlist '}') whose value goes to register
 ** 'resreg' (or is discarded if 'resreg' is -1).
 */
-static void block (LexState *ls, int resreg) {
+static int block (LexState *ls, ResDesc *rd) {
   FuncState *fs = ls->fs;
   BlockCnt bl;
   expdesc v;
@@ -1134,13 +1268,16 @@ static void block (LexState *ls, int resreg) {
   enterblock(fs, &bl, 0);
   checknext(ls, '{');
   statlist(ls, &v, &n);
-  if (resreg >= 0)
-    store_value(ls, resreg, &v);
-  else
+  if (rd != NULL)
+    n = storevalues(ls, rd, &v, n);
+  else {
     discard(ls, &v);
+    n = 0;
+  }
   ls->blockline = ls->lastline;  /* line of last statement */
   check_match(ls, '}', '{', line);
   leaveblock(fs);
+  return n;
 }
 
 
@@ -1404,8 +1541,10 @@ static void tailreturn (LexState *ls, expdesc *e, int n) {
   int nret;
   if (e->k == VVOID)
     return;  /* no value: final 'return' comes from 'close_func' */
-  if (n == 1)
-    luaK_setoneret(fs, e);  /* single expression evaluates to one value */
+  if (n == 1 &&
+      !(e->k == VCALL && GET_OPCODE(getinstruction(fs, e)) == OP_BLOCKRES))
+    luaK_setoneret(fs, e);  /* single expression evaluates to one value
+                               (a block with several values keeps them) */
   if (hasmultret(e->k)) {
     luaK_setmultret(fs, e);
     nret = LUA_MULTRET;  /* return all values */
@@ -1593,7 +1732,6 @@ static int catchstat (LexState *ls, expdesc *v) {
   luaK_fixline(fs, line);
   enterblock(fs, &bl, 0);
   bl.nregions = 1;
-  bl.resreg = cast_short(base + 1);
   checknext(ls, '{');
   {  /* the body values go to R[base+1]..: none, one, or a tuple's */
     expdesc bv;
@@ -1602,7 +1740,9 @@ static int catchstat (LexState *ls, expdesc *v) {
     if (bv.k == VVOID)
       nvals = 0;
     else if (n == 1) {
-      store_value(ls, base + 1, &bv);  /* (a call gives one value) */
+      ResDesc rd;
+      initres(&rd, base + 1);
+      store_value(ls, &rd, &bv);  /* (a call gives one value) */
       nvals = 1;
     }
     else {  /* tuple: values above the body locals; move them down */
@@ -2179,7 +2319,6 @@ static int watchingstat (LexState *ls, expdesc *v) {
   luaK_fixline(fs, line);
   enterblock(fs, &bl, 0);
   bl.nregions = 1;
-  bl.resreg = cast_short(base + 1);
   {  /* the watcher, pinned by the block, and the condition */
     int cb = callbegin(ls, "watching.spawn");
     pattexp(ls, &e);
@@ -2194,7 +2333,11 @@ static int watchingstat (LexState *ls, expdesc *v) {
   }
   checknext(ls, '{');
   statlist(ls, &bv, &n);
-  store_value(ls, base + 1, &bv);
+  {  /* the body value at base+1 (one value) */
+    ResDesc rd;
+    initres(&rd, base + 1);
+    store_value(ls, &rd, &bv);
+  }
   ls->blockline = ls->lastline;
   check_match(ls, '}', '{', line);
   leaveblock(fs);  /* closes the watcher */
@@ -3251,17 +3394,17 @@ static void jumpdispatch (LexState *ls, Owner *o, int line) {
       case JK_BREAK: {
         expdesc v;
         handlerval(fs, &v, vreg);
-        if (j->target->resreg >= 0) store_value(ls, j->target->resreg, &v);
-        breakjump(ls, j->target, line);
+        store_value(ls, j->target->res, &v);
+        breakjump(ls, j->target, 1, line);
         break;
       }
       case JK_ESCAPE: {
         expdesc v;
         handlerval(fs, &v, vreg);
-        if (j->target->resreg >= 0) store_value(ls, j->target->resreg, &v);
+        store_value(ls, j->target->res, &v);
         popregions(fs, j->target);
         j->target->hasescape = 1;
-        newgotoentry(ls, j->tag, line);
+        newgotoentry(ls, aritylabel(ls, j->tag, 1), line);
         break;
       }
       default: {  /* return: all the values */
@@ -3328,10 +3471,10 @@ static void blockowner (LexState *ls) {
 /*
 ** Jump to the end of loop block 'bl' (a 'goto break').
 */
-static void breakjump (LexState *ls, BlockCnt *bl, int line) {
+static void breakjump (LexState *ls, BlockCnt *bl, int n, int line) {
   popregions(ls->fs, bl);
   bl->isloop = 2;  /* signal that block has pending breaks */
-  newgotoentry(ls, ls->brkn, line);
+  newgotoentry(ls, aritylabel(ls, ls->brkn, n), line);
 }
 
 
@@ -3340,21 +3483,20 @@ static void breakjump (LexState *ls, BlockCnt *bl, int line) {
 ** first one: ',' explist ')'. Stores the first extra value (or 'def'
 ** when there is none) into the block's value register.
 */
-static void storeextra (LexState *ls, BlockCnt *bl, expdesc *def) {
+static int storeextra (LexState *ls, BlockCnt *bl, expdesc *def) {
   expdesc e;
-  if (testnext(ls, ',')) {
+  int n = 1;
+  if (testnext(ls, ',')) {  /* the extra values are the exit's values */
     expr(ls, &e);
-    while (testnext(ls, ',')) {  /* extra values are evaluated and dropped */
+    while (testnext(ls, ',')) {
       luaK_exp2nextreg(ls->fs, &e);
       expr(ls, &e);
+      n++;
     }
   }
   else
     e = *def;
-  if (bl->resreg >= 0)
-    store_value(ls, bl->resreg, &e);
-  else
-    discard(ls, &e);
+  return storevalues(ls, bl->res, &e, n);
 }
 
 
@@ -3374,6 +3516,7 @@ static void breakstat (LexState *ls, int line) {
   expdesc nilv;
   int paren;
   int base = -1;
+  int nvals = 0;
   luaX_next(ls);  /* skip 'break' */
   if (bl == NULL) {  /* out of the task: atm.jump(JK_BREAK, value) */
     registerjump(ls, JK_BREAK, NULL);
@@ -3383,23 +3526,27 @@ static void breakstat (LexState *ls, int line) {
   init_exp(&nilv, VNIL, 0);
   if (!paren || ls->t.token != ')') {
     expdesc e;
+    int n = 1;
     expr(ls, &e);
     while (testnext(ls, ',')) {
       luaK_exp2nextreg(fs, &e);
       expr(ls, &e);
+      n++;
     }
-    if (bl == NULL) luaK_exp2nextreg(fs, &e);
-    else if (bl->resreg >= 0) store_value(ls, bl->resreg, &e);
-    else discard(ls, &e);
+    if (bl == NULL) luaK_exp2nextreg(fs, &e);  /* (one value out of a task) */
+    else n = storevalues(ls, bl->res, &e, n);
+    nvals = n;
   }
   else if (bl == NULL) luaK_exp2nextreg(fs, &nilv);
-  else if (bl->resreg >= 0)
-    store_value(ls, bl->resreg, &nilv);
+  else {
+    init_exp(&nilv, VVOID, 0);
+    nvals = storevalues(ls, bl->res, &nilv, 0);  /* 'break()': no value */
+  }
   kwclose(ls, paren);
   if (bl == NULL)
     jumpend(ls, base, 0, line);
   else
-    breakjump(ls, bl, line);
+    breakjump(ls, bl, nvals, line);
 }
 
 
@@ -3444,8 +3591,8 @@ static void untilstat (LexState *ls, int line) {
   if (bl == NULL)
     jumpextra(ls, &e, line);  /* out of the task */
   else {
-    storeextra(ls, bl, &e);  /* true: loop value is extra or condition */
-    breakjump(ls, bl, line);
+    int n = storeextra(ls, bl, &e);  /* true: loop value is extra or condition */
+    breakjump(ls, bl, n, line);
   }
   luaK_patchtohere(fs, jf);
   kwclose(ls, paren);
@@ -3469,8 +3616,8 @@ static void whilestat (LexState *ls, int line) {
   if (bl == NULL)
     jumpextra(ls, &nilv, line);
   else {
-    storeextra(ls, bl, &nilv);  /* false: loop value is extra or nil */
-    breakjump(ls, bl, line);
+    int n = storeextra(ls, bl, &nilv);  /* false: loop value is extra or nil */
+    breakjump(ls, bl, n, line);
   }
   luaK_patchtohere(fs, jt);
   kwclose(ls, paren);
@@ -3521,11 +3668,13 @@ static void escapestat (LexState *ls, int line) {
     jumpend(ls, base, 0, line);
     return;
   }
-  storeextra(ls, bl, &tv);
-  kwclose(ls, paren);
-  popregions(fs, bl);
-  bl->hasescape = 1;
-  newgotoentry(ls, tag, line);
+  {
+    int n = storeextra(ls, bl, &tv);
+    kwclose(ls, paren);
+    popregions(fs, bl);
+    bl->hasescape = 1;
+    newgotoentry(ls, aritylabel(ls, tag, n), line);
+  }
 }
 
 
@@ -3560,27 +3709,49 @@ static int condvalue (LexState *ls, int *valreg) {
 ** '=>' branch of an 'if'/'ifs': a block, an expression, or a lambda,
 ** which is called with the condition value ('valreg', or 'true').
 */
-static void arrowbranch (LexState *ls, int reg, int valreg) {
+/*
+** Expression of a branch ('=> e'): an expression, or a parenthesized
+** tuple giving all its values; returns the number of values.
+*/
+static int branchexpr (LexState *ls, expdesc *e) {
+  if (ls->t.token == '(') {
+    int n = parenlist(ls, e);
+    if (n > 1)
+      return n;  /* a tuple */
+    suffixloop(ls, e, 0);  /* a parenthesized value: whole expression */
+    singlepipes(ls, e);
+    binloop(ls, e);
+    doublepipes(ls, e, 1);
+    return 1;
+  }
+  expr(ls, e);
+  return 1;
+}
+
+
+static int arrowbranch (LexState *ls, ResDesc *rd, int valreg) {
   FuncState *fs = ls->fs;
   checknext(ls, TK_ARROW);
   if (ls->t.token == '{') {
     fs->freereg = cast_byte(luaY_nvarstack(fs));  /* drop the value */
-    block(ls, reg);
+    return block(ls, rd);
   }
   else {
     expdesc e;
     int line = ls->linenumber;
+    int n = 1;
     if (testnext(ls, '\\')) {  /* lambda: called with the value */
       lambda(ls, &e, line);
       callhead(ls, &e, valreg);
     }
     else {
       fs->freereg = cast_byte(luaY_nvarstack(fs));
-      expr(ls, &e);
+      n = branchexpr(ls, &e);
     }
-    store_value(ls, reg, &e);
+    n = storevalues(ls, rd, &e, n);
     ls->blockline = ls->lastline;
     fs->freereg = cast_byte(luaY_nvarstack(fs));
+    return n;
   }
 }
 
@@ -3590,32 +3761,34 @@ static void arrowbranch (LexState *ls, int reg, int valreg) {
 */
 static int ifstat (LexState *ls, expdesc *v) {
   FuncState *fs = ls->fs;
-  int reg = luaY_nvarstack(fs);  /* register for the value */
-  int condfalse, escape, valreg;
+  ResDesc rd;
+  int condfalse, valreg, n;
+  initres(&rd, luaY_nvarstack(fs));  /* register for the values */
   luaX_next(ls);  /* skip 'if' */
   condfalse = condvalue(ls, &valreg);
   if (ls->t.token == '{')  /* 'then' part */
-    block(ls, reg);
+    n = block(ls, &rd);
   else
-    arrowbranch(ls, reg, valreg);
-  escape = luaK_jump(fs);
+    n = arrowbranch(ls, &rd, valreg);
+  luaK_concat(fs, &rd.jumps[n], luaK_jump(fs));
   luaK_fixline(fs, ls->blockline);  /* jump "belongs" to the branch */
   luaK_patchtohere(fs, condfalse);
   if (testnext(ls, TK_ELSE)) {  /* 'else' part */
     if (ls->t.token == '{')
-      block(ls, reg);
+      n = block(ls, &rd);
     else
-      arrowbranch(ls, reg, -1);
+      n = arrowbranch(ls, &rd, -1);
   }
   else if (ls->t.token == TK_ARROW)  /* if c => a => b */
-    arrowbranch(ls, reg, -1);
+    n = arrowbranch(ls, &rd, -1);
   else {
     expdesc e;
     init_exp(&e, VVOID, 0);
-    store_value(ls, reg, &e);  /* no else: nil */
+    n = storevalues(ls, &rd, &e, 0);  /* no else: nil */
   }
-  luaK_patchtohere(fs, escape);
-  value_result(ls, reg, v);
+  rd.endarity = n;
+  finishexits(ls, &rd, NULL);
+  finishres(ls, &rd, v);
   return 1;
 }
 
@@ -3625,23 +3798,24 @@ static int ifstat (LexState *ls, expdesc *v) {
 */
 static int ifsstat (LexState *ls, expdesc *v) {
   FuncState *fs = ls->fs;
-  int reg = luaY_nvarstack(fs);  /* register for the value */
-  int escapelist = NO_JUMP;
+  ResDesc rd;
   int haselse = 0;
+  int n = 0;
   int line = ls->linenumber;
+  initres(&rd, luaY_nvarstack(fs));  /* register for the values */
   luaX_next(ls);  /* skip 'ifs' */
   checknext(ls, '{');
   while (ls->t.token != '}') {
     if (testnext(ls, TK_ELSE)) {
-      arrowbranch(ls, reg, -1);
+      n = arrowbranch(ls, &rd, -1);
       haselse = 1;
       break;
     }
     else {
       int valreg;
       int condfalse = condvalue(ls, &valreg);
-      arrowbranch(ls, reg, valreg);
-      luaK_concat(fs, &escapelist, luaK_jump(fs));
+      n = arrowbranch(ls, &rd, valreg);
+      luaK_concat(fs, &rd.jumps[n], luaK_jump(fs));
       luaK_fixline(fs, ls->blockline);  /* jump "belongs" to the branch */
       luaK_patchtohere(fs, condfalse);
     }
@@ -3649,11 +3823,12 @@ static int ifsstat (LexState *ls, expdesc *v) {
   if (!haselse) {
     expdesc e;
     init_exp(&e, VVOID, 0);
-    store_value(ls, reg, &e);  /* no case: nil */
+    n = storevalues(ls, &rd, &e, 0);  /* no case: nil */
   }
   check_match(ls, '}', '{', line);
-  luaK_patchtohere(fs, escapelist);
-  value_result(ls, reg, v);
+  rd.endarity = n;
+  finishexits(ls, &rd, NULL);
+  finishres(ls, &rd, v);
   return 1;
 }
 
@@ -3686,26 +3861,28 @@ static void callhead (LexState *ls, expdesc *f, int head) {
 ** 'head' (the head of the match, or the result of a lambda case, which
 ** may be a temporary register above the locals).
 */
-static void matchbranch (LexState *ls, int reg, int head) {
+static int matchbranch (LexState *ls, ResDesc *rd, int head) {
   FuncState *fs = ls->fs;
   if (ls->t.token == '{') {
     fs->freereg = cast_byte(luaY_nvarstack(fs));  /* drop temporaries */
-    block(ls, reg);
+    return block(ls, rd);
   }
   else {
     expdesc e;
     int line = ls->linenumber;
+    int n = 1;
     if (testnext(ls, '\\')) {  /* lambda: called with the head */
       lambda(ls, &e, line);
       callhead(ls, &e, head);
     }
     else {
       fs->freereg = cast_byte(luaY_nvarstack(fs));
-      expr(ls, &e);
+      n = branchexpr(ls, &e);
     }
-    store_value(ls, reg, &e);
+    n = storevalues(ls, rd, &e, n);
     ls->blockline = ls->lastline;
     fs->freereg = cast_byte(luaY_nvarstack(fs));
+    return n;
   }
 }
 
@@ -3719,14 +3896,16 @@ static void matchbranch (LexState *ls, int reg, int head) {
 static int matchstat (LexState *ls, expdesc *v) {
   FuncState *fs = ls->fs;
   BlockCnt bl;
+  ResDesc rd;
   expdesc h;
   int reg;  /* register for the head and then for the value */
-  int escapelist = NO_JUMP;
   int haselse = 0;
+  int n = 0;
   int line;
   luaX_next(ls);  /* skip 'match' */
   enterblock(fs, &bl, 0);
   reg = luaY_nvarstack(fs);
+  initres(&rd, reg);
   expr(ls, &h);
   luaK_exp2nextreg(fs, &h);
   new_localvarliteral(ls, "(match)");  /* hidden local holding the head */
@@ -3736,7 +3915,7 @@ static int matchstat (LexState *ls, expdesc *v) {
   while (ls->t.token != '}') {
     if (testnext(ls, TK_ELSE)) {
       checknext(ls, TK_ARROW);
-      matchbranch(ls, reg, reg);
+      n = matchbranch(ls, &rd, reg);
       haselse = 1;
       break;
     }
@@ -3765,8 +3944,8 @@ static int matchstat (LexState *ls, expdesc *v) {
         condfalse = hc.f;
       }
       checknext(ls, TK_ARROW);
-      matchbranch(ls, reg, valreg);
-      luaK_concat(fs, &escapelist, luaK_jump(fs));
+      n = matchbranch(ls, &rd, valreg);
+      luaK_concat(fs, &rd.jumps[n], luaK_jump(fs));
       luaK_fixline(fs, ls->blockline);  /* jump "belongs" to the branch */
       luaK_patchtohere(fs, condfalse);
     }
@@ -3774,12 +3953,13 @@ static int matchstat (LexState *ls, expdesc *v) {
   if (!haselse) {
     expdesc e;
     init_exp(&e, VVOID, 0);
-    store_value(ls, reg, &e);  /* no case: nil */
+    n = storevalues(ls, &rd, &e, 0);  /* no case: nil */
   }
   check_match(ls, '}', '{', line);
-  luaK_patchtohere(fs, escapelist);
+  rd.endarity = n;
+  finishexits(ls, &rd, NULL);
   leaveblock(fs);
-  value_result(ls, reg, v);
+  finishres(ls, &rd, v);
   return 1;
 }
 
@@ -3790,9 +3970,10 @@ static int matchstat (LexState *ls, expdesc *v) {
 */
 static int teststat (LexState *ls, expdesc *v) {
   FuncState *fs = ls->fs;
-  int reg = luaY_nvarstack(fs);  /* register for the value */
+  ResDesc rd;
   expdesc c, key, e;
-  int condfalse, escape;
+  int condfalse, n;
+  initres(&rd, luaY_nvarstack(fs));  /* register for the values */
   luaX_next(ls);  /* skip 'test' */
   buildvar(ls, luaX_newstring(ls, "atmos", 5), &c);
   luaK_exp2anyregup(fs, &c);
@@ -3801,14 +3982,14 @@ static int teststat (LexState *ls, expdesc *v) {
   luaK_goiftrue(fs, &c);
   condfalse = c.f;
   check(ls, '{');
-  block(ls, reg);
-  escape = luaK_jump(fs);
+  n = block(ls, &rd);
+  luaK_concat(fs, &rd.jumps[n], luaK_jump(fs));
   luaK_fixline(fs, ls->blockline);
   luaK_patchtohere(fs, condfalse);
   init_exp(&e, VVOID, 0);
-  store_value(ls, reg, &e);  /* not testing: nil */
-  luaK_patchtohere(fs, escape);
-  value_result(ls, reg, v);
+  rd.endarity = storevalues(ls, &rd, &e, 0);  /* not testing: nil */
+  finishexits(ls, &rd, NULL);
+  finishres(ls, &rd, v);
   return 1;
 }
 
@@ -3825,12 +4006,13 @@ static int dostat (LexState *ls, expdesc *v) {
     return 1;
   }
   else {
-    int reg = luaY_nvarstack(fs);  /* register for the value */
+    ResDesc rd;
     BlockCnt bl;
     expdesc e;
     int n;
     int line;
     TString *tag = NULL;
+    initres(&rd, luaY_nvarstack(fs));  /* register for the values */
     if (ls->t.token == TK_TAG) {
       tag = ls->t.seminfo.ts;
       luaX_next(ls);
@@ -3838,13 +4020,15 @@ static int dostat (LexState *ls, expdesc *v) {
     line = ls->linenumber;
     enterblock(fs, &bl, 0);
     bl.tag = tag;
-    bl.resreg = cast_short(reg);
+    bl.res = &rd;
     checknext(ls, '{');
     statlist(ls, &e, &n);
-    store_value(ls, reg, &e);
+    rd.endarity = storevalues(ls, &rd, &e, n);
     check_match(ls, '}', '{', line);
-    leaveblock(fs);
-    value_result(ls, reg, v);
+    leaveblock(fs);  /* (creates the escape labels and the padding) */
+    if (!bl.hasescape)  /* no exits other than the end: pad here */
+      finishexits(ls, &rd, NULL);
+    finishres(ls, &rd, v);
     return 1;
   }
 }
@@ -3882,7 +4066,7 @@ static void forbody (LexState *ls, int base, int line, int nvars, int isgen) {
   enterblock(fs, &bl, 0);  /* scope for declared variables */
   adjustlocalvars(ls, nvars);
   luaK_reserveregs(fs, nvars);
-  block(ls, -1);
+  block(ls, NULL);
   leaveblock(fs);  /* end of scope for declared variables */
   fixforjump(fs, prep, luaK_getlabel(fs), 0);
   if (isgen) {  /* generic for? */
@@ -3939,15 +4123,16 @@ static void forlist (LexState *ls, TString *names[], int nnames, int base,
 */
 static int loopstat (LexState *ls, expdesc *v) {
   FuncState *fs = ls->fs;
-  int reg = luaY_nvarstack(fs);  /* register for the value */
+  ResDesc rd;
   int line = ls->linenumber;
   BlockCnt bl;
+  initres(&rd, luaY_nvarstack(fs));  /* register for the values */
   luaX_next(ls);  /* skip 'loop' */
   enterblock(fs, &bl, 1);  /* loop block */
-  bl.resreg = cast_short(reg);
+  bl.res = &rd;
   if (ls->t.token == '{') {  /* infinite loop */
     int loopinit = luaK_getlabel(fs);
-    block(ls, -1);
+    block(ls, NULL);
     luaK_jumpto(fs, loopinit);
     luaK_fixline(fs, ls->blockline);  /* jump "belongs" to the body */
   }
@@ -3985,7 +4170,7 @@ static int loopstat (LexState *ls, expdesc *v) {
         adjust_assign(ls, nnames, 1, &e);
         adjustlocalvars(ls, nnames);
       }
-      block(ls, -1);
+      block(ls, NULL);
       leaveblock(fs);
       luaK_jumpto(fs, loopinit);
       luaK_fixline(fs, ls->blockline);
@@ -4055,9 +4240,15 @@ static int loopstat (LexState *ls, expdesc *v) {
       }
     }
   }
-  luaK_nil(fs, reg, 1);  /* normal exit: loop value is nil */
-  leaveblock(fs);  /* loop scope ('break' jumps to this point) */
-  value_result(ls, reg, v);
+  {  /* normal exit: the loop value is nil */
+    expdesc e;
+    init_exp(&e, VVOID, 0);
+    rd.endarity = storevalues(ls, &rd, &e, 0);
+  }
+  leaveblock(fs);  /* loop scope ('break' labels and padding) */
+  if (bl.isloop != 2)  /* no breaks: pad here */
+    finishexits(ls, &rd, NULL);
+  finishres(ls, &rd, v);
   return 1;
 }
 

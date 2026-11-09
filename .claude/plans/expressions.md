@@ -87,11 +87,19 @@ runtime count:
   usual `luaK_setreturns`/`luaK_setoneret`; a single-value context takes
   `reg`. (`catch` keeps its own `OP_CATCHRES`: its error path has a
   dynamic count.)
-- Statement position discards (`discard` sets `C = 1`). Function bodies
-  ending in a multi-valued block still return one value (`tailreturn`:
-  a block is like a call there).
+- Statement position discards (`discard` sets `C = 1`). A function body
+  ending in a multi-valued block returns all its values (`tailreturn`
+  truncates calls, not blocks: a block's arity is explicit).
 - Jumps out of task bodies carry one value to the owner's loop/block
   (the reference's `break(v)`), unchanged.
+
+Status: implemented (`ResDesc`, `storevalues`, `finishexits`,
+`finishres`, `OP_BLOCKRES` in `lparser.c`/`lvm.c`); tests in
+`testes/exprs.atm` ("several values") and the reference `do 2`/`do 3`.
+Notes: an exit of the same arity as the normal end joins it before its
+padding; an arrow branch `=> (a, b)` yields the tuple (`branchexpr`);
+a block in a non-final argument position gives one value, like a call;
+`(...)` alone as a function body is one value (parenthesized).
 
 ## Open points
 
@@ -106,7 +114,8 @@ runtime count:
   call returning all values (`return(f())` semantics) — changes arity;
   (c) treat a statement-like last expression as void.
 - Truncation: a tail expression yields one value; only a parenthesized
-  tuple yields several. The reference does the same (`return (e)`).
+  tuple or a block with several values yields several. The reference
+  does the same (`return (e)`).
 - `match` and `where` are not implemented yet; both are expressions.
 - `defer` and `catch` must also produce values when implemented
   (`catch` evaluates to the caught error or the block value).

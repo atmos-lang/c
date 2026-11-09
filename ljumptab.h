@@ -114,6 +114,7 @@ static const void *const disptab[NUM_OPCODES] = {
 &&L_OP_ENDTRY,
 &&L_OP_CATCH,
 &&L_OP_CATCHRES,
+&&L_OP_BLOCKRES,
 &&L_OP_EXTRAARG
 
 };

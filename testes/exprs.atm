@@ -166,8 +166,8 @@ do {
   assert(count(do { }) == 1)
   assert(count(loop { break() }) == 1)
   ;; values of an open block in a call and a return
-  val func s (...) { (...) }
-  assert(count(s(do { (1, 2) }, 3)) == 3)
+  val func s (...) { return(...) }  ;; ('(...)' alone would be one value)
+  assert(count(s(do { (1, 2) }, 3)) == 2)  ;; not the last argument: one value
   assert(count(s(1, do { (2, 3) })) == 3)
   val func r () { return(do { (4, 5) }) }
   assert(count(r()) == 2)

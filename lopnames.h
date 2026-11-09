@@ -102,6 +102,7 @@ static const char *const opnames[] = {
   "ENDTRY",
   "CATCH",
   "CATCHRES",
+  "BLOCKRES",
   "EXTRAARG",
   NULL
 };

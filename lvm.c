@@ -2098,6 +2098,19 @@ void luaV_execute (lua_State *L, CallInfo *ci) {
         }
         vmbreak;
       }
+      vmcase(OP_BLOCKRES) {  /* Atmos: values of a block expression */
+        StkId ra = RA(i);
+        int n = GETARG_B(i) - 1;  /* values available at R[A].. */
+        int nres = GETARG_C(i) - 1;
+        if (nres < 0)  /* open results: 'L->top' marks their end */
+          L->top.p = ra + n;
+        else {
+          for (; n < nres; n++)
+            setnilvalue(s2v(ra + n));
+          L->top.p = ci->top.p;
+        }
+        vmbreak;
+      }
       vmcase(OP_PINCHK) {  /* Atmos: a task or pool being assigned */
         StkId ra = RA(i);
         if (ttistable(s2v(ra))) {

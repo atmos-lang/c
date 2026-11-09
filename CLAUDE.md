@@ -40,8 +40,10 @@ VM, libraries and bytecode format stay Lua's.
 - Statements on one line need `;`; a call's `(` must be on the same line
   as the callee.
 - Blocks, `if`, `do`, `loop` evaluate to their last expression / break
-  value; function bodies return their last expression (one value, unless
-  it is a parenthesized tuple).
+  value, with all the values of a tuple / `break(a, b)` / `escape(:X, a,
+  b)` (exits padded with nils to the longest); function bodies return
+  their last expression (one value, unless it is a parenthesized tuple
+  or a block with several values).
 - `loop i in (a, b[, s])` is a numeric loop; any other `in` expression
   goes through `loop.iter` (latmlib.c): two or more values are a Lua
   iterator triple; one value iterates a number (1..n), nil (1..), a

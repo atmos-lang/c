@@ -179,6 +179,35 @@ static void concatinto (lua_State *L, Table *t, Table *src,
   lua_Unsigned n = luaH_getn(L, src);
   lua_Unsigned i;
   StkId key;
+  if (src->metatable != NULL) {  /* a '__pairs' metamethod? (pools) */
+    const TValue *pairs = luaH_Hgetshortstr(src->metatable,
+                                            luaS_newliteral(L, "__pairs"));
+    if (!ttisnil(pairs)) {  /* iterate through it: f, s, ctl */
+      StkId base = L->top.p;
+      setobj2s(L, base, pairs);
+      sethvalue2s(L, base + 1, src);
+      L->top.p = base + 2;
+      luaD_call(L, base, 3);
+      for (;;) {
+        StkId top = L->top.p;  /* (base + 3) */
+        setobjs2s(L, top, base);
+        setobjs2s(L, top + 1, base + 1);
+        setobjs2s(L, top + 2, base + 2);
+        L->top.p = top + 3;
+        luaD_call(L, top, 2);  /* key, value */
+        if (ttisnil(s2v(top))) break;
+        setobjs2s(L, base + 2, top);  /* control variable */
+        if (ttisinteger(s2v(top)))  /* array value? */
+          luaH_setint(L, t, l_castU2S(++*len), s2v(top + 1));
+        else
+          luaH_set(L, t, s2v(top), s2v(top + 1));
+        luaC_barrierback(L, obj2gco(t), s2v(top + 1));
+        L->top.p = top;
+      }
+      L->top.p = base;
+      return;
+    }
+  }
   for (i = 1; i <= n; i++) {  /* array part */
     TValue v;
     luaH_getint(src, l_castU2S(i), &v);
@@ -203,7 +232,7 @@ static void concattables (lua_State *L, StkId p1) {
   ptrdiff_t pos = savestack(L, p1);
   Table *t;
   lua_Unsigned len = 0;
-  luaD_checkstack(L, 3);  /* result and iteration slots */
+  luaD_checkstack(L, 8);  /* result and iteration slots */
   p1 = restorestack(L, pos);
   t = luaH_new(L);
   sethvalue2s(L, L->top.p, t);  /* anchor the new table */
